@@ -1,0 +1,40 @@
+[Unit]
+Description=VR Hotspot Daemon
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+
+# Live backend is a symlink maintained by the installer:
+#   /var/lib/vr-hotspot/app/backend -> /var/lib/vr-hotspot/app/releases/<ver>/backend
+WorkingDirectory=/var/lib/vr-hotspot/app/backend
+Environment=PYTHONPATH=/var/lib/vr-hotspot/app/backend
+Environment=PYTHONUNBUFFERED=1
+
+# Bind host/port + optional token live here:
+EnvironmentFile=-/etc/vr-hotspot/env
+
+# Sanity check to avoid starting broken deployments
+ExecStartPre=/usr/bin/python3 -m compileall -q /var/lib/vr-hotspot/app/backend/vr_hotspotd
+
+ExecStart=/usr/bin/python3 -m vr_hotspotd.main
+
+Restart=on-failure
+RestartSec=2
+
+RuntimeDirectory=vr-hotspot
+StateDirectory=vr-hotspot
+LogsDirectory=vr-hotspot
+
+StandardOutput=journal
+StandardError=journal
+
+# Conservative hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+KillMode=mixed
+TimeoutStopSec=12
+
+[Install]
+WantedBy=multi-user.target

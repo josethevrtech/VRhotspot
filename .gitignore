@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+venv/
+.venv/
+vr-keygen/venv/
+*.tar.gz
+*.zip
+dist/
+build/
+*.egg-info/

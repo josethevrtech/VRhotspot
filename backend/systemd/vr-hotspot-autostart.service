@@ -1,0 +1,16 @@
+[Unit]
+Description=VR Hotspot Autostart (calls daemon /v1/repair then /v1/start)
+Wants=network-online.target vr-hotspotd.service
+After=network-online.target vr-hotspotd.service
+
+# If firewalld exists, wait for it; if not, fine.
+Wants=firewalld.service
+After=firewalld.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/vr-hotspot/env
+ExecStart=/var/lib/vr-hotspot/bin/vr-hotspot-autostart.sh
+
+[Install]
+WantedBy=multi-user.target
