@@ -1,0 +1,4 @@
+dnsmasq
+License: GPL v2/v3 (GPL-2.0-or-later)
+Upstream: https://thekelleys.org.uk/dnsmasq/doc.html
+License text: https://thekelleys.org.uk/dnsmasq/COPYING

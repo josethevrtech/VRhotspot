@@ -1,0 +1,4 @@
+hostapd / hostapd_cli
+License: BSD (dual-license; see upstream COPYING)
+Upstream: https://w1.fi/hostapd/
+License text: https://w1.fi/cgit/hostap/plain/COPYING

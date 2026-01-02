@@ -1,0 +1,59 @@
+name: Feature request
+description: Request a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: input
+    id: os
+    attributes:
+      label: OS / distro
+      placeholder: SteamOS 3.5, Ubuntu 22.04, etc.
+    validations:
+      required: true
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel version
+      placeholder: 6.x.x
+    validations:
+      required: true
+  - type: input
+    id: chipset
+    attributes:
+      label: Wi-Fi chipset and driver
+      placeholder: Intel AX210 (iwlwifi)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Use case / steps
+      description: Describe the workflow or steps where the feature helps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Current behavior / limitation
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs (if applicable)
+      description: Paste relevant logs if available. Example: `journalctl -u vr-hotspotd.service -n 200`
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Optional implementation details or UX expectations.
+    validations:
+      required: false

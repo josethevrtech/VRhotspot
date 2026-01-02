@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a problem or regression
+labels: ["bug"]
+body:
+  - type: input
+    id: os
+    attributes:
+      label: OS / distro
+      placeholder: SteamOS 3.5, Ubuntu 22.04, etc.
+    validations:
+      required: true
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel version
+      placeholder: 6.x.x
+    validations:
+      required: true
+  - type: input
+    id: chipset
+    attributes:
+      label: Wi-Fi chipset and driver
+      placeholder: Intel AX210 (iwlwifi)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide exact steps and commands.
+      placeholder: 1) ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Paste relevant logs. Example: `journalctl -u vr-hotspotd.service -n 200`
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Config (redact secrets)
+      description: Redact tokens/passphrases before pasting.
+      render: json
+    validations:
+      required: false

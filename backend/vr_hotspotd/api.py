@@ -5,6 +5,7 @@ import os
 import re
 import time
 import uuid
+import ipaddress
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
@@ -12,6 +13,8 @@ from urllib.parse import parse_qs, urlsplit
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.config import load_config, write_config_file
 from vr_hotspotd.lifecycle import repair, start_hotspot, stop_hotspot, reconcile_state_with_engine
+from vr_hotspotd.diagnostics.clients import list_clients
+from vr_hotspotd.diagnostics.ping import run_ping
 from vr_hotspotd.state import load_state
 
 log = logging.getLogger("vr_hotspotd.api")
@@ -1325,6 +1328,15 @@ class APIHandler(BaseHTTPRequestHandler):
             self._respond(200, self._envelope(correlation_id=cid, data=data))
             return
 
+        if path == "/v1/diagnostics/clients":
+            if not self._require_auth(cid):
+                return
+            st = load_state()
+            ap_ifname = st.get("adapter") or load_config().get("ap_adapter") or ""
+            clients = list_clients(str(ap_ifname)) if ap_ifname else []
+            self._respond(200, self._envelope(correlation_id=cid, data={"clients": clients}))
+            return
+
         self._respond(
             404,
             self._envelope(
@@ -1451,6 +1463,47 @@ class APIHandler(BaseHTTPRequestHandler):
 
         if path == "/v1/config":
             self._handle_config_update(cid, body, body_warnings)
+            return
+
+        if path == "/v1/diagnostics/ping":
+            target_ip = (body.get("target_ip") or "").strip() if isinstance(body, dict) else ""
+            duration_s = body.get("duration_s") if isinstance(body, dict) else None
+            interval_ms = body.get("interval_ms") if isinstance(body, dict) else None
+            timeout_s = body.get("timeout_s") if isinstance(body, dict) else None
+
+            try:
+                ipaddress.IPv4Address(target_ip)
+            except Exception:
+                self._respond(
+                    400,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code="invalid_request",
+                        warnings=body_warnings + ["invalid_target_ip"],
+                    ),
+                )
+                return
+
+            try:
+                duration_s = int(duration_s) if duration_s is not None else 10
+            except Exception:
+                duration_s = 10
+            try:
+                interval_ms = int(interval_ms) if interval_ms is not None else 20
+            except Exception:
+                interval_ms = 20
+            try:
+                timeout_s = int(timeout_s) if timeout_s is not None else 2
+            except Exception:
+                timeout_s = 2
+
+            res = run_ping(
+                target_ip=target_ip,
+                duration_s=duration_s,
+                interval_ms=interval_ms,
+                timeout_s=timeout_s,
+            )
+            self._respond(200, self._envelope(correlation_id=cid, data=res))
             return
 
         self._respond(

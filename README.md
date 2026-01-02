@@ -31,6 +31,16 @@ Built around **lnxrouter + hostapd + dnsmasq**, it supports **bundled binaries**
 - Optional logs:
   - `GET /v1/status?include_logs=1`
 
+### Diagnostics (API)
+
+- Clients on the AP interface:
+  - `GET /v1/diagnostics/clients`
+- ICMP ping sample and statistics:
+  - `POST /v1/diagnostics/ping`
+
+Diagnostics notes:
+- ICMP may be blocked by host or client firewalls; ping results can be incomplete.
+
 ### Adapter intelligence
 
 - Enumerates Wi-Fi adapters and recommends an AP adapter (when available)
@@ -295,7 +305,7 @@ curl -fsS "http://127.0.0.1:8732/v1/status?include_logs=1" -H "X-Api-Token: $TOK
 
 ## License
 
-MIT License. See `LICENSE.md` (or rename it to `LICENSE` if you prefer the common convention).
+MIT License. See `LICENSE` and `LICENSE.md`.
 
 ---
 
@@ -314,4 +324,4 @@ When filing a bug, include:
 
 ## Third-party notices
 
-VR Hotspot may bundle third-party binaries under `backend/vendor/bin/`. Their license terms apply to those components. Consider adding a `THIRD_PARTY_NOTICES.md` documenting each bundled component, upstream source, and license.
+VR Hotspot bundles third-party binaries under `backend/vendor/bin/`. See `THIRD_PARTY_NOTICES.md` and `backend/vendor/README.md` for details and source/license references.

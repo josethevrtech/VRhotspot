@@ -1,0 +1,4 @@
+linux-router (lnxrouter)
+License: LGPL v2.1+ (LGPL-2.1-or-later)
+Upstream: https://github.com/garywill/linux-router
+License text: https://github.com/garywill/linux-router/blob/master/LICENSE
