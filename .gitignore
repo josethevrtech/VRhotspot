@@ -11,3 +11,12 @@ vr-keygen/venv/
 dist/
 build/
 *.egg-info/
+
+# Never commit local config/env/state
+.env
+*.env
+etc/vr-hotspot/
+var/lib/vr-hotspot/
+run/vr-hotspot/
+config.json
+state.json
