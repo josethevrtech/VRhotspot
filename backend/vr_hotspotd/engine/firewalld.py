@@ -1,5 +1,5 @@
 import subprocess
-from typing import Optional, Tuple
+from typing import Tuple
 
 
 def _run(args: list[str]) -> Tuple[bool, str]:
