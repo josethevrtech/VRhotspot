@@ -20,3 +20,4 @@ var/lib/vr-hotspot/
 run/vr-hotspot/
 config.json
 state.json
+.venv/
