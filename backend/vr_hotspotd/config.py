@@ -14,6 +14,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Preferred (optimized) behavior
     "band_preference": "5ghz",   # "5ghz" or "2.4ghz"
     "country": "US",
+    "wifi6": "auto",             # "auto" | true | false
 
     # Steam Deck / SteamOS stability:
     # False => allow lnxrouter to create a virtual AP interface (often best default).

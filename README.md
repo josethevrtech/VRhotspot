@@ -37,9 +37,20 @@ Built around **lnxrouter + hostapd + dnsmasq**, it supports **bundled binaries**
   - `GET /v1/diagnostics/clients`
 - ICMP ping sample and statistics:
   - `POST /v1/diagnostics/ping`
+- Ping under load (curl default, iperf3 optional):
+  - `POST /v1/diagnostics/ping_under_load`
 
 Diagnostics notes:
 - ICMP may be blocked by host or client firewalls; ping results can be incomplete.
+- `curl` load works without headset-side software; `iperf3` requires a reachable iperf3 server.
+
+Example request:
+```bash
+curl -fsS -X POST http://127.0.0.1:8732/v1/diagnostics/ping_under_load \\
+  -H "Content-Type: application/json" \\
+  -H "X-Api-Token: $TOKEN" \\
+  -d '{"target_ip":"192.168.68.10","duration_s":10,"interval_ms":20,"load":{"method":"curl","mbps":150}}'
+```
 
 ### Adapter intelligence
 
@@ -53,6 +64,8 @@ Diagnostics notes:
 - Timeout controls to determine when the AP is considered “ready”
 
 > Note: 6 GHz AP mode requires WPA3 SAE and compatible hardware/regulatory support. VR Hotspot will fall back when needed.
+
+Wi-Fi 6 (802.11ax) is auto-enabled only on adapters that report 802.11ax support. You can override it per start via `/v1/start` with `wifi6: "auto" | true | false`.
 
 ### Firewalld integration (SteamOS-friendly)
 

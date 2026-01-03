@@ -39,6 +39,7 @@ _START_OVERRIDE_KEYS = {
     # NEW:
     "ap_security",   # "wpa2" (default) or "wpa3_sae"
     "channel_6g",    # int
+    "wifi6",         # "auto" | true | false
 }
 
 # Broaden virtual AP detection: still safe because we only delete if type == AP.
@@ -439,6 +440,36 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
         return LifecycleResult("start_failed", state)
 
+    wifi6_setting = cfg.get("wifi6", "auto")
+    if isinstance(wifi6_setting, str):
+        s = wifi6_setting.strip().lower()
+        if s == "auto":
+            wifi6_setting = "auto"
+        elif s in ("1", "true", "yes", "on", "y"):
+            wifi6_setting = True
+        elif s in ("0", "false", "no", "off", "n"):
+            wifi6_setting = False
+        else:
+            wifi6_setting = "auto"
+
+    supports_wifi6 = bool(a.get("supports_wifi6"))
+    effective_wifi6 = False
+    start_warnings: List[str] = []
+
+    if wifi6_setting == "auto":
+        effective_wifi6 = supports_wifi6
+    elif wifi6_setting is True:
+        effective_wifi6 = supports_wifi6
+        if not supports_wifi6:
+            start_warnings.append("wifi6_not_supported_on_adapter")
+    elif wifi6_setting is False:
+        effective_wifi6 = False
+    else:
+        effective_wifi6 = supports_wifi6
+
+    if start_warnings:
+        update_state(warnings=start_warnings)
+
     # Best-effort regdom set before starting (helps 5/6 GHz bringup on many systems)
     _maybe_set_regdom(country if isinstance(country, str) else None)
 
@@ -483,6 +514,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             country=country if isinstance(country, str) else None,
             channel=None,
             no_virt=optimized_no_virt,
+            wifi6=effective_wifi6,
         )
 
     res = start_engine(cmd1, firewalld_cfg=fw_cfg)
@@ -517,7 +549,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             band=bp,
             mode="optimized",
             fallback_reason=None,
-            warnings=[],
+            warnings=start_warnings,
             last_error=None,
             last_correlation_id=correlation_id,
             engine={"last_error": None, "last_exit_code": None},
@@ -527,7 +559,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     # If requested band failed to become ready, fallback (6 -> 5 -> 2.4).
     stop_engine(firewalld_cfg=fw_cfg)
 
-    warnings: List[str] = ["optimized_ap_start_timed_out"]
+    warnings: List[str] = list(start_warnings)
+    warnings.append("optimized_ap_start_timed_out")
     fallback_chain: List[Tuple[str, Optional[int], bool, str]] = []
 
     if bp == "6ghz":
@@ -561,6 +594,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             country=country if isinstance(country, str) else None,
             channel=channel,
             no_virt=no_virt,
+            wifi6=effective_wifi6,
         )
 
         res_fallback = start_engine(cmd_fallback, firewalld_cfg=fw_cfg)

@@ -7,6 +7,10 @@ from typing import Dict, List, Optional
 _MAX_SAMPLES = 2000
 
 
+def ping_available() -> bool:
+    return shutil.which("ping") is not None
+
+
 def _percentile(sorted_samples: List[float], percent: float) -> Optional[float]:
     if not sorted_samples:
         return None

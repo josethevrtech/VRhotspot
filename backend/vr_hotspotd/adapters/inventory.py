@@ -1,5 +1,6 @@
 import subprocess
 import re
+from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 
@@ -51,6 +52,20 @@ def _phy_supports_ap(phy: str) -> bool:
                 # Heuristic exit: we've likely left the modes section
                 in_modes = False
     return False
+
+
+@lru_cache(maxsize=64)
+def _phy_supports_wifi6(phy: str) -> bool:
+    """
+    Parse `iw phy <phy> info` and look for HE (802.11ax) support markers.
+    """
+    try:
+        out = _run(["iw", "phy", phy, "info"])
+    except Exception:
+        return False
+
+    s = out.lower()
+    return ("he iftypes" in s) or ("802.11ax" in s)
 
 
 _FREQ_LINE_RE = re.compile(r"^\*\s+(\d+)\s+MHz\s+\[(\d+)\].*$")
@@ -247,6 +262,7 @@ def get_adapters():
         ifname = d.get("ifname")
 
         supports_ap = _phy_supports_ap(phy) if phy else False
+        supports_wifi6 = _phy_supports_wifi6(phy) if phy else False
         band_caps = _phy_band_support(phy) if phy else {"supports_2ghz": False, "supports_5ghz": False, "supports_6ghz": False}
 
         phy_reg = per_phy.get(phy, {})
@@ -266,6 +282,7 @@ def get_adapters():
             "ifname": ifname,
             "phy": phy,
             "supports_ap": supports_ap,
+            "supports_wifi6": supports_wifi6,
             "supports_2ghz": bool(band_caps.get("supports_2ghz")),
             "supports_5ghz": bool(band_caps.get("supports_5ghz")),
             "supports_6ghz": bool(band_caps.get("supports_6ghz")),

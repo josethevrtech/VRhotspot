@@ -14,7 +14,8 @@ from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.config import load_config, write_config_file
 from vr_hotspotd.lifecycle import repair, start_hotspot, stop_hotspot, reconcile_state_with_engine
 from vr_hotspotd.diagnostics.clients import list_clients
-from vr_hotspotd.diagnostics.ping import run_ping
+from vr_hotspotd.diagnostics.ping import run_ping, ping_available
+from vr_hotspotd.diagnostics.load import LoadGenerator
 from vr_hotspotd.state import load_state
 
 log = logging.getLogger("vr_hotspotd.api")
@@ -25,6 +26,7 @@ _CONFIG_MUTABLE_KEYS = {
     "wpa2_passphrase",
     "band_preference",
     "country",
+    "wifi6",
     "optimized_no_virt",
     "ap_adapter",
     "ap_ready_timeout_s",
@@ -47,6 +49,7 @@ _START_OVERRIDE_KEYS = {
     "wpa2_passphrase",
     "band_preference",
     "country",
+    "wifi6",
     "optimized_no_virt",
     "ap_adapter",
     "ap_ready_timeout_s",
@@ -80,6 +83,72 @@ _ALLOWED_BANDS = {"2.4ghz", "5ghz", "6ghz"}
 _ALLOWED_SECURITY = {"wpa2", "wpa3_sae"}
 
 SERVER_VERSION = "vr-hotspotd/0.4"
+
+
+def _clamp_int(
+    value: Any,
+    *,
+    default: int,
+    min_val: int,
+    max_val: int,
+    warnings: list[str],
+    name: str,
+) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except Exception as exc:
+        raise ValueError(f"{name}_invalid") from exc
+    clamped = max(min_val, min(max_val, parsed))
+    if clamped != parsed:
+        warnings.append(f"{name}_clamped")
+    return clamped
+
+
+def _clamp_float(
+    value: Any,
+    *,
+    default: float,
+    min_val: float,
+    max_val: float,
+    warnings: list[str],
+    name: str,
+) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except Exception as exc:
+        raise ValueError(f"{name}_invalid") from exc
+    clamped = max(min_val, min(max_val, parsed))
+    if clamped != parsed:
+        warnings.append(f"{name}_clamped")
+    return clamped
+
+
+def _classify_ping(ping_result: dict) -> Dict[str, str]:
+    if not isinstance(ping_result, dict) or ping_result.get("error"):
+        return {"grade": "unusable", "reason": "ping_failed"}
+    rtt = ping_result.get("rtt_ms") or {}
+    p99_9 = rtt.get("p99_9") if isinstance(rtt, dict) else None
+    loss = ping_result.get("packet_loss_pct")
+
+    if p99_9 is None or loss is None:
+        return {"grade": "unusable", "reason": "missing_latency_or_loss"}
+
+    if p99_9 <= 20 and loss < 0.5:
+        return {"grade": "excellent", "reason": "p99_9<=20ms_and_loss<0.5pct"}
+    if p99_9 <= 35 and loss < 1:
+        return {"grade": "good", "reason": "p99_9<=35ms_and_loss<1pct"}
+    if p99_9 <= 50 and loss < 2:
+        return {"grade": "fair", "reason": "p99_9<=50ms_and_loss<2pct"}
+    if p99_9 <= 80 and loss < 5:
+        return {"grade": "poor", "reason": "p99_9<=80ms_and_loss<5pct"}
+
+    if loss >= 5:
+        return {"grade": "unusable", "reason": "loss_ge_5pct"}
+    return {"grade": "unusable", "reason": "p99_9_gt_80ms"}
 
 # A compact UI focused on correctness and “sticky” edits.
 UI_HTML = r"""<!doctype html>
@@ -1021,6 +1090,21 @@ class APIHandler(BaseHTTPRequestHandler):
             return "wpa3_sae"
         return None
 
+    def _normalize_wifi6(self, v: Any) -> Optional[object]:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s == "auto":
+                return "auto"
+            if s in ("1", "true", "yes", "on", "y"):
+                return True
+            if s in ("0", "false", "no", "off", "n"):
+                return False
+        return None
+
     def _coerce_config_types(self, d: Dict[str, Any]) -> Tuple[Dict[str, Any], list[str]]:
         """
         Coerce common string/number representations into the expected types
@@ -1092,6 +1176,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 else:
                     warnings.append("invalid_ap_security")
                     out.pop(k, None)
+
+            if k == "wifi6":
+                nv = self._normalize_wifi6(v)
+                if nv is None:
+                    warnings.append("invalid_wifi6")
+                    out.pop(k, None)
+                else:
+                    out[k] = nv
 
         # Validate country format if provided
         if "country" in out:
@@ -1459,6 +1551,212 @@ class APIHandler(BaseHTTPRequestHandler):
                     warnings=warnings,
                 ),
             )
+            return
+
+        if path == "/v1/diagnostics/ping_under_load":
+            warnings = list(body_warnings)
+            if not isinstance(body, dict):
+                body = {}
+
+            target_ip = str(body.get("target_ip") or "").strip()
+            load_cfg = body.get("load") if isinstance(body.get("load"), dict) else {}
+
+            try:
+                duration_s = _clamp_int(
+                    body.get("duration_s"),
+                    default=10,
+                    min_val=3,
+                    max_val=20,
+                    warnings=warnings,
+                    name="duration_s",
+                )
+                interval_ms = _clamp_int(
+                    body.get("interval_ms"),
+                    default=20,
+                    min_val=10,
+                    max_val=200,
+                    warnings=warnings,
+                    name="interval_ms",
+                )
+            except ValueError:
+                data = {
+                    "target_ip": target_ip,
+                    "duration_s": 10,
+                    "interval_ms": 20,
+                    "load": {
+                        "method": "none",
+                        "requested_mbps": 0.0,
+                        "effective_mbps": 0.0,
+                        "notes": [],
+                        "started": False,
+                    },
+                    "ping": {"error": {"code": "invalid_params", "message": "invalid duration/interval"}},
+                    "classification": {"grade": "unusable", "reason": "invalid_params"},
+                    "error": {"code": "invalid_params", "message": "invalid duration/interval"},
+                }
+                self._respond(400, self._envelope(correlation_id=cid, result_code="error", data=data, warnings=warnings))
+                return
+
+            try:
+                ipaddress.IPv4Address(target_ip)
+            except Exception:
+                data = {
+                    "target_ip": target_ip,
+                    "duration_s": duration_s,
+                    "interval_ms": interval_ms,
+                    "load": {
+                        "method": "none",
+                        "requested_mbps": 0.0,
+                        "effective_mbps": 0.0,
+                        "notes": [],
+                        "started": False,
+                    },
+                    "ping": {"error": {"code": "invalid_ip", "message": "invalid IPv4 address"}},
+                    "classification": {"grade": "unusable", "reason": "invalid_ip"},
+                    "error": {"code": "invalid_ip", "message": "invalid IPv4 address"},
+                }
+                self._respond(400, self._envelope(correlation_id=cid, result_code="error", data=data, warnings=warnings))
+                return
+
+            method = str(load_cfg.get("method") or "curl").strip().lower()
+            if method not in ("curl", "iperf3"):
+                data = {
+                    "target_ip": target_ip,
+                    "duration_s": duration_s,
+                    "interval_ms": interval_ms,
+                    "load": {
+                        "method": "none",
+                        "requested_mbps": 0.0,
+                        "effective_mbps": 0.0,
+                        "notes": [],
+                        "started": False,
+                    },
+                    "ping": {"error": {"code": "invalid_params", "message": "invalid load method"}},
+                    "classification": {"grade": "unusable", "reason": "invalid_params"},
+                    "error": {"code": "invalid_params", "message": "invalid load method"},
+                }
+                self._respond(400, self._envelope(correlation_id=cid, result_code="error", data=data, warnings=warnings))
+                return
+
+            try:
+                mbps = _clamp_float(
+                    load_cfg.get("mbps"),
+                    default=150.0,
+                    min_val=10.0,
+                    max_val=400.0,
+                    warnings=warnings,
+                    name="mbps",
+                )
+            except ValueError:
+                data = {
+                    "target_ip": target_ip,
+                    "duration_s": duration_s,
+                    "interval_ms": interval_ms,
+                    "load": {
+                        "method": "none",
+                        "requested_mbps": 0.0,
+                        "effective_mbps": 0.0,
+                        "notes": [],
+                        "started": False,
+                    },
+                    "ping": {"error": {"code": "invalid_params", "message": "invalid mbps"}},
+                    "classification": {"grade": "unusable", "reason": "invalid_params"},
+                    "error": {"code": "invalid_params", "message": "invalid mbps"},
+                }
+                self._respond(400, self._envelope(correlation_id=cid, result_code="error", data=data, warnings=warnings))
+                return
+
+            url = str(load_cfg.get("url") or "").strip()
+            iperf3_host = str(load_cfg.get("iperf3_host") or "").strip()
+            try:
+                iperf3_port = int(load_cfg.get("iperf3_port") or 5201)
+            except Exception:
+                data = {
+                    "target_ip": target_ip,
+                    "duration_s": duration_s,
+                    "interval_ms": interval_ms,
+                    "load": {
+                        "method": "none",
+                        "requested_mbps": 0.0,
+                        "effective_mbps": 0.0,
+                        "notes": [],
+                        "started": False,
+                    },
+                    "ping": {"error": {"code": "invalid_params", "message": "invalid iperf3_port"}},
+                    "classification": {"grade": "unusable", "reason": "invalid_params"},
+                    "error": {"code": "invalid_params", "message": "invalid iperf3_port"},
+                }
+                self._respond(400, self._envelope(correlation_id=cid, result_code="error", data=data, warnings=warnings))
+                return
+
+            if not ping_available():
+                ping_result = {"error": {"code": "ping_not_found", "message": "ping not found in PATH"}}
+                data = {
+                    "target_ip": target_ip,
+                    "duration_s": duration_s,
+                    "interval_ms": interval_ms,
+                    "load": {
+                        "method": "none",
+                        "requested_mbps": float(mbps),
+                        "effective_mbps": 0.0,
+                        "notes": ["ping_not_available"],
+                        "started": False,
+                    },
+                    "ping": ping_result,
+                    "classification": _classify_ping(ping_result),
+                    "error": {"code": "ping_failed", "message": "ping not found in PATH"},
+                }
+                self._respond(200, self._envelope(correlation_id=cid, result_code="error", data=data, warnings=warnings))
+                return
+
+            load_gen = LoadGenerator(
+                method=method,
+                mbps=mbps,
+                duration_s=duration_s,
+                url=url,
+                iperf3_host=iperf3_host,
+                iperf3_port=iperf3_port,
+            )
+
+            ping_result: dict
+            error_obj = None
+            try:
+                load_gen.start()
+                ping_result = run_ping(
+                    target_ip=target_ip,
+                    duration_s=duration_s,
+                    interval_ms=interval_ms,
+                )
+
+                if ping_result.get("error"):
+                    error_obj = {"code": "ping_failed", "message": ping_result["error"].get("message", "ping failed")}
+                else:
+                    loss = ping_result.get("packet_loss_pct")
+                    if isinstance(loss, (int, float)) and loss > 5:
+                        load_gen.stop()
+                        warnings.append("load_aborted_due_to_loss")
+            finally:
+                load_gen.stop()
+
+            load_info = load_gen.info()
+            if not load_info.get("started"):
+                warnings.append("load_not_started")
+                if not error_obj:
+                    error_obj = {"code": "load_unavailable", "message": "load generator not started"}
+
+            classification = _classify_ping(ping_result)
+            result_code = "ok" if not error_obj or error_obj.get("code") == "load_unavailable" else "error"
+
+            data = {
+                "target_ip": target_ip,
+                "duration_s": duration_s,
+                "interval_ms": interval_ms,
+                "load": load_info,
+                "ping": ping_result,
+                "classification": classification,
+                "error": error_obj,
+            }
+            self._respond(200, self._envelope(correlation_id=cid, result_code=result_code, data=data, warnings=warnings))
             return
 
         if path == "/v1/config":

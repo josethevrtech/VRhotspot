@@ -62,7 +62,7 @@ def build_cmd(
     elif bp == "2.4ghz":
         cmd += ["--freq-band", "2.4"]
 
-    # Prefer enabling Wi-Fi 6 features where available (hostapd option via linux-router)
+    # Enable Wi-Fi 6 features only when effective (hostapd option via linux-router)
     if wifi6:
         cmd += ["--wifi6"]
 
