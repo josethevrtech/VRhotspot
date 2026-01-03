@@ -28,6 +28,13 @@ def test_iw_station_dump_parsing(monkeypatch):
                 "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n"
                 "\tinactive time:\t40 ms\n"
                 "\tsignal:\t\t-44 dBm\n"
+                "\tsignal avg:\t-45 dBm\n"
+                "\tauthorized:\tyes\n"
+                "\tauthenticated:\tyes\n"
+                "\tassociated:\tyes\n"
+                "\tconnected time:\t123 seconds\n"
+                "\ttx retries:\t2\n"
+                "\ttx failed:\t1\n"
                 "\trx bitrate:\t433.3 MBit/s\n"
                 "\ttx bitrate:\t600.0 MBit/s\n",
                 "",
@@ -40,6 +47,13 @@ def test_iw_station_dump_parsing(monkeypatch):
     assert parsed is not None
     assert parsed[0].mac == "76:d4:ff:3c:12:8d"
     assert parsed[0].signal_dbm == -44
+    assert parsed[0].signal_avg_dbm == -45
+    assert parsed[0].authorized is True
+    assert parsed[0].authenticated is True
+    assert parsed[0].associated is True
+    assert parsed[0].connected_time_s == 123
+    assert parsed[0].tx_retries == 2
+    assert parsed[0].tx_failed == 1
     assert parsed[0].rx_bitrate_mbps == 433.3
     assert parsed[0].tx_bitrate_mbps == 600.0
     assert parsed[0].inactive_ms == 40
@@ -76,6 +90,8 @@ def test_snapshot_falls_back_to_iw_when_hostapd_cli_times_out(tmp_path: Path, mo
                 "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot-Test\n\t\ttype AP\n",
                 "",
             )
+        if cmd[:1] == ["hostapd_cli"] and "ping" in cmd:
+            return 0, "PONG\n", ""
         # hostapd_cli list_sta -> timeout
         if cmd[:1] == ["hostapd_cli"] and "list_sta" in cmd:
             return 124, "", "timeout"
@@ -100,7 +116,7 @@ def test_snapshot_falls_back_to_iw_when_hostapd_cli_times_out(tmp_path: Path, mo
     assert snap["clients"][0]["mac"] == "76:d4:ff:3c:12:8d"
     assert snap["clients"][0]["ip"] == "192.168.120.217"
     assert snap["clients"][0]["hostname"] == "iPhone"
-    assert any("hostapd_cli_failed" in w or "timeout" in w for w in snap["warnings"])
+    assert "hostapd_cli_unreliable" in snap["warnings"]
 
 
 def test_conf_dir_prefers_ctrl_socket_match(tmp_path: Path, monkeypatch):
@@ -210,3 +226,46 @@ def test_snapshot_no_active_ap_interface(monkeypatch):
     assert snap["sources"]["primary"] is None
     assert "no_active_ap_interface" in snap["warnings"]
     assert calls == [["iw", "dev"]]
+
+
+def test_snapshot_uses_iw_when_hostapd_cli_ping_times_out(tmp_path: Path, monkeypatch):
+    root = tmp_path / "lnxrouter_tmp"
+    root.mkdir()
+    conf = root / "lnxrouter.wlan1.conf.ABCD"
+    conf.mkdir()
+
+    (conf / "hostapd.conf").write_text(
+        "ssid=VRHotspot-Test\n"
+        "interface=x0wlan1\n"
+        f"ctrl_interface={conf}/hostapd_ctrl\n"
+    )
+    (conf / "hostapd_ctrl").mkdir()
+    (conf / "hostapd_ctrl" / "x0wlan1").write_text("")
+
+    monkeypatch.setattr(clients, "LNXROUTER_TMP", root)
+    monkeypatch.setattr(clients, "load_config", lambda: {"ssid": "VRHotspot-Test"})
+    monkeypatch.setattr(clients, "_hostapd_cli_path", lambda: "hostapd_cli")
+
+    def fake_run(cmd: List[str], timeout_s: float):
+        if cmd == ["iw", "dev"]:
+            return (
+                0,
+                "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot-Test\n\t\ttype AP\n",
+                "",
+            )
+        if cmd[:1] == ["hostapd_cli"] and "ping" in cmd:
+            return 124, "", ""
+        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+            return (
+                0,
+                "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n\tsignal:\t-50 dBm\n",
+                "",
+            )
+        return 127, "", "nope"
+
+    monkeypatch.setattr(clients, "_run", fake_run)
+
+    snap = clients.get_clients_snapshot("wlan1")
+    assert snap["sources"]["primary"] == "iw"
+    assert snap["clients"][0]["mac"] == "76:d4:ff:3c:12:8d"
+    assert "hostapd_cli_unreliable" in snap["warnings"]

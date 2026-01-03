@@ -18,10 +18,21 @@ class Client:
     mac: str
     ip: Optional[str] = None
     hostname: Optional[str] = None
+    authorized: Optional[bool] = None
+    authenticated: Optional[bool] = None
+    associated: Optional[bool] = None
     signal_dbm: Optional[int] = None
+    signal_avg_dbm: Optional[int] = None
     tx_bitrate_mbps: Optional[float] = None
     rx_bitrate_mbps: Optional[float] = None
     inactive_ms: Optional[int] = None
+    connected_time_s: Optional[int] = None
+    tx_retries: Optional[int] = None
+    tx_failed: Optional[int] = None
+    tx_packets: Optional[int] = None
+    rx_packets: Optional[int] = None
+    tx_bytes: Optional[int] = None
+    rx_bytes: Optional[int] = None
     source: str = "unknown"  # hostapd_cli | iw | neigh | leases
 
 
@@ -76,10 +87,11 @@ def _hostapd_cli_path() -> Optional[str]:
     vendor = _vendor_bin() / "hostapd_cli"
     if vendor.exists() and os.access(vendor, os.X_OK):
         return str(vendor)
-    # fall back to PATH
-    rc, _, _ = _run(["sh", "-lc", "command -v hostapd_cli"], timeout_s=0.6)
-    if rc == 0:
-        return "hostapd_cli"
+    hostapd = _vendor_bin() / "hostapd"
+    if hostapd.exists() and os.access(hostapd, os.X_OK):
+        bundled = hostapd.parent / "hostapd_cli"
+        if bundled.exists() and os.access(bundled, os.X_OK):
+            return str(bundled)
     return None
 
 
@@ -490,22 +502,27 @@ def _hostapd_cli_list_stas(ctrl_dir: str, ap_if: str) -> Tuple[Optional[List[str
     cmd = [binpath, "-p", ctrl_dir, "-i", ap_if, "list_sta"]
     rc, stdout, stderr = _run(cmd, timeout_s=0.8)
     if rc != 0:
-        # try alternative command names if list_sta unavailable
-        cmd2 = [binpath, "-p", ctrl_dir, "-i", ap_if, "all_sta"]
-        rc2, stdout2, stderr2 = _run(cmd2, timeout_s=0.8)
-        if rc2 != 0:
-            return None, f"hostapd_cli_failed(rc={rc}|{rc2}):{(stderr or stderr2)[:120]}"
-        # all_sta prints blocks; extract MACs
-        macs: List[str] = []
-        for line in stdout2.splitlines():
-            line = line.strip()
-            if _is_mac(line.split()[0]):
-                macs.append(line.split()[0].lower())
-        return sorted(set(macs)), ""
+        return None, f"hostapd_cli_failed(rc={rc}):{stderr[:120]}"
     macs = [ln.strip().lower() for ln in stdout.splitlines() if _is_mac(ln.strip())]
     if not macs:
         return [], ""
     return sorted(set(macs)), ""
+
+
+def _hostapd_cli_ping(ctrl_dir: str, ap_if: str) -> Tuple[bool, str]:
+    binpath = _hostapd_cli_path()
+    if not binpath:
+        return False, "hostapd_cli_not_found"
+
+    rc, stdout, stderr = _run([binpath, "-p", ctrl_dir, "-i", ap_if, "ping"], timeout_s=0.3)
+    if rc != 0:
+        reason = stderr.strip() if stderr else ("timeout" if rc == 124 else "")
+        return False, f"hostapd_cli_ping_failed(rc={rc}):{reason[:120]}"
+
+    if "PONG" not in stdout.upper():
+        return False, "hostapd_cli_ping_failed:unexpected_response"
+
+    return True, ""
 
 
 def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
@@ -527,10 +544,21 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
             clients.append(
                 Client(
                     mac=cur_mac.lower(),
+                    authorized=cur.get("authorized"),
+                    authenticated=cur.get("authenticated"),
+                    associated=cur.get("associated"),
                     signal_dbm=cur.get("signal_dbm"),
+                    signal_avg_dbm=cur.get("signal_avg_dbm"),
                     tx_bitrate_mbps=cur.get("tx_bitrate_mbps"),
                     rx_bitrate_mbps=cur.get("rx_bitrate_mbps"),
                     inactive_ms=cur.get("inactive_ms"),
+                    connected_time_s=cur.get("connected_time_s"),
+                    tx_retries=cur.get("tx_retries"),
+                    tx_failed=cur.get("tx_failed"),
+                    tx_packets=cur.get("tx_packets"),
+                    rx_packets=cur.get("rx_packets"),
+                    tx_bytes=cur.get("tx_bytes"),
+                    rx_bytes=cur.get("rx_bytes"),
                     source="iw",
                 )
             )
@@ -549,8 +577,19 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
         # Example lines:
         #   inactive time:  40 ms
         #   signal:         -44 dBm
+        #   signal avg:     -45 dBm
         #   tx bitrate:     600.0 MBit/s
         #   rx bitrate:     433.3 MBit/s
+        #   authorized:     yes
+        #   authenticated: yes
+        #   associated:    yes
+        #   connected time: 123 seconds
+        #   tx retries:    0
+        #   tx failed:     0
+        #   tx packets:    1234
+        #   rx packets:    5678
+        #   tx bytes:      999
+        #   rx bytes:      888
         s = line.strip().lower()
         if s.startswith("inactive time:"):
             m = re.search(r"(\d+)\s*ms", s)
@@ -560,6 +599,10 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
             m = re.search(r"(-?\d+)\s*dbm", s)
             if m:
                 cur["signal_dbm"] = int(m.group(1))
+        elif s.startswith("signal avg:"):
+            m = re.search(r"(-?\d+)\s*dbm", s)
+            if m:
+                cur["signal_avg_dbm"] = int(m.group(1))
         elif s.startswith("tx bitrate:"):
             m = re.search(r"([\d.]+)\s*mbit/s", s)
             if m:
@@ -568,6 +611,40 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
             m = re.search(r"([\d.]+)\s*mbit/s", s)
             if m:
                 cur["rx_bitrate_mbps"] = float(m.group(1))
+        elif s.startswith("authorized:"):
+            cur["authorized"] = "yes" in s
+        elif s.startswith("authenticated:"):
+            cur["authenticated"] = "yes" in s
+        elif s.startswith("associated:"):
+            cur["associated"] = "yes" in s
+        elif s.startswith("connected time:"):
+            m = re.search(r"(\d+)\s*seconds", s)
+            if m:
+                cur["connected_time_s"] = int(m.group(1))
+        elif s.startswith("tx retries:"):
+            m = re.search(r"(\d+)", s)
+            if m:
+                cur["tx_retries"] = int(m.group(1))
+        elif s.startswith("tx failed:"):
+            m = re.search(r"(\d+)", s)
+            if m:
+                cur["tx_failed"] = int(m.group(1))
+        elif s.startswith("tx packets:"):
+            m = re.search(r"(\d+)", s)
+            if m:
+                cur["tx_packets"] = int(m.group(1))
+        elif s.startswith("rx packets:"):
+            m = re.search(r"(\d+)", s)
+            if m:
+                cur["rx_packets"] = int(m.group(1))
+        elif s.startswith("tx bytes:"):
+            m = re.search(r"(\d+)", s)
+            if m:
+                cur["tx_bytes"] = int(m.group(1))
+        elif s.startswith("rx bytes:"):
+            m = re.search(r"(\d+)", s)
+            if m:
+                cur["rx_bytes"] = int(m.group(1))
 
     flush()
     return clients, ""
@@ -583,6 +660,11 @@ def _append_debug_warnings(
     warnings.append(f"selected_ap_interface={ap_interface}")
     if iw_ap_ifaces and ap_interface and ap_interface not in iw_ap_ifaces:
         warnings.append(f"iw_ap_ifaces={','.join(iw_ap_ifaces)}")
+
+
+def _warn_hostapd_cli_unreliable(warnings: List[str]) -> None:
+    if "hostapd_cli_unreliable" not in warnings:
+        warnings.append("hostapd_cli_unreliable")
 
 
 def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]:
@@ -628,50 +710,56 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     clients: List[Client] = []
     primary = None
 
-    # Primary attempt: hostapd_cli list_sta (fast + authoritative), but do not trust it to be stable.
-    if ap_if and ctrl_dir:
+    iw_clients, warn = _iw_station_dump(ap_if)
+    if warn and "no such device" in warn.lower():
+        retry_ap_if, retry_ap_ifaces, retry_warns = _select_ap_interface(adapter_ifname)
+        warnings.extend(retry_warns)
+        if not retry_ap_if:
+            warnings.append("no_active_ap_interface")
+            return {
+                "conf_dir": None,
+                "ap_interface": None,
+                "clients": [],
+                "warnings": warnings,
+                "sources": {"primary": None, "enrichment": []},
+            }
+        if retry_ap_if != ap_if:
+            ap_if = retry_ap_if
+            iw_ap_ifaces = retry_ap_ifaces
+            conf_dir = _select_conf_dir(adapter_ifname, ap_if)
+            if conf_dir is None and "conf_dir_unavailable" not in warnings:
+                warnings.append("conf_dir_unavailable")
+            ctrl_dir = _find_ctrl_dir(conf_dir, ap_if)
+            if ctrl_dir is None and "hostapd_ctrl_socket_missing" not in warnings:
+                warnings.append("hostapd_ctrl_socket_missing")
+            leases = _dnsmasq_leases(conf_dir) if conf_dir else {}
+            mac_to_ip = _ip_neigh(ap_if)
+        iw_clients, warn = _iw_station_dump(ap_if)
+    if warn:
+        warnings.append(warn)
+    if iw_clients is not None:
+        primary = "iw"
+        clients = iw_clients
+
+    # Secondary attempt: hostapd_cli list_sta, only if socket exists and ping succeeds.
+    hostapd_cli_unreliable = False
+    if ctrl_dir:
+        ping_ok, _ping_warn = _hostapd_cli_ping(str(ctrl_dir), ap_if)
+        if not ping_ok:
+            hostapd_cli_unreliable = True
+            _warn_hostapd_cli_unreliable(warnings)
+
+    if ctrl_dir and not hostapd_cli_unreliable:
         macs, warn = _hostapd_cli_list_stas(str(ctrl_dir), ap_if)
         if warn:
-            warnings.append(warn)
-        if macs is not None:
+            hostapd_cli_unreliable = True
+            _warn_hostapd_cli_unreliable(warnings)
+        if macs is not None and primary is None and not hostapd_cli_unreliable:
             primary = "hostapd_cli"
             for mac in macs:
                 ip = mac_to_ip.get(mac) or (leases.get(mac)[0] if mac in leases else None)
                 hn = leases.get(mac)[1] if mac in leases else None
                 clients.append(Client(mac=mac, ip=ip, hostname=hn, source="hostapd_cli"))
-
-    # Fallback: iw station dump
-    if primary is None:
-        iw_clients, warn = _iw_station_dump(ap_if)
-        if warn and "no such device" in warn.lower():
-            retry_ap_if, retry_ap_ifaces, retry_warns = _select_ap_interface(adapter_ifname)
-            warnings.extend(retry_warns)
-            if not retry_ap_if:
-                warnings.append("no_active_ap_interface")
-                return {
-                    "conf_dir": None,
-                    "ap_interface": None,
-                    "clients": [],
-                    "warnings": warnings,
-                    "sources": {"primary": None, "enrichment": []},
-                }
-            if retry_ap_if != ap_if:
-                ap_if = retry_ap_if
-                iw_ap_ifaces = retry_ap_ifaces
-                conf_dir = _select_conf_dir(adapter_ifname, ap_if)
-                if conf_dir is None and "conf_dir_unavailable" not in warnings:
-                    warnings.append("conf_dir_unavailable")
-                ctrl_dir = _find_ctrl_dir(conf_dir, ap_if)
-                if ctrl_dir is None and "hostapd_ctrl_socket_missing" not in warnings:
-                    warnings.append("hostapd_ctrl_socket_missing")
-                leases = _dnsmasq_leases(conf_dir) if conf_dir else {}
-                mac_to_ip = _ip_neigh(ap_if)
-                iw_clients, warn = _iw_station_dump(ap_if)
-        if warn:
-            warnings.append(warn)
-        if iw_clients is not None:
-            primary = "iw"
-            clients = iw_clients
 
     # Enrich any clients we have with IP/hostname from neigh/leases
     by_mac: Dict[str, Client] = {c.mac.lower(): c for c in clients if _is_mac(c.mac)}
@@ -682,10 +770,21 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
             mac=c.mac,
             ip=ip,
             hostname=hn,
+            authorized=c.authorized,
+            authenticated=c.authenticated,
+            associated=c.associated,
             signal_dbm=c.signal_dbm,
+            signal_avg_dbm=c.signal_avg_dbm,
             tx_bitrate_mbps=c.tx_bitrate_mbps,
             rx_bitrate_mbps=c.rx_bitrate_mbps,
             inactive_ms=c.inactive_ms,
+            connected_time_s=c.connected_time_s,
+            tx_retries=c.tx_retries,
+            tx_failed=c.tx_failed,
+            tx_packets=c.tx_packets,
+            rx_packets=c.rx_packets,
+            tx_bytes=c.tx_bytes,
+            rx_bytes=c.rx_bytes,
             source=c.source,
         )
 
