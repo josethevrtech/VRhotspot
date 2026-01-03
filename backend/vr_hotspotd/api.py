@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.config import load_config, write_config_file
 from vr_hotspotd.lifecycle import repair, start_hotspot, stop_hotspot, reconcile_state_with_engine
-from vr_hotspotd.diagnostics.clients import list_clients
+from vr_hotspotd.diagnostics.clients import get_clients_snapshot
 from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator
 from vr_hotspotd.state import load_state
@@ -1424,9 +1424,9 @@ class APIHandler(BaseHTTPRequestHandler):
             if not self._require_auth(cid):
                 return
             st = load_state()
-            ap_ifname = st.get("adapter") or load_config().get("ap_adapter") or ""
-            clients = list_clients(str(ap_ifname)) if ap_ifname else []
-            self._respond(200, self._envelope(correlation_id=cid, data={"clients": clients}))
+            ap_ifname = st.get("adapter")
+            snapshot = get_clients_snapshot(ap_ifname if ap_ifname else None)
+            self._respond(200, self._envelope(correlation_id=cid, data=snapshot))
             return
 
         self._respond(

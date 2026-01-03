@@ -3,18 +3,13 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from vr_hotspotd.config import load_config
 
-
-# Back-compat for older tests/consumers that monkeypatch vr_hotspotd.diagnostics.clients.load_config
-try:
-    from vr_hotspotd.config import load_config as load_config
-except Exception:  # pragma: no cover
-    def load_config():
-        return {}
 
 LNXROUTER_TMP = Path("/dev/shm/lnxrouter_tmp")
 
@@ -78,15 +73,106 @@ def _hostapd_cli_path() -> Optional[str]:
     return None
 
 
-def _find_latest_conf_dir(adapter_ifname: Optional[str]) -> Optional[Path]:
-    """
-    lnxrouter uses: /dev/shm/lnxrouter_tmp/lnxrouter.<ifname>.conf.<RAND>
-    Prefer matching adapter if provided, else any newest.
-    """
-    if not LNXROUTER_TMP.exists():
+def _get_config_ssid() -> Optional[str]:
+    try:
+        cfg = load_config()
+    except Exception:
         return None
+    if isinstance(cfg, dict):
+        ssid = cfg.get("ssid")
+        if isinstance(ssid, str) and ssid.strip():
+            return ssid.strip()
+    return None
 
-    pats: List[str]
+
+def _iw_dev_ap_ifaces() -> Tuple[List[Dict[str, Optional[str]]], str]:
+    rc, stdout, stderr = _run(["iw", "dev"], timeout_s=0.8)
+    if rc != 0:
+        return [], f"iw_dev_failed(rc={rc}):{stderr[:120]}"
+
+    interfaces: List[Dict[str, Optional[str]]] = []
+    cur: Optional[Dict[str, Optional[str]]] = None
+
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if line.startswith("Interface "):
+            if cur:
+                interfaces.append(cur)
+            parts = line.split()
+            cur = {"ifname": parts[1] if len(parts) > 1 else None, "ssid": None, "type": None}
+            continue
+        if not cur:
+            continue
+        if line.startswith("type "):
+            parts = line.split()
+            cur["type"] = parts[1] if len(parts) > 1 else None
+        elif line.startswith("ssid "):
+            cur["ssid"] = line.split(" ", 1)[1].strip() if " " in line else None
+
+    if cur:
+        interfaces.append(cur)
+
+    ap_ifaces = [
+        i for i in interfaces if (i.get("type") or "").upper().startswith("AP") and i.get("ifname")
+    ]
+    return ap_ifaces, ""
+
+
+def _prefer_ap_by_pattern(
+    candidates: List[Dict[str, Optional[str]]],
+    adapter_ifname: Optional[str],
+) -> str:
+    if adapter_ifname:
+        pattern = re.compile(rf"^x\d+{re.escape(adapter_ifname)}$")
+        for iface in candidates:
+            name = iface.get("ifname") or ""
+            if pattern.match(name):
+                return name
+    return candidates[0].get("ifname") or ""
+
+
+def _select_ap_interface(
+    adapter_ifname: Optional[str],
+) -> Tuple[Optional[str], List[str], List[str]]:
+    warnings: List[str] = []
+    ap_ifaces, warn = _iw_dev_ap_ifaces()
+    if warn:
+        warnings.append(warn)
+    ap_ifnames = [i.get("ifname") for i in ap_ifaces if i.get("ifname")]
+    adapter_hint = _derive_adapter_from_ap(adapter_ifname)
+
+    if not ap_ifaces:
+        return None, ap_ifnames, warnings
+
+    ssid = _get_config_ssid()
+    if ssid:
+        matches = [i for i in ap_ifaces if i.get("ssid") == ssid and i.get("ifname")]
+        if matches:
+            return _prefer_ap_by_pattern(matches, adapter_hint), ap_ifnames, warnings
+
+    if adapter_hint:
+        pattern = re.compile(rf"^x\d+{re.escape(adapter_hint)}$")
+        for iface in ap_ifaces:
+            name = iface.get("ifname") or ""
+            if pattern.match(name):
+                return name, ap_ifnames, warnings
+
+    return ap_ifnames[0], ap_ifnames, warnings
+
+
+def _derive_adapter_from_ap(ap_interface: Optional[str]) -> Optional[str]:
+    if not ap_interface:
+        return None
+    m = re.match(r"^x\d+(.+)$", ap_interface)
+    if m:
+        return m.group(1)
+    return ap_interface
+
+
+def _candidate_conf_dirs(adapter_ifname: Optional[str]) -> List[Path]:
+    if not LNXROUTER_TMP.exists():
+        return []
+
     if adapter_ifname:
         pats = [f"lnxrouter.{adapter_ifname}.conf.*"]
     else:
@@ -95,13 +181,40 @@ def _find_latest_conf_dir(adapter_ifname: Optional[str]) -> Optional[Path]:
     candidates: List[Path] = []
     for pat in pats:
         candidates.extend([p for p in LNXROUTER_TMP.glob(pat) if p.is_dir()])
+    return candidates
 
+
+def _find_latest_conf_dir(adapter_ifname: Optional[str]) -> Optional[Path]:
+    candidates = _candidate_conf_dirs(adapter_ifname)
     if not candidates:
         return None
-
-    # newest mtime wins
     candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0]
+
+
+def _select_conf_dir(
+    adapter_ifname: Optional[str],
+    ap_interface: Optional[str],
+) -> Tuple[Optional[Path], bool]:
+    adapter_for_glob = _derive_adapter_from_ap(adapter_ifname) if adapter_ifname else None
+    if not adapter_for_glob:
+        adapter_for_glob = _derive_adapter_from_ap(ap_interface)
+    candidates = _candidate_conf_dirs(adapter_for_glob)
+    if not candidates:
+        return None, False
+
+    if ap_interface:
+        matches: List[Path] = []
+        for cand in candidates:
+            ctrl_path = cand / "hostapd_ctrl" / ap_interface
+            if ctrl_path.exists():
+                matches.append(cand)
+        if matches:
+            matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return matches[0], False
+
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0], True
 
 
 def _parse_kv_file(path: Path) -> Dict[str, str]:
@@ -117,15 +230,45 @@ def _parse_kv_file(path: Path) -> Dict[str, str]:
     return kv
 
 
-def _read_hostapd_runtime(conf_dir: Path) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Returns (ap_ifname, ctrl_dir).
-    """
+def _read_subn_iface(conf_dir: Path) -> Optional[str]:
+    path = conf_dir / "subn_iface"
+    if not path.exists():
+        return None
+    raw = path.read_text(errors="ignore").strip()
+    if not raw:
+        return None
+    return raw.splitlines()[0].strip() or None
+
+
+def _read_dnsmasq_conf_interface(conf_dir: Path) -> Optional[str]:
+    path = conf_dir / "dnsmasq.conf"
+    if not path.exists():
+        return None
+    for line in path.read_text(errors="ignore").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("interface="):
+            value = line.split("=", 1)[1].strip()
+            if not value:
+                continue
+            return value.split(",", 1)[0].strip() or None
+    return None
+
+
+def _read_hostapd_conf_interface(conf_dir: Path) -> Optional[str]:
     hostapd_conf = conf_dir / "hostapd.conf"
     kv = _parse_kv_file(hostapd_conf)
     ap_if = kv.get("interface")
-    ctrl_dir = kv.get("ctrl_interface")
-    return ap_if, ctrl_dir
+    return ap_if.strip() if ap_if else None
+
+
+def _ap_interface_from_conf_dir(conf_dir: Path) -> Optional[str]:
+    for reader in (_read_subn_iface, _read_dnsmasq_conf_interface, _read_hostapd_conf_interface):
+        ap_if = reader(conf_dir)
+        if ap_if:
+            return ap_if
+    return None
 
 
 def _dnsmasq_leases(conf_dir: Path) -> Dict[str, Tuple[str, Optional[str]]]:
@@ -267,6 +410,18 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
     return clients, ""
 
 
+def _append_debug_warnings(
+    warnings: List[str],
+    conf_dir: Optional[Path],
+    ap_interface: Optional[str],
+    iw_ap_ifaces: List[str],
+) -> None:
+    warnings.append(f"selected_conf_dir={str(conf_dir) if conf_dir else None}")
+    warnings.append(f"selected_ap_interface={ap_interface}")
+    if iw_ap_ifaces and ap_interface and ap_interface not in iw_ap_ifaces:
+        warnings.append(f"iw_ap_ifaces={','.join(iw_ap_ifaces)}")
+
+
 def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]:
     """
     Returns a dict:
@@ -280,22 +435,52 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     Never raises.
     """
     warnings: List[str] = []
+    iw_ap_ifaces: List[str] = []
+    ap_if: Optional[str] = None
+    conf_dir: Optional[Path] = None
+    conf_best_effort = False
 
-    conf_dir = _find_latest_conf_dir(adapter_ifname)
-    if not conf_dir:
-        return {
-            "conf_dir": None,
-            "ap_interface": None,
-            "clients": [],
-            "warnings": ["lnxrouter_conf_dir_not_found"],
-            "sources": {"primary": None, "enrichment": []},
-        }
+    for attempt in range(3):
+        warnings = []
+        ap_if, iw_ap_ifaces, iw_warns = _select_ap_interface(adapter_ifname)
+        warnings.extend(iw_warns)
 
-    ap_if, ctrl_dir = _read_hostapd_runtime(conf_dir)
-    if not ap_if:
-        warnings.append("hostapd_conf_missing_interface")
+        conf_dir, conf_best_effort = _select_conf_dir(adapter_ifname, ap_if)
 
-    leases = _dnsmasq_leases(conf_dir)  # mac -> (ip, hostname)
+        if ap_if is None and conf_dir is not None:
+            ap_if = _ap_interface_from_conf_dir(conf_dir)
+            if ap_if:
+                matched_conf_dir, matched_best_effort = _select_conf_dir(adapter_ifname, ap_if)
+                if matched_conf_dir is not None:
+                    conf_dir = matched_conf_dir
+                    conf_best_effort = matched_best_effort
+
+        if ap_if and conf_dir:
+            break
+
+        if attempt < 2 and (ap_if is None or conf_dir is None):
+            time.sleep(0.1)
+
+    if conf_dir is None:
+        warnings.append("lnxrouter_conf_dir_not_found")
+    elif conf_best_effort:
+        warnings.append("conf_dir_best_effort")
+
+    if ap_if is None:
+        warnings.append("no_ap_interface_detected")
+
+    if ap_if and conf_dir:
+        ctrl_path = conf_dir / "hostapd_ctrl" / ap_if
+        if not ctrl_path.exists():
+            warnings.append("hostapd_ctrl_socket_missing")
+
+    if ap_if and iw_ap_ifaces and ap_if not in iw_ap_ifaces:
+        warnings.append("iw_ap_interface_mismatch")
+
+    leases: Dict[str, Tuple[str, Optional[str]]] = {}
+    if conf_dir is not None:
+        leases = _dnsmasq_leases(conf_dir)
+
     neigh: Dict[str, str] = {}
     if ap_if:
         neigh = _ip_neigh(ap_if)
@@ -304,8 +489,15 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     primary = None
 
     # Primary attempt: hostapd_cli list_sta (fast + authoritative), but do not trust it to be stable.
-    if ap_if and ctrl_dir:
-        macs, warn = _hostapd_cli_list_stas(ctrl_dir, ap_if)
+    hostapd_ctrl_ready = False
+    ctrl_dir = None
+    if ap_if and conf_dir:
+        ctrl_path = conf_dir / "hostapd_ctrl" / ap_if
+        hostapd_ctrl_ready = ctrl_path.exists()
+        ctrl_dir = str(conf_dir / "hostapd_ctrl")
+
+    if ap_if and conf_dir and hostapd_ctrl_ready:
+        macs, warn = _hostapd_cli_list_stas(ctrl_dir or "", ap_if)
         if warn:
             warnings.append(warn)
         if macs is not None:
@@ -352,8 +544,11 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     if neigh:
         enrichment.append("ip_neigh")
 
+    if warnings:
+        _append_debug_warnings(warnings, conf_dir, ap_if, iw_ap_ifaces)
+
     return {
-        "conf_dir": str(conf_dir),
+        "conf_dir": str(conf_dir) if conf_dir else None,
         "ap_interface": ap_if,
         "clients": out_clients,
         "warnings": warnings,
@@ -361,114 +556,17 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     }
 
 
-# ---------------------------
-# Back-compat shim (legacy API)
-# ---------------------------
-# Older tests/consumers expect:
-#   - vr_hotspotd.diagnostics.clients.load_config (monkeypatched)
-#   - vr_hotspotd.diagnostics.clients.subprocess.run (monkeypatched)
-#   - vr_hotspotd.diagnostics.clients.list_clients(dev)
-#
-# New code should prefer get_clients_snapshot(...). This shim is intentionally
-# small and pure to keep compatibility without affecting snapshot collectors.
+def list_clients(ap_ifname: str) -> List[dict]:
+    if ap_ifname:
+        adapter_hint = _derive_adapter_from_ap(ap_ifname)
+        snapshot = get_clients_snapshot(adapter_hint or ap_ifname)
+        return snapshot.get("clients", [])
 
-_KNOWN_NEIGH_STATES = {
-    "INCOMPLETE", "REACHABLE", "STALE", "DELAY", "PROBE", "FAILED", "NOARP", "PERMANENT"
-}
-
-def _parse_dnsmasq_leases_compat(leases_path: str):
-    mac_to_name = {}
-    ip_to_name = {}
     try:
-        p = Path(leases_path)
-        if not p.exists():
-            return mac_to_name, ip_to_name
-        for raw in p.read_text(errors="ignore").splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            # dnsmasq.leases format:
-            # <expiry> <mac> <ip> <hostname> <clientid>
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            mac = parts[1].lower()
-            ip = parts[2]
-            name = parts[3]
-            if name and name != "*":
-                mac_to_name[mac] = name
-                ip_to_name[ip] = name
-    except Exception:
-        pass
-    return mac_to_name, ip_to_name
-
-
-def list_clients(dev: str):
-    """
-    Legacy client listing based on `ip neigh show dev <dev>` plus optional
-    hostname enrichment from dnsmasq leases.
-
-    Returned shape is a list[dict] with keys like: ip, mac, state, hostname.
-    """
-    cfg = {}
-    try:
-        cfg = load_config() or {}
+        cfg = load_config()
     except Exception:
         cfg = {}
 
-    leases_path = cfg.get("dnsmasq_leases_file") or cfg.get("dnsmasq_leases") or ""
-    mac_to_name, ip_to_name = ({}, {})
-    if leases_path:
-        mac_to_name, ip_to_name = _parse_dnsmasq_leases_compat(str(leases_path))
-
-    # Important: use module attribute `subprocess.run` (tests monkeypatch it)
-    try:
-        res = subprocess.run(
-            ["ip", "neigh", "show", "dev", dev],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        out = res.stdout if getattr(res, "returncode", 1) == 0 else ""
-    except Exception:
-        out = ""
-
-    clients = []
-    for raw in out.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        parts = line.split()
-        if not parts:
-            continue
-
-        ip = parts[0]
-        mac = None
-        state = None
-
-        if "lladdr" in parts:
-            try:
-                mac = parts[parts.index("lladdr") + 1].lower()
-            except Exception:
-                mac = None
-
-        # State is typically last token and in known set
-        last = parts[-1].upper() if parts else ""
-        if last in _KNOWN_NEIGH_STATES:
-            state = last
-
-        hostname = ip_to_name.get(ip)
-        if not hostname and mac:
-            hostname = mac_to_name.get(mac)
-
-        clients.append(
-            {
-                "ip": ip,
-                "mac": mac,
-                "state": state,
-                "hostname": hostname,
-            }
-        )
-
-    return clients
-
+    adapter = cfg.get("ap_adapter") if isinstance(cfg, dict) else None
+    snapshot = get_clients_snapshot(adapter if adapter else None)
+    return snapshot.get("clients", [])
