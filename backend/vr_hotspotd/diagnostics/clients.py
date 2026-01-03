@@ -37,6 +37,7 @@ _KNOWN_NEIGH_STATES = {
     "NOARP",
     "PERMANENT",
 }
+_CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
 
 
 def _is_mac(s: str) -> bool:
@@ -128,17 +129,12 @@ def _iw_dev_ap_ifaces() -> Tuple[List[Dict[str, Optional[str]]], str]:
     return ap_ifaces, ""
 
 
-def _prefer_ap_by_pattern(
-    candidates: List[Dict[str, Optional[str]]],
-    adapter_ifname: Optional[str],
-) -> str:
-    if adapter_ifname:
-        pattern = re.compile(rf"^x\d+{re.escape(adapter_ifname)}$")
-        for iface in candidates:
-            name = iface.get("ifname") or ""
-            if pattern.match(name):
-                return name
-    return candidates[0].get("ifname") or ""
+def _matches_ap_adapter(ifname: str, ap_adapter: Optional[str]) -> bool:
+    if not ap_adapter:
+        return False
+    if ifname == ap_adapter:
+        return True
+    return ifname.startswith("x") and ifname.endswith(ap_adapter)
 
 
 def _select_ap_interface(
@@ -149,7 +145,6 @@ def _select_ap_interface(
     if warn:
         warnings.append(warn)
     ap_ifnames = [i.get("ifname") for i in ap_ifaces if i.get("ifname")]
-    adapter_hint = _derive_adapter_from_ap(adapter_ifname)
 
     if not ap_ifaces:
         return None, ap_ifnames, warnings
@@ -158,13 +153,17 @@ def _select_ap_interface(
     if ssid:
         matches = [i for i in ap_ifaces if i.get("ssid") == ssid and i.get("ifname")]
         if matches:
-            return _prefer_ap_by_pattern(matches, adapter_hint), ap_ifnames, warnings
+            if adapter_ifname:
+                for iface in matches:
+                    name = iface.get("ifname") or ""
+                    if _matches_ap_adapter(name, adapter_ifname):
+                        return name, ap_ifnames, warnings
+            return matches[0].get("ifname"), ap_ifnames, warnings
 
-    if adapter_hint:
-        pattern = re.compile(rf"^x\d+{re.escape(adapter_hint)}$")
+    if adapter_ifname:
         for iface in ap_ifaces:
             name = iface.get("ifname") or ""
-            if pattern.match(name):
+            if _matches_ap_adapter(name, adapter_ifname):
                 return name, ap_ifnames, warnings
 
     return ap_ifnames[0], ap_ifnames, warnings
@@ -207,7 +206,7 @@ def _select_conf_dir(
     ap_interface: Optional[str],
 ) -> Tuple[Optional[Path], bool]:
     adapter_for_glob = _derive_adapter_from_ap(adapter_ifname) if adapter_ifname else None
-    if not adapter_for_glob:
+    if not adapter_for_glob and ap_interface:
         adapter_for_glob = _derive_adapter_from_ap(ap_interface)
     candidates = _candidate_conf_dirs(adapter_for_glob)
     if not candidates:
@@ -216,8 +215,7 @@ def _select_conf_dir(
     if ap_interface:
         matches: List[Path] = []
         for cand in candidates:
-            ctrl_path = cand / "hostapd_ctrl" / ap_interface
-            if ctrl_path.exists():
+            if _read_hostapd_conf_interface(cand) == ap_interface:
                 matches.append(cand)
         if matches:
             matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -271,6 +269,41 @@ def _read_hostapd_conf_interface(conf_dir: Path) -> Optional[str]:
     kv = _parse_kv_file(hostapd_conf)
     ap_if = kv.get("interface")
     return ap_if.strip() if ap_if else None
+
+
+def _parse_ctrl_interface_dir(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    m = _CTRL_DIR_RE.search(raw)
+    if m:
+        return m.group(1)
+    return raw.split()[0]
+
+
+def _ctrl_dir_from_conf(conf_dir: Path) -> Optional[Path]:
+    hostapd_conf = conf_dir / "hostapd.conf"
+    kv = _parse_kv_file(hostapd_conf)
+    ctrl_value = kv.get("ctrl_interface")
+    ctrl_dir = _parse_ctrl_interface_dir(ctrl_value)
+    return Path(ctrl_dir) if ctrl_dir else None
+
+
+def _find_ctrl_dir(conf_dir: Optional[Path], ap_interface: str) -> Optional[Path]:
+    candidates: List[Path] = []
+    if conf_dir:
+        ctrl_dir = _ctrl_dir_from_conf(conf_dir)
+        if ctrl_dir:
+            candidates.append(ctrl_dir)
+
+    candidates.extend([Path("/run/hostapd"), Path("/var/run/hostapd")])
+
+    for cand in candidates:
+        if (cand / ap_interface).exists():
+            return cand
+    return None
 
 
 def _ap_interface_from_conf_dir(conf_dir: Path) -> Optional[str]:
@@ -554,21 +587,7 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
         if attempt < 2 and (ap_if is None or conf_dir is None):
             time.sleep(0.1)
 
-    if conf_dir is None:
-        warnings.append("lnxrouter_conf_dir_not_found")
-    elif conf_best_effort:
-        warnings.append("conf_dir_best_effort")
-
-    if ap_if is None:
-        warnings.append("no_ap_interface_detected")
-
-    if ap_if and conf_dir:
-        ctrl_path = conf_dir / "hostapd_ctrl" / ap_if
-        if not ctrl_path.exists():
-            warnings.append("hostapd_ctrl_socket_missing")
-
-    if ap_if and iw_ap_ifaces and ap_if not in iw_ap_ifaces:
-        warnings.append("iw_ap_interface_mismatch")
+    ctrl_dir: Optional[Path] = _find_ctrl_dir(conf_dir, ap_if) if ap_if else None
 
     leases: Dict[str, Tuple[str, Optional[str]]] = {}
     if conf_dir is not None:
@@ -582,15 +601,8 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     primary = None
 
     # Primary attempt: hostapd_cli list_sta (fast + authoritative), but do not trust it to be stable.
-    hostapd_ctrl_ready = False
-    ctrl_dir = None
-    if ap_if and conf_dir:
-        ctrl_path = conf_dir / "hostapd_ctrl" / ap_if
-        hostapd_ctrl_ready = ctrl_path.exists()
-        ctrl_dir = str(conf_dir / "hostapd_ctrl")
-
-    if ap_if and conf_dir and hostapd_ctrl_ready:
-        macs, warn = _hostapd_cli_list_stas(ctrl_dir or "", ap_if)
+    if ap_if and ctrl_dir:
+        macs, warn = _hostapd_cli_list_stas(str(ctrl_dir), ap_if)
         if warn:
             warnings.append(warn)
         if macs is not None:
@@ -606,11 +618,40 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
             warnings.append("no_ap_interface_for_iw_fallback")
         else:
             iw_clients, warn = _iw_station_dump(ap_if)
+            if warn and "no such device" in warn.lower():
+                retry_ap_if, retry_ap_ifaces, retry_warns = _select_ap_interface(adapter_ifname)
+                warnings.extend(retry_warns)
+                if retry_ap_if and retry_ap_if != ap_if:
+                    ap_if = retry_ap_if
+                    iw_ap_ifaces = retry_ap_ifaces or iw_ap_ifaces
+                    mac_to_ip = _ip_neigh(ap_if)
+                    retry_conf_dir, retry_best_effort = _select_conf_dir(adapter_ifname, ap_if)
+                    if retry_conf_dir is not None:
+                        conf_dir = retry_conf_dir
+                        conf_best_effort = retry_best_effort
+                        leases = _dnsmasq_leases(conf_dir)
+                    iw_clients, warn = _iw_station_dump(ap_if)
             if warn:
                 warnings.append(warn)
-            if iw_clients is not None:
-                primary = "iw"
-                clients = iw_clients
+        if iw_clients is not None:
+            primary = "iw"
+            clients = iw_clients
+
+    if ap_if:
+        ctrl_dir = _find_ctrl_dir(conf_dir, ap_if)
+
+    if conf_dir is None:
+        warnings.append("lnxrouter_conf_dir_not_found")
+    elif conf_best_effort:
+        warnings.append("conf_dir_best_effort")
+
+    if ap_if is None:
+        warnings.append("no_ap_interface_detected")
+    elif ctrl_dir is None:
+        warnings.append("hostapd_ctrl_socket_missing")
+
+    if ap_if and iw_ap_ifaces and ap_if not in iw_ap_ifaces:
+        warnings.append("iw_ap_interface_mismatch")
 
     # Enrich any clients we have with IP/hostname from neigh/leases
     by_mac: Dict[str, Client] = {c.mac.lower(): c for c in clients if _is_mac(c.mac)}

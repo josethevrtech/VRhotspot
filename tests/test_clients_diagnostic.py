@@ -55,7 +55,7 @@ def test_snapshot_falls_back_to_iw_when_hostapd_cli_times_out(tmp_path: Path, mo
     (conf / "hostapd.conf").write_text(
         "ssid=VRHotspot-Test\n"
         "interface=x0wlan1\n"
-        "ctrl_interface=/dev/shm/lnxrouter_tmp/lnxrouter.wlan1.conf.ABCD/hostapd_ctrl\n"
+        f"ctrl_interface={conf}/hostapd_ctrl\n"
     )
     (conf / "hostapd_ctrl").mkdir()
     (conf / "hostapd_ctrl" / "x0wlan1").write_text("")
@@ -112,8 +112,8 @@ def test_conf_dir_prefers_ctrl_socket_match(tmp_path: Path, monkeypatch):
     conf_old.mkdir()
     conf_new.mkdir()
 
-    (conf_old / "hostapd_ctrl").mkdir()
-    (conf_old / "hostapd_ctrl" / "x0wlan1").write_text("")
+    (conf_old / "hostapd.conf").write_text("interface=x0wlan1\n")
+    (conf_new / "hostapd.conf").write_text("interface=x1wlan1\n")
 
     os.utime(conf_old, (100, 100))
     os.utime(conf_new, (200, 200))
@@ -174,6 +174,7 @@ def test_snapshot_skips_hostapd_cli_when_ctrl_missing(tmp_path: Path, monkeypatc
         return 127, "", "nope"
 
     monkeypatch.setattr(clients, "_run", fake_run)
+    monkeypatch.setattr(clients, "_find_ctrl_dir", lambda *_args, **_kwargs: None)
 
     def explode(*_args, **_kwargs):
         raise AssertionError("hostapd_cli should not be called")
