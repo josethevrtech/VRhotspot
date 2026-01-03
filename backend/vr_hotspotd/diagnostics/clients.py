@@ -27,6 +27,16 @@ class Client:
 
 
 _MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$", re.IGNORECASE)
+_KNOWN_NEIGH_STATES = {
+    "INCOMPLETE",
+    "REACHABLE",
+    "STALE",
+    "DELAY",
+    "PROBE",
+    "FAILED",
+    "NOARP",
+    "PERMANENT",
+}
 
 
 def _is_mac(s: str) -> bool:
@@ -292,6 +302,93 @@ def _dnsmasq_leases(conf_dir: Path) -> Dict[str, Tuple[str, Optional[str]]]:
     return out
 
 
+def _parse_leases(path: Path) -> Dict[str, str]:
+    leases: Dict[str, str] = {}
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return leases
+
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        _expiry, mac, _ip, hostname = parts[:4]
+        if not mac or not hostname or hostname == "*":
+            continue
+        leases[mac.lower()] = hostname
+    return leases
+
+
+def _find_leases_file(cfg: dict) -> Optional[Path]:
+    keys = (
+        "dnsmasq_leases_file",
+        "dnsmasq_leases_path",
+        "dnsmasq_lease_file",
+        "dnsmasq_lease_path",
+    )
+    for key in keys:
+        val = cfg.get(key)
+        if isinstance(val, str) and val.strip():
+            p = Path(val)
+            if p.exists():
+                return p
+
+    defaults = [
+        "/var/lib/misc/dnsmasq.leases",
+        "/var/lib/dnsmasq/dnsmasq.leases",
+        "/var/run/dnsmasq.leases",
+        "/run/dnsmasq.leases",
+    ]
+    for cand in defaults:
+        p = Path(cand)
+        if p.exists():
+            return p
+
+    try:
+        for cand in Path("/var/lib/NetworkManager").glob("dnsmasq-*.leases"):
+            if cand.exists():
+                return cand
+    except Exception:
+        pass
+
+    return None
+
+
+def _parse_ip_neigh(text: str) -> List[Dict[str, Optional[str]]]:
+    entries: List[Dict[str, Optional[str]]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+
+        ip = parts[0]
+        dev = None
+        mac = None
+        state = None
+
+        if "dev" in parts:
+            idx = parts.index("dev")
+            if idx + 1 < len(parts):
+                dev = parts[idx + 1]
+
+        if "lladdr" in parts:
+            idx = parts.index("lladdr")
+            if idx + 1 < len(parts):
+                mac = parts[idx + 1].lower()
+
+        for tok in reversed(parts):
+            if tok in _KNOWN_NEIGH_STATES:
+                state = tok
+                break
+
+        entries.append({"ip": ip, "dev": dev, "mac": mac, "state": state})
+    return entries
+
+
 def _ip_neigh(ap_if: str) -> Dict[str, str]:
     """
     Returns mac -> ip from `ip neigh show dev <ap_if>`.
@@ -300,18 +397,14 @@ def _ip_neigh(ap_if: str) -> Dict[str, str]:
     if rc != 0:
         return {}
     mapping: Dict[str, str] = {}
-    # Example: 192.168.120.217 lladdr 76:d4:ff:3c:12:8d REACHABLE
-    for line in stdout.splitlines():
-        parts = line.split()
-        if len(parts) < 5:
+    for entry in _parse_ip_neigh(stdout):
+        dev = entry.get("dev")
+        if dev and dev != ap_if:
             continue
-        ip = parts[0]
-        if "lladdr" in parts:
-            idx = parts.index("lladdr")
-            if idx + 1 < len(parts):
-                mac = parts[idx + 1].lower()
-                if _is_mac(mac):
-                    mapping[mac] = ip
+        ip = entry.get("ip")
+        mac = entry.get("mac")
+        if ip and mac and _is_mac(mac):
+            mapping[mac] = ip
     return mapping
 
 
@@ -481,9 +574,9 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     if conf_dir is not None:
         leases = _dnsmasq_leases(conf_dir)
 
-    neigh: Dict[str, str] = {}
+    mac_to_ip: Dict[str, str] = {}
     if ap_if:
-        neigh = _ip_neigh(ap_if)
+        mac_to_ip = _ip_neigh(ap_if)
 
     clients: List[Client] = []
     primary = None
@@ -503,7 +596,7 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
         if macs is not None:
             primary = "hostapd_cli"
             for mac in macs:
-                ip = neigh.get(mac) or (leases.get(mac)[0] if mac in leases else None)
+                ip = mac_to_ip.get(mac) or (leases.get(mac)[0] if mac in leases else None)
                 hn = leases.get(mac)[1] if mac in leases else None
                 clients.append(Client(mac=mac, ip=ip, hostname=hn, source="hostapd_cli"))
 
@@ -522,7 +615,7 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     # Enrich any clients we have with IP/hostname from neigh/leases
     by_mac: Dict[str, Client] = {c.mac.lower(): c for c in clients if _is_mac(c.mac)}
     for mac, c in list(by_mac.items()):
-        ip = c.ip or neigh.get(mac) or (leases.get(mac)[0] if mac in leases else None)
+        ip = c.ip or mac_to_ip.get(mac) or (leases.get(mac)[0] if mac in leases else None)
         hn = c.hostname or (leases.get(mac)[1] if mac in leases else None)
         by_mac[mac] = Client(
             mac=c.mac,
@@ -541,7 +634,7 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     enrichment: List[str] = []
     if leases:
         enrichment.append("dnsmasq_leases")
-    if neigh:
+    if mac_to_ip:
         enrichment.append("ip_neigh")
 
     if warnings:
@@ -557,16 +650,34 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
 
 
 def list_clients(ap_ifname: str) -> List[dict]:
-    if ap_ifname:
-        adapter_hint = _derive_adapter_from_ap(ap_ifname)
-        snapshot = get_clients_snapshot(adapter_hint or ap_ifname)
-        return snapshot.get("clients", [])
+    if not ap_ifname:
+        return []
 
     try:
         cfg = load_config()
-    except Exception:
-        cfg = {}
+        lease_file = _find_leases_file(cfg) if isinstance(cfg, dict) else None
+        leases = _parse_leases(lease_file) if lease_file else {}
 
-    adapter = cfg.get("ap_adapter") if isinstance(cfg, dict) else None
-    snapshot = get_clients_snapshot(adapter if adapter else None)
-    return snapshot.get("clients", [])
+        proc = subprocess.run(
+            ["ip", "neigh", "show", "dev", ap_ifname],
+            capture_output=True,
+            text=True,
+            timeout=0.8,
+        )
+        if proc.returncode != 0 and not proc.stdout:
+            return []
+
+        out: List[dict] = []
+        for entry in _parse_ip_neigh(proc.stdout or ""):
+            dev = entry.get("dev")
+            if dev and dev != ap_ifname:
+                continue
+            mac = entry.get("mac")
+            item = {"ip": entry.get("ip"), "mac": mac, "state": entry.get("state")}
+            if mac and mac in leases:
+                item["hostname"] = leases[mac]
+            out.append(item)
+
+        return out
+    except Exception:
+        return []
