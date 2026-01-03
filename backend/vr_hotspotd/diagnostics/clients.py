@@ -359,3 +359,116 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
         "warnings": warnings,
         "sources": {"primary": primary, "enrichment": enrichment},
     }
+
+
+# ---------------------------
+# Back-compat shim (legacy API)
+# ---------------------------
+# Older tests/consumers expect:
+#   - vr_hotspotd.diagnostics.clients.load_config (monkeypatched)
+#   - vr_hotspotd.diagnostics.clients.subprocess.run (monkeypatched)
+#   - vr_hotspotd.diagnostics.clients.list_clients(dev)
+#
+# New code should prefer get_clients_snapshot(...). This shim is intentionally
+# small and pure to keep compatibility without affecting snapshot collectors.
+
+_KNOWN_NEIGH_STATES = {
+    "INCOMPLETE", "REACHABLE", "STALE", "DELAY", "PROBE", "FAILED", "NOARP", "PERMANENT"
+}
+
+def _parse_dnsmasq_leases_compat(leases_path: str):
+    mac_to_name = {}
+    ip_to_name = {}
+    try:
+        p = Path(leases_path)
+        if not p.exists():
+            return mac_to_name, ip_to_name
+        for raw in p.read_text(errors="ignore").splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            # dnsmasq.leases format:
+            # <expiry> <mac> <ip> <hostname> <clientid>
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            mac = parts[1].lower()
+            ip = parts[2]
+            name = parts[3]
+            if name and name != "*":
+                mac_to_name[mac] = name
+                ip_to_name[ip] = name
+    except Exception:
+        pass
+    return mac_to_name, ip_to_name
+
+
+def list_clients(dev: str):
+    """
+    Legacy client listing based on `ip neigh show dev <dev>` plus optional
+    hostname enrichment from dnsmasq leases.
+
+    Returned shape is a list[dict] with keys like: ip, mac, state, hostname.
+    """
+    cfg = {}
+    try:
+        cfg = load_config() or {}
+    except Exception:
+        cfg = {}
+
+    leases_path = cfg.get("dnsmasq_leases_file") or cfg.get("dnsmasq_leases") or ""
+    mac_to_name, ip_to_name = ({}, {})
+    if leases_path:
+        mac_to_name, ip_to_name = _parse_dnsmasq_leases_compat(str(leases_path))
+
+    # Important: use module attribute `subprocess.run` (tests monkeypatch it)
+    try:
+        res = subprocess.run(
+            ["ip", "neigh", "show", "dev", dev],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        out = res.stdout if getattr(res, "returncode", 1) == 0 else ""
+    except Exception:
+        out = ""
+
+    clients = []
+    for raw in out.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+
+        ip = parts[0]
+        mac = None
+        state = None
+
+        if "lladdr" in parts:
+            try:
+                mac = parts[parts.index("lladdr") + 1].lower()
+            except Exception:
+                mac = None
+
+        # State is typically last token and in known set
+        last = parts[-1].upper() if parts else ""
+        if last in _KNOWN_NEIGH_STATES:
+            state = last
+
+        hostname = ip_to_name.get(ip)
+        if not hostname and mac:
+            hostname = mac_to_name.get(mac)
+
+        clients.append(
+            {
+                "ip": ip,
+                "mac": mac,
+                "state": state,
+                "hostname": hostname,
+            }
+        )
+
+    return clients
+
