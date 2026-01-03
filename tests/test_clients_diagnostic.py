@@ -114,6 +114,7 @@ def test_conf_dir_prefers_ctrl_socket_match(tmp_path: Path, monkeypatch):
 
     (conf_old / "hostapd.conf").write_text("interface=x0wlan1\n")
     (conf_new / "hostapd.conf").write_text("interface=x1wlan1\n")
+    (conf_old / "hostapd.pid").write_text(str(os.getpid()))
 
     os.utime(conf_old, (100, 100))
     os.utime(conf_new, (200, 200))
@@ -185,3 +186,27 @@ def test_snapshot_skips_hostapd_cli_when_ctrl_missing(tmp_path: Path, monkeypatc
     assert snap["sources"]["primary"] == "iw"
     assert snap["clients"][0]["ip"] == "192.168.120.217"
     assert "hostapd_ctrl_socket_missing" in snap["warnings"]
+
+
+def test_snapshot_no_active_ap_interface(monkeypatch):
+    calls: List[List[str]] = []
+
+    def fake_run(cmd: List[str], timeout_s: float):
+        calls.append(cmd)
+        if cmd == ["iw", "dev"]:
+            return (
+                0,
+                "phy#0\n\tInterface wlan0\n\t\ttype managed\n",
+                "",
+            )
+        return 127, "", "nope"
+
+    monkeypatch.setattr(clients, "_run", fake_run)
+
+    snap = clients.get_clients_snapshot("wlan1")
+    assert snap["ap_interface"] is None
+    assert snap["conf_dir"] is None
+    assert snap["clients"] == []
+    assert snap["sources"]["primary"] is None
+    assert "no_active_ap_interface" in snap["warnings"]
+    assert calls == [["iw", "dev"]]

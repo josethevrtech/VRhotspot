@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -132,8 +131,6 @@ def _iw_dev_ap_ifaces() -> Tuple[List[Dict[str, Optional[str]]], str]:
 def _matches_ap_adapter(ifname: str, ap_adapter: Optional[str]) -> bool:
     if not ap_adapter:
         return False
-    if ifname == ap_adapter:
-        return True
     return ifname.startswith("x") and ifname.endswith(ap_adapter)
 
 
@@ -204,25 +201,25 @@ def _find_latest_conf_dir(adapter_ifname: Optional[str]) -> Optional[Path]:
 def _select_conf_dir(
     adapter_ifname: Optional[str],
     ap_interface: Optional[str],
-) -> Tuple[Optional[Path], bool]:
+) -> Optional[Path]:
+    if not ap_interface:
+        return None
     adapter_for_glob = _derive_adapter_from_ap(adapter_ifname) if adapter_ifname else None
-    if not adapter_for_glob and ap_interface:
+    if not adapter_for_glob:
         adapter_for_glob = _derive_adapter_from_ap(ap_interface)
     candidates = _candidate_conf_dirs(adapter_for_glob)
     if not candidates:
-        return None, False
+        return None
 
-    if ap_interface:
-        matches: List[Path] = []
-        for cand in candidates:
-            if _read_hostapd_conf_interface(cand) == ap_interface:
-                matches.append(cand)
-        if matches:
-            matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            return matches[0], False
+    matches: List[Path] = []
+    for cand in candidates:
+        if _conf_dir_active(cand, ap_interface):
+            matches.append(cand)
+    if not matches:
+        return None
 
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0], True
+    matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0]
 
 
 def _parse_kv_file(path: Path) -> Dict[str, str]:
@@ -304,6 +301,46 @@ def _find_ctrl_dir(conf_dir: Optional[Path], ap_interface: str) -> Optional[Path
         if (cand / ap_interface).exists():
             return cand
     return None
+
+
+def _read_pid_file(path: Path) -> Optional[int]:
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(errors="ignore").strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        return int(raw.split()[0])
+    except Exception:
+        return None
+
+
+def _pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    return Path(f"/proc/{pid}").exists()
+
+
+def _hostapd_pid_running(conf_dir: Path) -> bool:
+    pid = _read_pid_file(conf_dir / "hostapd.pid")
+    if pid is None:
+        return False
+    return _pid_running(pid)
+
+
+def _conf_dir_active(conf_dir: Path, ap_interface: str) -> bool:
+    if _read_hostapd_conf_interface(conf_dir) != ap_interface:
+        return False
+    ctrl_dir = _ctrl_dir_from_conf(conf_dir)
+    ctrl_candidates = [d for d in (ctrl_dir,) if d]
+    ctrl_candidates.extend([Path("/run/hostapd"), Path("/var/run/hostapd")])
+    for cand in ctrl_candidates:
+        if (cand / ap_interface).exists():
+            return True
+    return _hostapd_pid_running(conf_dir)
 
 
 def _ap_interface_from_conf_dir(conf_dir: Path) -> Optional[str]:
@@ -561,41 +598,32 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     Never raises.
     """
     warnings: List[str] = []
-    iw_ap_ifaces: List[str] = []
-    ap_if: Optional[str] = None
-    conf_dir: Optional[Path] = None
-    conf_best_effort = False
+    ap_if, iw_ap_ifaces, iw_warns = _select_ap_interface(adapter_ifname)
+    warnings.extend(iw_warns)
 
-    for attempt in range(3):
-        warnings = []
-        ap_if, iw_ap_ifaces, iw_warns = _select_ap_interface(adapter_ifname)
-        warnings.extend(iw_warns)
+    if not ap_if:
+        warnings.append("no_active_ap_interface")
+        return {
+            "conf_dir": None,
+            "ap_interface": None,
+            "clients": [],
+            "warnings": warnings,
+            "sources": {"primary": None, "enrichment": []},
+        }
 
-        conf_dir, conf_best_effort = _select_conf_dir(adapter_ifname, ap_if)
+    conf_dir = _select_conf_dir(adapter_ifname, ap_if)
+    if conf_dir is None:
+        warnings.append("conf_dir_unavailable")
 
-        if ap_if is None and conf_dir is not None:
-            ap_if = _ap_interface_from_conf_dir(conf_dir)
-            if ap_if:
-                matched_conf_dir, matched_best_effort = _select_conf_dir(adapter_ifname, ap_if)
-                if matched_conf_dir is not None:
-                    conf_dir = matched_conf_dir
-                    conf_best_effort = matched_best_effort
+    ctrl_dir = _find_ctrl_dir(conf_dir, ap_if)
+    if ctrl_dir is None:
+        warnings.append("hostapd_ctrl_socket_missing")
 
-        if ap_if and conf_dir:
-            break
+    if iw_ap_ifaces and ap_if not in iw_ap_ifaces:
+        warnings.append("iw_ap_interface_mismatch")
 
-        if attempt < 2 and (ap_if is None or conf_dir is None):
-            time.sleep(0.1)
-
-    ctrl_dir: Optional[Path] = _find_ctrl_dir(conf_dir, ap_if) if ap_if else None
-
-    leases: Dict[str, Tuple[str, Optional[str]]] = {}
-    if conf_dir is not None:
-        leases = _dnsmasq_leases(conf_dir)
-
-    mac_to_ip: Dict[str, str] = {}
-    if ap_if:
-        mac_to_ip = _ip_neigh(ap_if)
+    leases: Dict[str, Tuple[str, Optional[str]]] = _dnsmasq_leases(conf_dir) if conf_dir else {}
+    mac_to_ip = _ip_neigh(ap_if)
 
     clients: List[Client] = []
     primary = None
@@ -614,44 +642,36 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
 
     # Fallback: iw station dump
     if primary is None:
-        if not ap_if:
-            warnings.append("no_ap_interface_for_iw_fallback")
-        else:
-            iw_clients, warn = _iw_station_dump(ap_if)
-            if warn and "no such device" in warn.lower():
-                retry_ap_if, retry_ap_ifaces, retry_warns = _select_ap_interface(adapter_ifname)
-                warnings.extend(retry_warns)
-                if retry_ap_if and retry_ap_if != ap_if:
-                    ap_if = retry_ap_if
-                    iw_ap_ifaces = retry_ap_ifaces or iw_ap_ifaces
-                    mac_to_ip = _ip_neigh(ap_if)
-                    retry_conf_dir, retry_best_effort = _select_conf_dir(adapter_ifname, ap_if)
-                    if retry_conf_dir is not None:
-                        conf_dir = retry_conf_dir
-                        conf_best_effort = retry_best_effort
-                        leases = _dnsmasq_leases(conf_dir)
-                    iw_clients, warn = _iw_station_dump(ap_if)
-            if warn:
-                warnings.append(warn)
+        iw_clients, warn = _iw_station_dump(ap_if)
+        if warn and "no such device" in warn.lower():
+            retry_ap_if, retry_ap_ifaces, retry_warns = _select_ap_interface(adapter_ifname)
+            warnings.extend(retry_warns)
+            if not retry_ap_if:
+                warnings.append("no_active_ap_interface")
+                return {
+                    "conf_dir": None,
+                    "ap_interface": None,
+                    "clients": [],
+                    "warnings": warnings,
+                    "sources": {"primary": None, "enrichment": []},
+                }
+            if retry_ap_if != ap_if:
+                ap_if = retry_ap_if
+                iw_ap_ifaces = retry_ap_ifaces
+                conf_dir = _select_conf_dir(adapter_ifname, ap_if)
+                if conf_dir is None and "conf_dir_unavailable" not in warnings:
+                    warnings.append("conf_dir_unavailable")
+                ctrl_dir = _find_ctrl_dir(conf_dir, ap_if)
+                if ctrl_dir is None and "hostapd_ctrl_socket_missing" not in warnings:
+                    warnings.append("hostapd_ctrl_socket_missing")
+                leases = _dnsmasq_leases(conf_dir) if conf_dir else {}
+                mac_to_ip = _ip_neigh(ap_if)
+                iw_clients, warn = _iw_station_dump(ap_if)
+        if warn:
+            warnings.append(warn)
         if iw_clients is not None:
             primary = "iw"
             clients = iw_clients
-
-    if ap_if:
-        ctrl_dir = _find_ctrl_dir(conf_dir, ap_if)
-
-    if conf_dir is None:
-        warnings.append("lnxrouter_conf_dir_not_found")
-    elif conf_best_effort:
-        warnings.append("conf_dir_best_effort")
-
-    if ap_if is None:
-        warnings.append("no_ap_interface_detected")
-    elif ctrl_dir is None:
-        warnings.append("hostapd_ctrl_socket_missing")
-
-    if ap_if and iw_ap_ifaces and ap_if not in iw_ap_ifaces:
-        warnings.append("iw_ap_interface_mismatch")
 
     # Enrich any clients we have with IP/hostname from neigh/leases
     by_mac: Dict[str, Client] = {c.mac.lower(): c for c in clients if _is_mac(c.mac)}
