@@ -3,7 +3,7 @@
 ## Reporting a Vulnerability
 Please report security issues privately via email:
 
-security@example.com
+josethevrtech@gmail.com
 
 Do not open public issues for security reports. If you believe credentials are exposed, rotate them immediately and include the rotation details in your report.
 
