@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -532,6 +533,13 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
     rc, stdout, stderr = _run(["iw", "dev", ap_if, "station", "dump"], timeout_s=1.2)
     if rc != 0:
         return None, f"iw_station_dump_failed(rc={rc}):{stderr[:120]}"
+    if not stdout.strip():
+        time.sleep(0.2)
+        rc, stdout, stderr = _run(["iw", "dev", ap_if, "station", "dump"], timeout_s=1.2)
+        if rc != 0:
+            return None, f"iw_station_dump_failed(rc={rc}):{stderr[:120]}"
+        if not stdout.strip():
+            return [], ""
 
     clients: List[Client] = []
     # Blocks start with: Station <MAC> (on <ifname>)
@@ -595,14 +603,14 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
             m = re.search(r"(\d+)\s*ms", s)
             if m:
                 cur["inactive_ms"] = int(m.group(1))
-        elif s.startswith("signal:"):
-            m = re.search(r"(-?\d+)\s*dbm", s)
-            if m:
-                cur["signal_dbm"] = int(m.group(1))
         elif s.startswith("signal avg:"):
-            m = re.search(r"(-?\d+)\s*dbm", s)
+            m = re.match(r"^signal avg:\s*(-?\d+)", s)
             if m:
                 cur["signal_avg_dbm"] = int(m.group(1))
+        elif s.startswith("signal:"):
+            m = re.match(r"^signal:\s*(-?\d+)", s)
+            if m:
+                cur["signal_dbm"] = int(m.group(1))
         elif s.startswith("tx bitrate:"):
             m = re.search(r"([\d.]+)\s*mbit/s", s)
             if m:
@@ -740,21 +748,26 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     if iw_clients is not None:
         primary = "iw"
         clients = iw_clients
+        if len(iw_clients) == 0:
+            warnings.append("no_connected_stations")
+
+    attempt_hostapd_cli = iw_clients is None or (iw_clients is not None and len(iw_clients) > 0)
+    allow_hostapd_results = iw_clients is None
 
     # Secondary attempt: hostapd_cli list_sta, only if socket exists and ping succeeds.
     hostapd_cli_unreliable = False
-    if ctrl_dir:
+    if ctrl_dir and attempt_hostapd_cli:
         ping_ok, _ping_warn = _hostapd_cli_ping(str(ctrl_dir), ap_if)
         if not ping_ok:
             hostapd_cli_unreliable = True
             _warn_hostapd_cli_unreliable(warnings)
 
-    if ctrl_dir and not hostapd_cli_unreliable:
+    if ctrl_dir and attempt_hostapd_cli and not hostapd_cli_unreliable:
         macs, warn = _hostapd_cli_list_stas(str(ctrl_dir), ap_if)
         if warn:
             hostapd_cli_unreliable = True
             _warn_hostapd_cli_unreliable(warnings)
-        if macs is not None and primary is None and not hostapd_cli_unreliable:
+        if macs is not None and allow_hostapd_results and not hostapd_cli_unreliable:
             primary = "hostapd_cli"
             for mac in macs:
                 ip = mac_to_ip.get(mac) or (leases.get(mac)[0] if mac in leases else None)

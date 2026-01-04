@@ -27,8 +27,8 @@ def test_iw_station_dump_parsing(monkeypatch):
                 0,
                 "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n"
                 "\tinactive time:\t40 ms\n"
-                "\tsignal:\t\t-44 dBm\n"
-                "\tsignal avg:\t-45 dBm\n"
+                "\tsignal:\t\t-65 [-66, -69] dBm\n"
+                "\tsignal avg:\t-64 [-65, -68] dBm\n"
                 "\tauthorized:\tyes\n"
                 "\tauthenticated:\tyes\n"
                 "\tassociated:\tyes\n"
@@ -46,8 +46,8 @@ def test_iw_station_dump_parsing(monkeypatch):
     assert warn == ""
     assert parsed is not None
     assert parsed[0].mac == "76:d4:ff:3c:12:8d"
-    assert parsed[0].signal_dbm == -44
-    assert parsed[0].signal_avg_dbm == -45
+    assert parsed[0].signal_dbm == -65
+    assert parsed[0].signal_avg_dbm == -64
     assert parsed[0].authorized is True
     assert parsed[0].authenticated is True
     assert parsed[0].associated is True
@@ -227,6 +227,84 @@ def test_snapshot_no_active_ap_interface(monkeypatch):
     assert "no_active_ap_interface" in snap["warnings"]
     assert calls == [["iw", "dev"]]
 
+
+def test_station_dump_empty_then_non_empty(tmp_path: Path, monkeypatch):
+    root = tmp_path / "lnxrouter_tmp"
+    root.mkdir()
+    conf = root / "lnxrouter.wlan1.conf.ABCD"
+    conf.mkdir()
+    (conf / "hostapd.conf").write_text("interface=x0wlan1\n")
+    (conf / "hostapd.pid").write_text(str(os.getpid()))
+
+    monkeypatch.setattr(clients, "LNXROUTER_TMP", root)
+    monkeypatch.setattr(clients, "load_config", lambda: {"ssid": "VRHotspot"})
+    monkeypatch.setattr(clients, "_find_ctrl_dir", lambda *_args, **_kwargs: None)
+
+    calls = {"station": 0}
+
+    def fake_run(cmd: List[str], timeout_s: float):
+        if cmd == ["iw", "dev"]:
+            return (
+                0,
+                "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot\n\t\ttype AP\n",
+                "",
+            )
+        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+            calls["station"] += 1
+            if calls["station"] == 1:
+                return 0, "", ""
+            return (
+                0,
+                "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n\tsignal:\t-50 dBm\n",
+                "",
+            )
+        if cmd[:3] == ["ip", "neigh", "show"]:
+            return (0, "192.168.120.217 lladdr 76:d4:ff:3c:12:8d REACHABLE\n", "")
+        return 127, "", "nope"
+
+    monkeypatch.setattr(clients, "_run", fake_run)
+
+    snap = clients.get_clients_snapshot("wlan1")
+    assert snap["clients"][0]["mac"] == "76:d4:ff:3c:12:8d"
+    assert snap["clients"][0]["ip"] == "192.168.120.217"
+    assert "no_connected_stations" not in snap["warnings"]
+
+
+def test_station_dump_empty_twice(tmp_path: Path, monkeypatch):
+    root = tmp_path / "lnxrouter_tmp"
+    root.mkdir()
+    conf = root / "lnxrouter.wlan1.conf.ABCD"
+    conf.mkdir()
+    (conf / "hostapd.conf").write_text("interface=x0wlan1\n")
+    (conf / "hostapd.pid").write_text(str(os.getpid()))
+
+    monkeypatch.setattr(clients, "LNXROUTER_TMP", root)
+    monkeypatch.setattr(clients, "load_config", lambda: {"ssid": "VRHotspot"})
+    monkeypatch.setattr(clients, "_find_ctrl_dir", lambda *_args, **_kwargs: Path("/tmp/hostapd"))
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("hostapd_cli should not be called")
+
+    monkeypatch.setattr(clients, "_hostapd_cli_ping", explode)
+
+    def fake_run(cmd: List[str], timeout_s: float):
+        if cmd == ["iw", "dev"]:
+            return (
+                0,
+                "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot\n\t\ttype AP\n",
+                "",
+            )
+        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+            return 0, "", ""
+        if cmd[:3] == ["ip", "neigh", "show"]:
+            return (0, "", "")
+        return 127, "", "nope"
+
+    monkeypatch.setattr(clients, "_run", fake_run)
+
+    snap = clients.get_clients_snapshot("wlan1")
+    assert snap["clients"] == []
+    assert "no_connected_stations" in snap["warnings"]
 
 def test_snapshot_uses_iw_when_hostapd_cli_ping_times_out(tmp_path: Path, monkeypatch):
     root = tmp_path / "lnxrouter_tmp"
