@@ -972,7 +972,7 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self._send_common_headers(content_type, len(raw))
         self.end_headers()
-                try:
+        try:
             self.wfile.write(raw)
         except (BrokenPipeError, ConnectionResetError):
             return
