@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  exec sudo "$0" "$@"
+fi
+
 # Autostart helper: waits for daemon and triggers repair+start if not running.
 # Reads /etc/vr-hotspot/env if present.
 
