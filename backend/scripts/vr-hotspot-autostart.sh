@@ -25,13 +25,15 @@ hdrs+=(-H "X-Correlation-Id: ${CID}")
 log() { echo "$*"; }
 
 log "starting; waiting for API ${BASE}"
-
-for _ in $(seq 1 80); do
-  if curl -fsS "${BASE}/healthz" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.25
-done
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -x "/var/lib/vr-hotspot/app/backend/scripts/wait-healthy.sh" ]]; then
+  "/var/lib/vr-hotspot/app/backend/scripts/wait-healthy.sh"
+elif [[ -x "${SCRIPT_DIR}/wait-healthy.sh" ]]; then
+  "${SCRIPT_DIR}/wait-healthy.sh"
+else
+  echo "wait-healthy.sh not found in /var/lib/vr-hotspot/app/backend/scripts or ${SCRIPT_DIR}" >&2
+  exit 1
+fi
 
 st="$(curl -fsS "${hdrs[@]}" "${BASE}/v1/status" 2>/dev/null || true)"
 running="$(python3 - <<'PY' "${st}"
