@@ -972,7 +972,11 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self._send_common_headers(content_type, len(raw))
         self.end_headers()
-        self.wfile.write(raw)
+                try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
 
     def _respond(self, code: int, payload: dict):
         raw = json.dumps(payload).encode("utf-8")
