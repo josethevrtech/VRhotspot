@@ -100,7 +100,7 @@ def _phy_supports_wifi6(phy: str) -> bool:
     return _supports_wifi6_from_iw(out)
 
 
-_FREQ_LINE_RE = re.compile(r"^\*\s+(\d+)\s+MHz\s+\[(\d+)\].*$")
+_FREQ_LINE_RE = re.compile(r"^\s*\*\s+(\d+(?:\.\d+)?)\s+MHz\s+\[(\d+)\].*$")
 
 
 def _phy_band_support(phy: str) -> Dict[str, bool]:
@@ -141,8 +141,12 @@ def _phy_band_support(phy: str) -> Dict[str, bool]:
         if not m:
             continue
 
-        mhz = int(m.group(1))
-        disabled = "disabled" in s.lower()
+        try:
+            mhz = int(float(m.group(1)))
+        except Exception:
+            continue
+        line_lower = s.lower()
+        disabled = ("disabled" in line_lower) or ("no ir" in line_lower) or ("no-ir" in line_lower)
 
         if disabled:
             continue
