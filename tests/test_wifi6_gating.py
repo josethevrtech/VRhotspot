@@ -69,7 +69,13 @@ def _stubbed_env(monkeypatch, cfg, supports_wifi6):
 
     monkeypatch.setattr(lifecycle, "start_engine", start_engine)
     monkeypatch.setattr(lifecycle, "stop_engine", lambda **_kwargs: (True, 0, [], [], None))
-    monkeypatch.setattr(lifecycle, "_wait_for_ap_ready", lambda *_args, **_kwargs: "ap0")
+    monkeypatch.setattr(
+        lifecycle,
+        "_wait_for_ap_ready",
+        lambda *_args, **_kwargs: lifecycle.APReadyInfo(
+            ifname="ap0", phy="phy0", ssid="Test", freq_mhz=5180, channel=36
+        ),
+    )
 
     return state, calls
 

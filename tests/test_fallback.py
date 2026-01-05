@@ -89,7 +89,11 @@ def test_fallback_chain_6_to_5_to_2_4(monkeypatch):
         "fallback_channel_2g": 6,
         "ap_ready_timeout_s": 0.1,
     }
-    state, calls = _stubbed_env(monkeypatch, cfg, [None, None, "ap0"])
+    state, calls = _stubbed_env(
+        monkeypatch,
+        cfg,
+        [None, None, lifecycle.APReadyInfo(ifname="ap0", phy="phy0", ssid="Test", freq_mhz=2412, channel=1)],
+    )
 
     res = lifecycle._start_hotspot_impl(correlation_id="t1")
 
@@ -108,7 +112,11 @@ def test_fallback_chain_5_to_2_4(monkeypatch):
         "fallback_channel_2g": 6,
         "ap_ready_timeout_s": 0.1,
     }
-    state, calls = _stubbed_env(monkeypatch, cfg, [None, "ap0"])
+    state, calls = _stubbed_env(
+        monkeypatch,
+        cfg,
+        [None, lifecycle.APReadyInfo(ifname="ap0", phy="phy0", ssid="Test", freq_mhz=2412, channel=1)],
+    )
 
     res = lifecycle._start_hotspot_impl(correlation_id="t2")
 

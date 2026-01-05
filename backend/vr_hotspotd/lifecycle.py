@@ -3,9 +3,12 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Set, Dict, Any, List, Tuple
 
 from vr_hotspotd.state import load_state, update_state
@@ -46,6 +49,21 @@ _START_OVERRIDE_KEYS = {
 _VIRT_AP_RE = re.compile(r"^x\d+.+$")
 
 _LNXROUTER_PATH = "/var/lib/vr-hotspot/app/backend/vendor/bin/lnxrouter"
+_LNXROUTER_TMP = Path("/dev/shm/lnxrouter_tmp")
+_HOSTAPD_CTRL_CANDIDATES = (Path("/run/hostapd"), Path("/var/run/hostapd"))
+
+_IW_PHY_RE = re.compile(r"^phy#(\d+)$")
+_IW_CHANNEL_RE = re.compile(r"^channel\s+(\d+)(?:\s+\((\d+(?:\.\d+)?)\s+MHz\))?")
+_IW_FREQ_RE = re.compile(r"^(?:freq|frequency)(?:[:\s]+)(\d+(?:\.\d+)?)\b")
+
+
+@dataclass(frozen=True)
+class APReadyInfo:
+    ifname: str
+    phy: Optional[str]
+    ssid: Optional[str]
+    freq_mhz: Optional[int]
+    channel: Optional[int]
 
 
 def _iw_bin() -> str:
@@ -66,25 +84,156 @@ def _iw_dev_dump() -> str:
     return _run([_iw_bin(), "dev"])
 
 
-def _parse_iw_dev_ap_ifaces(iw_text: str) -> Set[str]:
-    ap_ifaces: Set[str] = set()
-    cur_iface: Optional[str] = None
-    cur_type: Optional[str] = None
+def _parse_iw_dev_ap_info(iw_text: str) -> List[APReadyInfo]:
+    aps: List[APReadyInfo] = []
+    cur_phy: Optional[str] = None
+    cur: Optional[Dict[str, Optional[object]]] = None
+
+    def _finalize_current():
+        nonlocal cur
+        if not cur:
+            return
+        ifname = cur.get("ifname")
+        iface_type = (cur.get("type") or "").upper()
+        if ifname and iface_type.startswith("AP"):
+            aps.append(
+                APReadyInfo(
+                    ifname=str(ifname),
+                    phy=cur.get("phy"),
+                    ssid=cur.get("ssid"),
+                    freq_mhz=cur.get("freq_mhz"),
+                    channel=cur.get("channel"),
+                )
+            )
+        cur = None
 
     for raw in iw_text.splitlines():
         line = raw.strip()
+        if not line:
+            continue
+
+        m_phy = _IW_PHY_RE.match(line)
+        if m_phy:
+            _finalize_current()
+            cur_phy = f"phy{m_phy.group(1)}"
+            continue
+
         if line.startswith("Interface "):
-            if cur_iface and cur_type == "AP":
-                ap_ifaces.add(cur_iface)
-            cur_iface = line.split(" ", 1)[1].strip()
-            cur_type = None
-        elif line.startswith("type "):
-            cur_type = line.split(" ", 1)[1].strip()
+            _finalize_current()
+            parts = line.split()
+            cur = {
+                "ifname": parts[1] if len(parts) > 1 else None,
+                "phy": cur_phy,
+                "type": None,
+                "ssid": None,
+                "freq_mhz": None,
+                "channel": None,
+            }
+            continue
 
-    if cur_iface and cur_type == "AP":
-        ap_ifaces.add(cur_iface)
+        if not cur:
+            continue
 
-    return ap_ifaces
+        if line.startswith("type "):
+            cur["type"] = line.split(" ", 1)[1].strip()
+            continue
+        if line.startswith("ssid "):
+            cur["ssid"] = line.split(" ", 1)[1].strip()
+            continue
+
+        m_channel = _IW_CHANNEL_RE.match(line)
+        if m_channel:
+            try:
+                cur["channel"] = int(m_channel.group(1))
+            except Exception:
+                cur["channel"] = None
+            if cur.get("freq_mhz") is None and m_channel.group(2):
+                try:
+                    cur["freq_mhz"] = int(float(m_channel.group(2)))
+                except Exception:
+                    pass
+            continue
+
+        m_freq = _IW_FREQ_RE.match(line)
+        if m_freq and cur.get("freq_mhz") is None:
+            try:
+                cur["freq_mhz"] = int(float(m_freq.group(1)))
+            except Exception:
+                pass
+
+    _finalize_current()
+    return aps
+
+
+def _parse_iw_dev_ap_ifaces(iw_text: str) -> Set[str]:
+    return {ap.ifname for ap in _parse_iw_dev_ap_info(iw_text) if ap.ifname}
+
+
+def _band_from_freq_mhz(freq_mhz: Optional[int]) -> Optional[str]:
+    if freq_mhz is None:
+        return None
+    if 2400 <= freq_mhz <= 2500:
+        return "2.4ghz"
+    if 4900 <= freq_mhz <= 5900:
+        return "5ghz"
+    if 5925 <= freq_mhz <= 7125:
+        return "6ghz"
+    return None
+
+
+def _vendor_bin() -> Path:
+    here = Path(__file__).resolve()
+    backend_dir = here.parents[1]
+    return backend_dir / "vendor" / "bin"
+
+
+def _hostapd_cli_path() -> Optional[str]:
+    vendor = _vendor_bin() / "hostapd_cli"
+    if vendor.exists() and os.access(vendor, os.X_OK):
+        return str(vendor)
+    bundled = _vendor_bin() / "hostapd"
+    if bundled.exists() and os.access(bundled, os.X_OK):
+        cand = bundled.parent / "hostapd_cli"
+        if cand.exists() and os.access(cand, os.X_OK):
+            return str(cand)
+    return shutil.which("hostapd_cli")
+
+
+def _select_ap_from_iw(
+    iw_text: str,
+    *,
+    target_phy: Optional[str],
+    ssid: Optional[str],
+) -> Optional[APReadyInfo]:
+    aps = _parse_iw_dev_ap_info(iw_text)
+    want_ssid = ssid.strip() if isinstance(ssid, str) and ssid.strip() else None
+
+    def _filter(items: List[APReadyInfo], match_ssid: bool, match_phy: bool) -> List[APReadyInfo]:
+        out: List[APReadyInfo] = []
+        for ap in items:
+            if ap.freq_mhz is None:
+                continue
+            if match_ssid and want_ssid and ap.ssid != want_ssid:
+                continue
+            if match_phy and target_phy and ap.phy != target_phy:
+                continue
+            out.append(ap)
+        return out
+
+    candidates: List[APReadyInfo] = []
+    if want_ssid and target_phy:
+        candidates = _filter(aps, match_ssid=True, match_phy=True)
+    if not candidates and want_ssid:
+        candidates = _filter(aps, match_ssid=True, match_phy=False)
+    if not candidates and target_phy:
+        candidates = _filter(aps, match_ssid=False, match_phy=True)
+    if not candidates and not (want_ssid or target_phy):
+        candidates = _filter(aps, match_ssid=False, match_phy=False)
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda ap: ap.ifname)
+    return candidates[0]
 
 
 def _iface_phy(ifname: str) -> Optional[str]:
@@ -106,20 +255,16 @@ def _wait_for_ap_ready(
     target_phy: Optional[str],
     timeout_s: float = 6.0,
     poll_s: float = 0.25,
-) -> Optional[str]:
+    ssid: Optional[str] = None,
+    adapter_ifname: Optional[str] = None,
+) -> Optional[APReadyInfo]:
     deadline = time.time() + timeout_s
 
     while time.time() < deadline:
         dump = _iw_dev_dump()
-        ap_ifaces = _parse_iw_dev_ap_ifaces(dump)
-
-        if ap_ifaces:
-            if target_phy is None:
-                return sorted(ap_ifaces)[0]
-
-            for ap_if in sorted(ap_ifaces):
-                if _iface_phy(ap_if) == target_phy:
-                    return ap_if
+        ap = _select_ap_from_iw(dump, target_phy=target_phy, ssid=ssid)
+        if ap and _hostapd_ready(ap.ifname, adapter_ifname=adapter_ifname):
+            return ap
 
         time.sleep(poll_s)
 
@@ -169,6 +314,259 @@ def _kill_pid(pid: int, timeout_s: float = 3.0) -> None:
         os.kill(pid, signal.SIGKILL)
     except Exception:
         pass
+
+
+def _read_pid_file(path: Path) -> Optional[int]:
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_text(errors="ignore").strip()
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        return int(raw.split()[0])
+    except Exception:
+        return None
+
+
+def _pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    return os.path.exists(f"/proc/{pid}")
+
+
+def _pid_is_hostapd(pid: int) -> bool:
+    cmdline = _pid_cmdline(pid)
+    return "hostapd" in cmdline.lower()
+
+
+def _pid_is_dnsmasq(pid: int) -> bool:
+    cmdline = _pid_cmdline(pid)
+    return "dnsmasq" in cmdline.lower()
+
+
+def _candidate_conf_dirs(adapter_ifname: Optional[str]) -> List[Path]:
+    if not _LNXROUTER_TMP.exists():
+        return []
+    patterns = [f"lnxrouter.{adapter_ifname}.conf.*"] if adapter_ifname else ["lnxrouter.*.conf.*"]
+    candidates: List[Path] = []
+    for pat in patterns:
+        candidates.extend([p for p in _LNXROUTER_TMP.glob(pat) if p.is_dir()])
+    return candidates
+
+
+def _parse_kv_file(path: Path) -> Dict[str, str]:
+    kv: Dict[str, str] = {}
+    if not path.exists():
+        return kv
+    for line in path.read_text(errors="ignore").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        kv[k.strip()] = v.strip()
+    return kv
+
+
+def _read_subn_iface(conf_dir: Path) -> Optional[str]:
+    path = conf_dir / "subn_iface"
+    if not path.exists():
+        return None
+    raw = path.read_text(errors="ignore").strip()
+    if not raw:
+        return None
+    return raw.splitlines()[0].strip() or None
+
+
+def _read_hostapd_conf_interface(conf_dir: Path) -> Optional[str]:
+    hostapd_conf = conf_dir / "hostapd.conf"
+    kv = _parse_kv_file(hostapd_conf)
+    return kv.get("interface")
+
+
+def _read_dnsmasq_conf_interface(conf_dir: Path) -> Optional[str]:
+    dnsmasq_conf = conf_dir / "dnsmasq.conf"
+    kv = _parse_kv_file(dnsmasq_conf)
+    return kv.get("interface")
+
+
+def _conf_dir_matches_ap(conf_dir: Path, ap_interface: str) -> bool:
+    if _read_hostapd_conf_interface(conf_dir) == ap_interface:
+        return True
+    if _read_dnsmasq_conf_interface(conf_dir) == ap_interface:
+        return True
+    return _read_subn_iface(conf_dir) == ap_interface
+
+
+def _find_latest_conf_dir(adapter_ifname: Optional[str], ap_interface: Optional[str]) -> Optional[Path]:
+    candidates = _candidate_conf_dirs(adapter_ifname)
+    if not candidates:
+        return None
+    if ap_interface:
+        matches = [c for c in candidates if _conf_dir_matches_ap(c, ap_interface)]
+        if matches:
+            matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return matches[0]
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def _ctrl_dir_from_conf(conf_dir: Path) -> Optional[Path]:
+    hostapd_conf = conf_dir / "hostapd.conf"
+    kv = _parse_kv_file(hostapd_conf)
+    ctrl = kv.get("ctrl_interface")
+    if not ctrl:
+        return None
+    return Path(ctrl)
+
+
+def _find_ctrl_dir(conf_dir: Optional[Path], ap_interface: str) -> Optional[Path]:
+    candidates: List[Path] = []
+    if conf_dir:
+        ctrl_dir = _ctrl_dir_from_conf(conf_dir)
+        if ctrl_dir:
+            candidates.append(ctrl_dir)
+    candidates.extend([p for p in _HOSTAPD_CTRL_CANDIDATES])
+    for cand in candidates:
+        if (cand / ap_interface).exists():
+            return cand
+    return None
+
+
+def _hostapd_cli_ping(ctrl_dir: Path, ap_interface: str) -> bool:
+    binpath = _hostapd_cli_path()
+    if not binpath:
+        return False
+    try:
+        p = subprocess.run(
+            [binpath, "-p", str(ctrl_dir), "-i", ap_interface, "ping"],
+            capture_output=True,
+            text=True,
+            timeout=0.8,
+        )
+    except Exception:
+        return False
+    if p.returncode != 0:
+        return False
+    return "PONG" in (p.stdout or "")
+
+
+def _hostapd_pid_running(conf_dir: Path) -> bool:
+    pid = _read_pid_file(conf_dir / "hostapd.pid")
+    if pid is None or not _pid_running(pid):
+        return False
+    return _pid_is_hostapd(pid)
+
+
+def _dnsmasq_pid_running(conf_dir: Path) -> bool:
+    pid = _read_pid_file(conf_dir / "dnsmasq.pid")
+    if pid is None or not _pid_running(pid):
+        return False
+    return _pid_is_dnsmasq(pid)
+
+
+def _hostapd_ready(ap_interface: str, *, adapter_ifname: Optional[str]) -> bool:
+    conf_dir = _find_latest_conf_dir(adapter_ifname, ap_interface)
+    if conf_dir and _hostapd_pid_running(conf_dir):
+        return True
+    ctrl_dir = _find_ctrl_dir(conf_dir, ap_interface)
+    if ctrl_dir and _hostapd_cli_ping(ctrl_dir, ap_interface):
+        return True
+    return False
+
+
+def _read_log_tail(path: Path, max_lines: int = 200) -> List[str]:
+    if not path.exists():
+        return []
+    try:
+        mode = path.stat().st_mode
+    except Exception:
+        return []
+    data = ""
+    try:
+        if stat.S_ISFIFO(mode):
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                raw = os.read(fd, 65536)
+            finally:
+                os.close(fd)
+            data = raw.decode("utf-8", "ignore") if raw else ""
+        else:
+            data = path.read_text(errors="ignore")
+    except Exception:
+        return []
+    if not data:
+        return []
+    lines = data.splitlines()
+    return lines[-max_lines:]
+
+
+def _collect_ap_logs(adapter_ifname: Optional[str], ap_interface: Optional[str]) -> List[str]:
+    conf_dir = _find_latest_conf_dir(adapter_ifname, ap_interface)
+    if not conf_dir:
+        return []
+    logs: List[str] = []
+    log_paths = [
+        ("hostapd", conf_dir / "hostapd.log"),
+        ("dnsmasq", conf_dir / "dnsmasq.log"),
+    ]
+    for label, path in log_paths:
+        for line in _read_log_tail(path, max_lines=200):
+            logs.append(f"[{label}] {line}")
+    return logs[-200:]
+
+
+def _find_hostapd_pids(adapter_ifname: Optional[str]) -> List[int]:
+    pids: List[int] = []
+    for conf_dir in _candidate_conf_dirs(adapter_ifname):
+        pid = _read_pid_file(conf_dir / "hostapd.pid")
+        if pid and _pid_running(pid) and _pid_is_hostapd(pid):
+            pids.append(pid)
+    return sorted(set(pids))
+
+
+def _find_dnsmasq_pids(adapter_ifname: Optional[str]) -> List[int]:
+    pids: List[int] = []
+    for conf_dir in _candidate_conf_dirs(adapter_ifname):
+        pid = _read_pid_file(conf_dir / "dnsmasq.pid")
+        if pid and _pid_running(pid) and _pid_is_dnsmasq(pid):
+            pids.append(pid)
+    return sorted(set(pids))
+
+
+def _remove_conf_dirs(adapter_ifname: Optional[str]) -> List[str]:
+    removed: List[str] = []
+    for conf_dir in _candidate_conf_dirs(adapter_ifname):
+        try:
+            shutil.rmtree(conf_dir, ignore_errors=True)
+            removed.append(conf_dir.name)
+        except Exception:
+            pass
+    return removed
+
+
+def _kill_runtime_processes(
+    adapter_ifname: Optional[str],
+    *,
+    firewalld_cfg: Optional[Dict[str, object]] = None,
+    stop_engine_first: bool = True,
+) -> None:
+    if stop_engine_first:
+        try:
+            stop_engine(firewalld_cfg=firewalld_cfg)
+        except Exception:
+            pass
+
+    for pid in _find_our_lnxrouter_pids():
+        _kill_pid(pid)
+
+    for pid in _find_hostapd_pids(adapter_ifname):
+        _kill_pid(pid)
+
+    for pid in _find_dnsmasq_pids(adapter_ifname):
+        _kill_pid(pid)
 
 
 def _cleanup_virtual_ap_ifaces(target_phy: Optional[str] = None) -> List[str]:
@@ -293,19 +691,7 @@ def _repair_impl(correlation_id: str = "repair"):
 
     st = load_state()
     removed_ifaces: List[str] = []
-
-    try:
-        stop_engine(firewalld_cfg=fw_cfg)
-    except Exception:
-        pass
-
-    pid = st.get("engine", {}).get("pid")
-    if pid and isinstance(pid, int) and pid > 1 and _pid_is_our_lnxrouter(pid):
-        _kill_pid(pid)
-
-    for p in _find_our_lnxrouter_pids():
-        if p != pid:
-            _kill_pid(p)
+    removed_conf_dirs: List[str] = []
 
     try:
         inv = get_adapters()
@@ -316,7 +702,11 @@ def _repair_impl(correlation_id: str = "repair"):
             ap_ifname = inv.get("recommended") or _select_ap_adapter(inv, cfg.get("band_preference", "5ghz"))
         target_phy = _get_adapter_phy(inv, ap_ifname)
     except Exception:
+        ap_ifname = None
         target_phy = None
+
+    _kill_runtime_processes(ap_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
+    removed_conf_dirs = _remove_conf_dirs(ap_ifname)
 
     try:
         removed_ifaces = _cleanup_virtual_ap_ifaces(target_phy=target_phy)
@@ -326,10 +716,13 @@ def _repair_impl(correlation_id: str = "repair"):
     warnings: List[str] = []
     if removed_ifaces:
         warnings.append("repair_removed_virtual_ap_ifaces:" + ",".join(removed_ifaces))
+    if removed_conf_dirs:
+        warnings.append("repair_removed_lnxrouter_conf_dirs:" + ",".join(removed_conf_dirs))
 
     st = update_state(
         running=False,
         phase="stopped",
+        ap_interface=None,
         last_error=None,
         last_op="repair",
         last_correlation_id=correlation_id,
@@ -342,6 +735,7 @@ def _repair_impl(correlation_id: str = "repair"):
             "last_error": None,
             "stdout_tail": [],
             "stderr_tail": [],
+            "ap_logs_tail": [],
         },
     )
     return st
@@ -368,6 +762,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         mode=None,
         fallback_reason=None,
         warnings=[],
+        ap_interface=None,
+        engine={"ap_logs_tail": []},
     )
 
     cfg = load_config()
@@ -398,14 +794,18 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         state = update_state(
             phase="error",
             running=False,
+            ap_interface=None,
             last_error=err,
             last_correlation_id=correlation_id,
-            engine={"last_error": err},
+            engine={"last_error": err, "ap_logs_tail": []},
         )
         return LifecycleResult("start_failed", state)
 
     try:
         inv = get_adapters()
+        inv_error = inv.get("error")
+        if inv_error and not inv.get("adapters"):
+            raise RuntimeError(inv_error)
 
         preferred = cfg.get("ap_adapter")
         if preferred and isinstance(preferred, str) and preferred.strip():
@@ -426,6 +826,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         state = update_state(
             phase="error",
             running=False,
+            ap_interface=None,
             last_error=str(e),
             last_correlation_id=correlation_id,
             engine={
@@ -436,6 +837,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 "last_error": str(e),
                 "stdout_tail": [],
                 "stderr_tail": [],
+                "ap_logs_tail": [],
             },
         )
         return LifecycleResult("start_failed", state)
@@ -481,9 +883,10 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             phase="error",
             running=False,
             adapter=ap_ifname,
+            ap_interface=None,
             last_error=err,
             last_correlation_id=correlation_id,
-            engine={"last_error": err},
+            engine={"last_error": err, "ap_logs_tail": []},
         )
         return LifecycleResult("start_failed", state)
 
@@ -529,6 +932,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             "last_error": res.error,
             "stdout_tail": res.stdout_tail,
             "stderr_tail": res.stderr_tail,
+            "ap_logs_tail": [],
         },
     )
 
@@ -536,28 +940,40 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         state = update_state(
             phase="error",
             running=False,
+            ap_interface=None,
             last_error=res.error or "engine_start_failed",
             last_correlation_id=correlation_id,
         )
         return LifecycleResult("start_failed", state)
 
-    ap_iface = _wait_for_ap_ready(target_phy, ap_ready_timeout_s)
-    if ap_iface:
+    ap_info = _wait_for_ap_ready(target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname)
+    if ap_info:
+        detected_band = _band_from_freq_mhz(ap_info.freq_mhz)
         state = update_state(
             phase="running",
             running=True,
-            band=bp,
+            ap_interface=ap_info.ifname,
+            band=detected_band,
             mode="optimized",
             fallback_reason=None,
             warnings=start_warnings,
             last_error=None,
             last_correlation_id=correlation_id,
-            engine={"last_error": None, "last_exit_code": None},
+            engine={"last_error": None, "last_exit_code": None, "ap_logs_tail": []},
         )
         return LifecycleResult("started", state)
 
     # If requested band failed to become ready, fallback (6 -> 5 -> 2.4).
-    stop_engine(firewalld_cfg=fw_cfg)
+    ap_candidate = None
+    try:
+        ap_candidate = _select_ap_from_iw(_iw_dev_dump(), target_phy=target_phy, ssid=ssid)
+    except Exception:
+        ap_candidate = None
+    ap_logs = _collect_ap_logs(ap_ifname, ap_candidate.ifname if ap_candidate else None)
+    if ap_logs:
+        update_state(engine={"ap_logs_tail": ap_logs})
+    _kill_runtime_processes(ap_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
+    _remove_conf_dirs(ap_ifname)
 
     warnings: List[str] = list(start_warnings)
     warnings.append("optimized_ap_start_timed_out")
@@ -566,16 +982,17 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     if bp == "6ghz":
         fallback_chain = [
             ("5ghz", None, optimized_no_virt, "fallback_to_5ghz"),
-            ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), True, "fallback_to_2_4ghz"),
+            ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), optimized_no_virt, "fallback_to_2_4ghz"),
         ]
     elif bp == "5ghz":
         fallback_chain = [
-            ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), True, "fallback_to_2_4ghz"),
+            ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), optimized_no_virt, "fallback_to_2_4ghz"),
         ]
     else:
         state = update_state(
             phase="error",
             running=False,
+            ap_interface=None,
             last_error="ap_ready_timeout",
             last_correlation_id=correlation_id,
             fallback_reason=None,
@@ -608,6 +1025,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 "last_error": res_fallback.error,
                 "stdout_tail": res_fallback.stdout_tail,
                 "stderr_tail": res_fallback.stderr_tail,
+                "ap_logs_tail": [],
             },
         )
 
@@ -615,6 +1033,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             state = update_state(
                 phase="error",
                 running=False,
+                ap_interface=None,
                 last_error=res_fallback.error or "engine_start_failed_fallback",
                 last_correlation_id=correlation_id,
                 fallback_reason="ap_ready_timeout",
@@ -622,26 +1041,40 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             )
             return LifecycleResult("start_failed", state)
 
-        ap_iface_fallback = _wait_for_ap_ready(target_phy, ap_ready_timeout_s)
-        if ap_iface_fallback:
+        ap_info_fallback = _wait_for_ap_ready(
+            target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname
+        )
+        if ap_info_fallback:
+            detected_band = _band_from_freq_mhz(ap_info_fallback.freq_mhz)
             state = update_state(
                 phase="running",
                 running=True,
-                band=band,
+                ap_interface=ap_info_fallback.ifname,
+                band=detected_band,
                 mode="fallback",
                 fallback_reason="ap_ready_timeout",
                 warnings=warnings,
                 last_error=None,
                 last_correlation_id=correlation_id,
-                engine={"last_error": None, "last_exit_code": None},
+                engine={"last_error": None, "last_exit_code": None, "ap_logs_tail": []},
             )
             return LifecycleResult("started_with_fallback", state)
 
-        stop_engine(firewalld_cfg=fw_cfg)
+        ap_candidate = None
+        try:
+            ap_candidate = _select_ap_from_iw(_iw_dev_dump(), target_phy=target_phy, ssid=ssid)
+        except Exception:
+            ap_candidate = None
+        ap_logs = _collect_ap_logs(ap_ifname, ap_candidate.ifname if ap_candidate else None)
+        if ap_logs:
+            update_state(engine={"ap_logs_tail": ap_logs})
+        _kill_runtime_processes(ap_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
+        _remove_conf_dirs(ap_ifname)
 
     state = update_state(
         phase="error",
         running=False,
+        ap_interface=None,
         last_error="ap_ready_timeout_after_fallback",
         last_correlation_id=correlation_id,
         fallback_reason="ap_ready_timeout",
@@ -663,6 +1096,7 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
 
     cfg = load_config()
     fw_cfg = _build_firewalld_cfg(cfg)
+    adapter_ifname = state.get("adapter") if isinstance(state, dict) else None
 
     state = update_state(
         phase="stopping",
@@ -673,6 +1107,9 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
 
     ok, rc, out_tail, err_tail, err = stop_engine(firewalld_cfg=fw_cfg)
 
+    _kill_runtime_processes(adapter_ifname, firewalld_cfg=fw_cfg, stop_engine_first=False)
+    removed_conf_dirs = _remove_conf_dirs(adapter_ifname)
+
     removed_ifaces: List[str] = []
     try:
         removed_ifaces = _cleanup_virtual_ap_ifaces(target_phy=None)
@@ -682,6 +1119,8 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
     warnings: List[str] = []
     if removed_ifaces:
         warnings.append("stop_removed_virtual_ap_ifaces:" + ",".join(removed_ifaces))
+    if removed_conf_dirs:
+        warnings.append("stop_removed_lnxrouter_conf_dirs:" + ",".join(removed_conf_dirs))
 
     state = update_state(
         engine={
@@ -692,6 +1131,7 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
             "last_error": err,
             "stdout_tail": out_tail,
             "stderr_tail": err_tail,
+            "ap_logs_tail": [],
         }
     )
 
@@ -699,6 +1139,7 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
         phase="stopped",
         running=False,
         adapter=None,
+        ap_interface=None,
         band=None,
         mode=None,
         fallback_reason=None,

@@ -1271,6 +1271,8 @@ class APIHandler(BaseHTTPRequestHandler):
             else:
                 eng["stdout_tail"] = []
                 eng["stderr_tail"] = []
+            if "ap_logs_tail" in eng:
+                eng["ap_logs_tail"] = self._redact_lines(eng.get("ap_logs_tail"), secrets)
         return out
 
     def _config_view(self, *, include_secrets: bool) -> Dict[str, Any]:

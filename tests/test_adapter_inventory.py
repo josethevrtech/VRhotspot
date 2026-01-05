@@ -41,6 +41,39 @@ Wiphy phy0
     assert inventory._supports_wifi6_from_iw(iw_out) is False
 
 
+def test_phy_supports_ap_detects_ap(monkeypatch):
+    iw_out = """
+Wiphy phy0
+  Supported interface modes:
+    * managed
+    * AP
+    * monitor
+"""
+    monkeypatch.setattr(inventory, "_run_iw", lambda _args: iw_out)
+    assert inventory._phy_supports_ap("phy0") is True
+
+
+def test_phy_supports_ap_detects_ap_vlan(monkeypatch):
+    iw_out = """
+Wiphy phy0
+  Supported interface modes:
+    * AP/VLAN
+"""
+    monkeypatch.setattr(inventory, "_run_iw", lambda _args: iw_out)
+    assert inventory._phy_supports_ap("phy0") is True
+
+
+def test_phy_supports_ap_false_when_missing(monkeypatch):
+    iw_out = """
+Wiphy phy0
+  Supported interface modes:
+    * managed
+    * monitor
+"""
+    monkeypatch.setattr(inventory, "_run_iw", lambda _args: iw_out)
+    assert inventory._phy_supports_ap("phy0") is False
+
+
 def test_band_support_parses_decimal_2ghz(monkeypatch):
     iw_out = """
 Wiphy phy0
@@ -49,7 +82,7 @@ Wiphy phy0
       * 2412.0 MHz [1] (22.0 dBm)
       * 2437.0 MHz [6] (disabled)
 """
-    monkeypatch.setattr(inventory, "_run", lambda _cmd: iw_out)
+    monkeypatch.setattr(inventory, "_run_iw", lambda _args: iw_out)
     caps = inventory._phy_band_support("phy0")
     assert caps["supports_2ghz"] is True
     assert caps["supports_5ghz"] is False
@@ -64,7 +97,7 @@ Wiphy phy0
       * 5180.0 MHz [36] (23.0 dBm)
       * 5200.0 MHz [40] (disabled)
 """
-    monkeypatch.setattr(inventory, "_run", lambda _cmd: iw_out)
+    monkeypatch.setattr(inventory, "_run_iw", lambda _args: iw_out)
     caps = inventory._phy_band_support("phy0")
     assert caps["supports_2ghz"] is False
     assert caps["supports_5ghz"] is True
@@ -79,7 +112,7 @@ Wiphy phy0
       * 5955.0 MHz [1] (disabled)
       * 5975.0 MHz [5] (23.0 dBm)
 """
-    monkeypatch.setattr(inventory, "_run", lambda _cmd: iw_out)
+    monkeypatch.setattr(inventory, "_run_iw", lambda _args: iw_out)
     caps = inventory._phy_band_support("phy0")
     assert caps["supports_2ghz"] is False
     assert caps["supports_5ghz"] is False
@@ -94,7 +127,7 @@ Wiphy phy0
       * 2412.0 MHz [1] (no IR)
       * 2437.0 MHz [6] (no-IR)
 """
-    monkeypatch.setattr(inventory, "_run", lambda _cmd: iw_out)
+    monkeypatch.setattr(inventory, "_run_iw", lambda _args: iw_out)
     caps = inventory._phy_band_support("phy0")
     assert caps["supports_2ghz"] is False
     assert caps["supports_5ghz"] is False
@@ -111,7 +144,7 @@ Wiphy phy0
     Frequencies:
       * 5180.0 MHz [36] (23.0 dBm)
 """
-    monkeypatch.setattr(inventory, "_run", lambda _cmd: iw_out)
+    monkeypatch.setattr(inventory, "_run_iw", lambda _args: iw_out)
     caps = inventory._phy_band_support("phy0")
     assert caps["supports_2ghz"] is True
     assert caps["supports_5ghz"] is True

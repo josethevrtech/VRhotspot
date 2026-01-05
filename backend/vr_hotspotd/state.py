@@ -19,6 +19,7 @@ DEFAULT_STATE: Dict[str, Any] = {
     "running": False,
     "phase": "stopped",          # stopped | starting | running | stopping | error
     "adapter": None,
+    "ap_interface": None,
     "band": None,
 
     "mode": None,                # optimized | fallback
@@ -33,6 +34,7 @@ DEFAULT_STATE: Dict[str, Any] = {
         "last_error": None,
         "stdout_tail": [],
         "stderr_tail": [],
+        "ap_logs_tail": [],
     },
 
     "last_error": None,
