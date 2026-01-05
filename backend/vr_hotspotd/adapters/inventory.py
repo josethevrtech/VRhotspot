@@ -54,18 +54,50 @@ def _phy_supports_ap(phy: str) -> bool:
     return False
 
 
+_HE_IFTYPES_RE = re.compile(r"^\s*HE Iftypes:\s*(.+)$", re.IGNORECASE)
+
+
+def _he_iftypes_has_ap(iw_text: str) -> Optional[bool]:
+    """
+    Return True if HE Iftypes explicitly includes AP/AP-VLAN.
+    Return False if HE Iftypes exists but does not include AP.
+    Return None if HE Iftypes is not present in the output.
+    """
+    seen = False
+    for raw in iw_text.splitlines():
+        m = _HE_IFTYPES_RE.search(raw)
+        if not m:
+            continue
+        seen = True
+        for token in m.group(1).split(","):
+            t = token.strip().upper()
+            if t in ("AP", "AP/VLAN", "AP-VLAN"):
+                return True
+    return False if seen else None
+
+
+def _supports_wifi6_from_iw(iw_text: str) -> bool:
+    he_ap = _he_iftypes_has_ap(iw_text)
+    if he_ap is True:
+        return True
+    if he_ap is False:
+        return False
+
+    s = iw_text.lower()
+    return ("802.11ax" in s) or ("he capabilities" in s)
+
+
 @lru_cache(maxsize=64)
 def _phy_supports_wifi6(phy: str) -> bool:
     """
-    Parse `iw phy <phy> info` and look for HE (802.11ax) support markers.
+    Parse `iw phy <phy> info` and look for HE (802.11ax) AP support markers.
     """
     try:
         out = _run(["iw", "phy", phy, "info"])
     except Exception:
         return False
 
-    s = out.lower()
-    return ("he iftypes" in s) or ("802.11ax" in s)
+    return _supports_wifi6_from_iw(out)
 
 
 _FREQ_LINE_RE = re.compile(r"^\*\s+(\d+)\s+MHz\s+\[(\d+)\].*$")

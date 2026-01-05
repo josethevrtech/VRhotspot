@@ -21,3 +21,6 @@ run/vr-hotspot/
 config.json
 state.json
 .venv/
+
+# VR Hotspot: hostapd debug artifacts (do not commit)
+backend/vendor/bin/*.debug
