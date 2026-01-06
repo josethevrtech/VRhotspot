@@ -11,6 +11,7 @@ Type=simple
 WorkingDirectory=/var/lib/vr-hotspot/app/backend
 Environment=PYTHONPATH=/var/lib/vr-hotspot/app/backend
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/var/lib/vr-hotspot/app/backend/vendor/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Bind host/port + optional token live here:
 EnvironmentFile=-/etc/vr-hotspot/env

@@ -61,6 +61,34 @@ if [[ "${running}" == "true" ]]; then
   exit 0
 fi
 
+cfg="$(curl -fsS "${hdrs[@]}" "${BASE}/v1/config" 2>/dev/null || true)"
+ap_adapter="$(python3 - <<'PY' "${cfg}"
+import json
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    payload = json.loads(raw) if raw else {}
+    data = payload.get("data") or {}
+    print((data.get("ap_adapter") or "").strip())
+except Exception:
+    print("")
+PY
+)"
+
+if [[ -n "${ap_adapter}" ]]; then
+  wait_s="${VR_HOTSPOT_AUTOSTART_WAIT_S:-30}"
+  log "waiting for adapter ${ap_adapter} (up to ${wait_s}s)"
+  waited=0
+  while [[ ! -e "/sys/class/net/${ap_adapter}" && "${waited}" -lt "${wait_s}" ]]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if [[ ! -e "/sys/class/net/${ap_adapter}" ]]; then
+    log "adapter ${ap_adapter} not present after ${wait_s}s; continuing"
+  fi
+fi
+
 log "calling /v1/repair"
 curl -fsS -X POST "${hdrs[@]}" "${BASE}/v1/repair" >/dev/null 2>&1 || true
 
