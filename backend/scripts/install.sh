@@ -9,7 +9,7 @@ Usage:
   sudo bash backend/scripts/install.sh [options]
 
 Options:
-  --bind <host>             Bind host for daemon (default: 127.0.0.1)
+  --bind <host>             Bind host for daemon (default: 127.0.0.1; use 0.0.0.0 for LAN/AP access)
   --port <port>             Bind port for daemon (default: 8732)
   --install-dir <path>      Install backend into this directory (default: /var/lib/vr-hotspot/app/backend)
   --enable-autostart        Enable autostart oneshot service (recommended)
@@ -82,6 +82,15 @@ fi
 TOKEN_TO_WRITE="$API_TOKEN"
 if [[ -z "$TOKEN_TO_WRITE" && -n "$EXISTING_TOKEN" ]]; then
   TOKEN_TO_WRITE="$EXISTING_TOKEN"
+fi
+GENERATED_TOKEN="0"
+if [[ -z "$TOKEN_TO_WRITE" ]]; then
+  TOKEN_TO_WRITE="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+)"
+  GENERATED_TOKEN="1"
 fi
 
 log "Writing $ENV_FILE"
@@ -173,5 +182,21 @@ if [[ "$ENABLE_AUTOSTART" == "1" ]]; then
 fi
 
 log "Install complete."
-log "UI: http://$BIND:$PORT/ui"
+ui_host="$BIND"
+if [[ "$ui_host" == "0.0.0.0" || "$ui_host" == "::" ]]; then
+  ui_host="<host-ip>"
+fi
+log "Bind host: $BIND"
+log "UI: http://$ui_host:$PORT/ui"
+if [[ "$BIND" == "127.0.0.1" || "$BIND" == "::1" ]]; then
+  log "Local-only UI; re-run with --bind 0.0.0.0 to access from other devices."
+fi
 log "Status: curl -fsS -H 'X-Api-Token: <token>' http://127.0.0.1:$PORT/v1/status | head"
+if [[ -n "$TOKEN_TO_WRITE" ]]; then
+  if [[ "$GENERATED_TOKEN" == "1" ]]; then
+    log "Generated API token: $TOKEN_TO_WRITE"
+  else
+    log "API token: $TOKEN_TO_WRITE"
+  fi
+  log "Token is stored in $ENV_FILE (VR_HOTSPOTD_API_TOKEN)"
+fi
