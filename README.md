@@ -6,6 +6,11 @@ It’s ideal for users who travel with a MiniPC or “headless” computer puck 
 
 Built around **lnxrouter + hostapd + dnsmasq**, it supports **bundled binaries** (consistent installs across distros) and integrates with **firewalld** on platforms like SteamOS where firewalld owns nftables.
 
+## Supported WIFI Adapters
+-  (RECOMMENDED) BrosTrend AXE3000 Tri-Band Linux https://www.amazon.com/dp/B0F6MY7H62
+-  EDUP EP-AX1672 https://www.amazon.com/EDUP-Wireless-802-11AX-Tri-Band-Compatible/dp/B0CVVWNSH2
+-  Panda Wireless® PAU0F AXE3000 Tri Band https://www.amazon.com/Panda-Wireless%C2%AE-PAU0F-AXE3000-Adapter/dp/B0D972VY9B?th=1
+
 ---
 
 ## What it does
