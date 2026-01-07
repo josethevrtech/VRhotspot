@@ -11,6 +11,9 @@ Built around **lnxrouter + hostapd + dnsmasq**, it supports **bundled binaries**
 -  EDUP EP-AX1672 https://www.amazon.com/EDUP-Wireless-802-11AX-Tri-Band-Compatible/dp/B0CVVWNSH2
 -  Panda Wireless® PAU0F AXE3000 Tri Band https://www.amazon.com/Panda-Wireless%C2%AE-PAU0F-AXE3000-Adapter/dp/B0D972VY9B?th=1
 
+## Untested WIFI Adapters that *should* work
+- https://github.com/morrownr/USB-WiFi/blob/main/home/USB_WiFi_Adapters_that_are_supported_with_Linux_in-kernel_drivers.md#axe3000---usb30---24-ghz-5-ghz-and-6-ghz-wifi-6e
+  
 ---
 
 ## What it does
