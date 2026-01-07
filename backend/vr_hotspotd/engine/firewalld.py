@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from typing import Tuple
 
@@ -8,8 +9,11 @@ def _run(args: list[str]) -> Tuple[bool, str]:
     Never raises.
     """
     try:
+        cmd = shutil.which("firewall-cmd")
+        if not cmd:
+            return False, "firewall-cmd not found"
         p = subprocess.run(
-            ["/usr/bin/firewall-cmd", *args],
+            [cmd, *args],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from vr_hotspotd.config import load_config
+from vr_hotspotd.engine import lnxrouter_conf
 
 
-LNXROUTER_TMP = Path("/dev/shm/lnxrouter_tmp")
+LNXROUTER_TMP = lnxrouter_conf.DEFAULT_LNXROUTER_TMP
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,6 @@ _KNOWN_NEIGH_STATES = {
     "NOARP",
     "PERMANENT",
 }
-_CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
 
 
 def _is_mac(s: str) -> bool:
@@ -189,26 +189,11 @@ def _derive_adapter_from_ap(ap_interface: Optional[str]) -> Optional[str]:
 
 
 def _candidate_conf_dirs(adapter_ifname: Optional[str]) -> List[Path]:
-    if not LNXROUTER_TMP.exists():
-        return []
-
-    if adapter_ifname:
-        pats = [f"lnxrouter.{adapter_ifname}.conf.*"]
-    else:
-        pats = ["lnxrouter.*.conf.*"]
-
-    candidates: List[Path] = []
-    for pat in pats:
-        candidates.extend([p for p in LNXROUTER_TMP.glob(pat) if p.is_dir()])
-    return candidates
+    return lnxrouter_conf.candidate_conf_dirs(adapter_ifname, tmp_dir=LNXROUTER_TMP)
 
 
 def _find_latest_conf_dir(adapter_ifname: Optional[str]) -> Optional[Path]:
-    candidates = _candidate_conf_dirs(adapter_ifname)
-    if not candidates:
-        return None
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
+    return lnxrouter_conf.find_latest_conf_dir(adapter_ifname, tmp_dir=LNXROUTER_TMP)
 
 
 def _select_conf_dir(
@@ -235,129 +220,31 @@ def _select_conf_dir(
     return matches[0]
 
 
-def _parse_kv_file(path: Path) -> Dict[str, str]:
-    kv: Dict[str, str] = {}
-    if not path.exists():
-        return kv
-    for line in path.read_text(errors="ignore").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        kv[k.strip()] = v.strip()
-    return kv
-
-
-def _read_subn_iface(conf_dir: Path) -> Optional[str]:
-    path = conf_dir / "subn_iface"
-    if not path.exists():
-        return None
-    raw = path.read_text(errors="ignore").strip()
-    if not raw:
-        return None
-    return raw.splitlines()[0].strip() or None
-
-
-def _read_dnsmasq_conf_interface(conf_dir: Path) -> Optional[str]:
-    path = conf_dir / "dnsmasq.conf"
-    if not path.exists():
-        return None
-    for line in path.read_text(errors="ignore").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("interface="):
-            value = line.split("=", 1)[1].strip()
-            if not value:
-                continue
-            return value.split(",", 1)[0].strip() or None
-    return None
-
-
-def _read_hostapd_conf_interface(conf_dir: Path) -> Optional[str]:
-    hostapd_conf = conf_dir / "hostapd.conf"
-    kv = _parse_kv_file(hostapd_conf)
-    ap_if = kv.get("interface")
-    return ap_if.strip() if ap_if else None
-
-
-def _parse_ctrl_interface_dir(value: Optional[str]) -> Optional[str]:
-    if not value:
-        return None
-    raw = value.strip()
-    if not raw:
-        return None
-    m = _CTRL_DIR_RE.search(raw)
-    if m:
-        return m.group(1)
-    return raw.split()[0]
-
-
-def _ctrl_dir_from_conf(conf_dir: Path) -> Optional[Path]:
-    hostapd_conf = conf_dir / "hostapd.conf"
-    kv = _parse_kv_file(hostapd_conf)
-    ctrl_value = kv.get("ctrl_interface")
-    ctrl_dir = _parse_ctrl_interface_dir(ctrl_value)
-    return Path(ctrl_dir) if ctrl_dir else None
-
-
 def _find_ctrl_dir(conf_dir: Optional[Path], ap_interface: str) -> Optional[Path]:
-    candidates: List[Path] = []
-    if conf_dir:
-        ctrl_dir = _ctrl_dir_from_conf(conf_dir)
-        if ctrl_dir:
-            candidates.append(ctrl_dir)
-
-    candidates.extend([Path("/run/hostapd"), Path("/var/run/hostapd")])
-
-    for cand in candidates:
-        if (cand / ap_interface).exists():
-            return cand
-    return None
-
-
-def _read_pid_file(path: Path) -> Optional[int]:
-    if not path.exists():
-        return None
-    try:
-        raw = path.read_text(errors="ignore").strip()
-    except Exception:
-        return None
-    if not raw:
-        return None
-    try:
-        return int(raw.split()[0])
-    except Exception:
-        return None
-
-
-def _pid_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    return Path(f"/proc/{pid}").exists()
+    return lnxrouter_conf.find_ctrl_dir(conf_dir, ap_interface)
 
 
 def _hostapd_pid_running(conf_dir: Path) -> bool:
-    pid = _read_pid_file(conf_dir / "hostapd.pid")
+    pid = lnxrouter_conf.read_pid_file(conf_dir / "hostapd.pid")
     if pid is None:
         return False
-    return _pid_running(pid)
+    return lnxrouter_conf.pid_running(pid)
 
 
 def _conf_dir_active(conf_dir: Path, ap_interface: str) -> bool:
-    if _read_hostapd_conf_interface(conf_dir) != ap_interface:
+    if lnxrouter_conf.read_hostapd_conf_interface(conf_dir) != ap_interface:
         return False
-    ctrl_dir = _ctrl_dir_from_conf(conf_dir)
-    ctrl_candidates = [d for d in (ctrl_dir,) if d]
-    ctrl_candidates.extend([Path("/run/hostapd"), Path("/var/run/hostapd")])
-    for cand in ctrl_candidates:
-        if (cand / ap_interface).exists():
-            return True
+    if lnxrouter_conf.find_ctrl_dir(conf_dir, ap_interface):
+        return True
     return _hostapd_pid_running(conf_dir)
 
 
 def _ap_interface_from_conf_dir(conf_dir: Path) -> Optional[str]:
-    for reader in (_read_subn_iface, _read_dnsmasq_conf_interface, _read_hostapd_conf_interface):
+    for reader in (
+        lnxrouter_conf.read_subn_iface,
+        lnxrouter_conf.read_dnsmasq_conf_interface,
+        lnxrouter_conf.read_hostapd_conf_interface,
+    ):
         ap_if = reader(conf_dir)
         if ap_if:
             return ap_if

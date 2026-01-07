@@ -124,10 +124,27 @@ def _extract_ap_ifname(cmd: List[str]) -> Optional[str]:
         i = cmd.index("--ap")
         return cmd[i + 1]
     except Exception:
+        pass
+
+    # hostapd6_engine contract:
+    #   --ap-ifname <iface> [--no-virt]
+    try:
+        i = cmd.index("--ap-ifname")
+        base = cmd[i + 1]
+    except Exception:
         return None
 
+    if not base:
+        return None
+    if "--no-virt" in cmd:
+        return base
 
-def _apply_firewalld(ap_ifname: str, cfg: Dict[str, object]) -> None:
+    # Mirrors hostapd6_engine virtual name behavior (x0 + base, max 15 chars).
+    cand = f"x0{base}"
+    return cand[:15]
+
+
+def _apply_firewalld(ap_ifname: str, cfg: Dict[str, object]) -> bool:
     """
     Apply firewalld runtime policy for the AP interface.
     Must use firewall-cmd (NOT raw nft) on SteamOS.
@@ -135,16 +152,16 @@ def _apply_firewalld(ap_ifname: str, cfg: Dict[str, object]) -> None:
     enabled = bool(cfg.get("firewalld_enabled", True))
     if not enabled:
         _note("firewalld integration disabled by config")
-        return
+        return True
 
     if not firewalld.is_running():
         _note("firewalld not running; skipping firewall configuration")
-        return
+        return True
 
     zone = str(cfg.get("firewalld_zone", "trusted"))
 
-    ok, out = firewalld.add_interface(zone, ap_ifname)
-    _note(f"firewalld add-interface zone={zone} if={ap_ifname} ok={ok} out={out}")
+    add_ok, out = firewalld.add_interface(zone, ap_ifname)
+    _note(f"firewalld add-interface zone={zone} if={ap_ifname} ok={add_ok} out={out}")
 
     if bool(cfg.get("firewalld_enable_masquerade", True)):
         ok, out = firewalld.enable_masquerade(zone)
@@ -153,6 +170,14 @@ def _apply_firewalld(ap_ifname: str, cfg: Dict[str, object]) -> None:
     if bool(cfg.get("firewalld_enable_forward", True)):
         ok, out = firewalld.enable_forward(zone)
         _note(f"firewalld add-forward zone={zone} ok={ok} out={out}")
+    return add_ok
+
+
+def _retry_firewalld(ap_ifname: str, cfg: Dict[str, object], attempts: int = 5, delay_s: float = 0.4) -> None:
+    for _ in range(attempts):
+        time.sleep(delay_s)
+        if _apply_firewalld(ap_ifname, cfg):
+            return
 
 
 def _cleanup_firewalld(ap_ifname: str, cfg: Dict[str, object]) -> None:
@@ -241,7 +266,14 @@ def start_engine(
     ap_ifname = _extract_ap_ifname(cmd)
     if ap_ifname:
         _last_ap_ifname = ap_ifname
-        _apply_firewalld(ap_ifname, firewalld_cfg)
+        applied = _apply_firewalld(ap_ifname, firewalld_cfg)
+        if not applied:
+            _note("firewalld add-interface failed; will retry")
+            threading.Thread(
+                target=_retry_firewalld,
+                args=(ap_ifname, firewalld_cfg),
+                daemon=True,
+            ).start()
     else:
         _note("could not extract AP ifname from cmd; skipping firewalld integration")
 

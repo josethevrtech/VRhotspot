@@ -1,20 +1,25 @@
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict
 
 CONFIG_PATH = Path("/var/lib/vr-hotspot/config.json")
+CONFIG_TMP = Path("/var/lib/vr-hotspot/config.json.tmp")
+CONFIG_SCHEMA_VERSION = 2
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "version": 1,
+    "version": CONFIG_SCHEMA_VERSION,
 
     # Wi-Fi identity
     "ssid": "VR-Hotspot",
     "wpa2_passphrase": "change-me-please",
 
     # Preferred (optimized) behavior
-    "band_preference": "5ghz",   # "5ghz" or "2.4ghz"
+    "band_preference": "5ghz",   # "5ghz" or "2.4ghz" or "6ghz"
     "country": "US",
     "wifi6": "auto",             # "auto" | true | false
+    "ap_security": "wpa2",        # "wpa2" | "wpa3_sae"
+    "channel_6g": None,          # optional int
 
     # Steam Deck / SteamOS stability:
     # False => allow lnxrouter to create a virtual AP interface (often best default).
@@ -29,6 +34,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # Safe fallback parameters (used only if optimized start stalls)
     "fallback_channel_2g": 6,
+
+    # LAN / DHCP / DNS
+    "lan_gateway_ip": "192.168.68.1",
+    "dhcp_start_ip": "192.168.68.10",
+    "dhcp_end_ip": "192.168.68.250",
+    "dhcp_dns": "gateway",  # "gateway" | "no" | "8.8.8.8,1.1.1.1"
+    "enable_internet": True,
 
     # Firewalld integration (SteamOS: firewalld owns nftables, so use firewall-cmd)
     "firewalld_enabled": True,
@@ -55,13 +67,53 @@ def read_config_file() -> Dict[str, Any]:
         return {}
 
 
+def _write_atomic(path: Path, tmp: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(payload)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except Exception:
+            pass
+    os.replace(tmp, path)
+
+
+def _apply_migrations(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(cfg)
+    if out.get("version") != CONFIG_SCHEMA_VERSION:
+        out["version"] = CONFIG_SCHEMA_VERSION
+    if "ap_security" not in out:
+        out["ap_security"] = DEFAULT_CONFIG["ap_security"]
+    if "channel_6g" not in out:
+        out["channel_6g"] = DEFAULT_CONFIG["channel_6g"]
+    if "lan_gateway_ip" not in out:
+        out["lan_gateway_ip"] = DEFAULT_CONFIG["lan_gateway_ip"]
+    if "dhcp_start_ip" not in out:
+        out["dhcp_start_ip"] = DEFAULT_CONFIG["dhcp_start_ip"]
+    if "dhcp_end_ip" not in out:
+        out["dhcp_end_ip"] = DEFAULT_CONFIG["dhcp_end_ip"]
+    if "dhcp_dns" not in out:
+        out["dhcp_dns"] = DEFAULT_CONFIG["dhcp_dns"]
+    if "enable_internet" not in out:
+        out["enable_internet"] = DEFAULT_CONFIG["enable_internet"]
+    return out
+
+
 def load_config() -> Dict[str, Any]:
     """
     Returns DEFAULT_CONFIG merged with on-disk config.
     """
     cfg = DEFAULT_CONFIG.copy()
     cfg.update(read_config_file())
-    return cfg
+    migrated = _apply_migrations(cfg)
+    if migrated != cfg and CONFIG_PATH.exists():
+        _write_atomic(CONFIG_PATH, CONFIG_TMP, json.dumps(migrated, indent=2))
+        try:
+            os.chmod(CONFIG_PATH, 0o600)
+        except Exception:
+            pass
+    return migrated
 
 
 def write_config_file(partial_updates: Dict[str, Any]) -> Dict[str, Any]:
@@ -78,9 +130,10 @@ def write_config_file(partial_updates: Dict[str, Any]) -> Dict[str, Any]:
     merged: Dict[str, Any] = DEFAULT_CONFIG.copy()
     merged.update(existing)
     merged.update(partial_updates)
+    merged["version"] = CONFIG_SCHEMA_VERSION
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(merged, indent=2))
+    _write_atomic(CONFIG_PATH, CONFIG_TMP, json.dumps(merged, indent=2))
     # Keep it root-only by default (matches your current file perms)
     CONFIG_PATH.chmod(0o600)
     return merged

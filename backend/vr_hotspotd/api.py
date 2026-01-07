@@ -34,6 +34,12 @@ _CONFIG_MUTABLE_KEYS = {
     # NEW:
     "ap_security",   # "wpa2" | "wpa3_sae"
     "channel_6g",    # int (optional)
+    # Network
+    "lan_gateway_ip",
+    "dhcp_start_ip",
+    "dhcp_end_ip",
+    "dhcp_dns",
+    "enable_internet",
     # Firewall
     "firewalld_enabled",
     "firewalld_zone",
@@ -57,6 +63,12 @@ _START_OVERRIDE_KEYS = {
     # NEW:
     "ap_security",
     "channel_6g",
+    # Network
+    "lan_gateway_ip",
+    "dhcp_start_ip",
+    "dhcp_end_ip",
+    "dhcp_dns",
+    "enable_internet",
     "debug",
 }
 
@@ -66,6 +78,7 @@ _SENSITIVE_CONFIG_KEYS = {"wpa2_passphrase"}
 # Type coercion (robustness vs. clients sending "true"/"false"/"1"/"0")
 _BOOL_KEYS = {
     "optimized_no_virt",
+    "enable_internet",
     "firewalld_enabled",
     "firewalld_enable_masquerade",
     "firewalld_enable_forward",
@@ -74,6 +87,7 @@ _BOOL_KEYS = {
 }
 _INT_KEYS = {"fallback_channel_2g", "channel_6g"}
 _FLOAT_KEYS = {"ap_ready_timeout_s"}
+_IP_KEYS = {"lan_gateway_ip", "dhcp_start_ip", "dhcp_end_ip"}
 
 # Country: ISO 3166-1 alpha-2 or "00".
 _COUNTRY_RE = re.compile(r"^(00|[A-Z]{2})$")
@@ -359,9 +373,32 @@ UI_HTML = r"""<!doctype html>
       </div>
 
       <div>
+        <label for="lan_gateway_ip">LAN gateway IP</label>
+        <input id="lan_gateway_ip" placeholder="192.168.68.1" />
+        <div class="small" style="margin-top:6px;">/24 subnet is assumed for now.</div>
+      </div>
+
+      <div>
+        <label for="dhcp_start_ip">DHCP start IP</label>
+        <input id="dhcp_start_ip" placeholder="192.168.68.10" />
+      </div>
+
+      <div>
+        <label for="dhcp_end_ip">DHCP end IP</label>
+        <input id="dhcp_end_ip" placeholder="192.168.68.250" />
+      </div>
+
+      <div>
+        <label for="dhcp_dns">DHCP DNS</label>
+        <input id="dhcp_dns" placeholder="gateway or 1.1.1.1,8.8.8.8" />
+        <div class="small" style="margin-top:6px;">Use "gateway" (default) or "no" to omit.</div>
+      </div>
+
+      <div>
         <label>Flags</label>
         <div class="row">
           <label class="tog"><input type="checkbox" id="optimized_no_virt" /> optimized_no_virt</label>
+          <label class="tog"><input type="checkbox" id="enable_internet" /> enable_internet</label>
           <label class="tog"><input type="checkbox" id="debug" /> debug</label>
         </div>
       </div>
@@ -416,6 +453,7 @@ let lastAdapters = null;
 const CFG_IDS = [
   "ssid","wpa2_passphrase","band_preference","ap_security","channel_6g","country","country_sel",
   "optimized_no_virt","ap_adapter","ap_ready_timeout_s","fallback_channel_2g",
+  "lan_gateway_ip","dhcp_start_ip","dhcp_end_ip","dhcp_dns","enable_internet",
   "firewalld_enabled","firewalld_enable_masquerade","firewalld_enable_forward","firewalld_cleanup_on_stop",
   "debug"
 ];
@@ -613,6 +651,7 @@ function getForm(){
     ap_adapter: document.getElementById('ap_adapter').value,
     ap_ready_timeout_s: parseFloat(document.getElementById('ap_ready_timeout_s').value || '6.0'),
     fallback_channel_2g: parseInt(document.getElementById('fallback_channel_2g').value || '6', 10),
+    enable_internet: document.getElementById('enable_internet').checked,
     firewalld_enabled: document.getElementById('firewalld_enabled').checked,
     firewalld_enable_masquerade: document.getElementById('firewalld_enable_masquerade').checked,
     firewalld_enable_forward: document.getElementById('firewalld_enable_forward').checked,
@@ -627,6 +666,18 @@ function getForm(){
     const n = parseInt(ch6, 10);
     if (!Number.isNaN(n)) out.channel_6g = n;
   }
+
+  const gw = (document.getElementById('lan_gateway_ip').value || '').trim();
+  if (gw) out.lan_gateway_ip = gw;
+
+  const dhcpStart = (document.getElementById('dhcp_start_ip').value || '').trim();
+  if (dhcpStart) out.dhcp_start_ip = dhcpStart;
+
+  const dhcpEnd = (document.getElementById('dhcp_end_ip').value || '').trim();
+  if (dhcpEnd) out.dhcp_end_ip = dhcpEnd;
+
+  const dhcpDns = (document.getElementById('dhcp_dns').value || '').trim();
+  if (dhcpDns) out.dhcp_dns = dhcpDns;
 
   // Only send passphrase if user typed a new one.
   const pw = (document.getElementById('wpa2_passphrase').value || '').trim();
@@ -654,6 +705,11 @@ function applyConfig(cfg){
   document.getElementById('optimized_no_virt').checked = !!cfg.optimized_no_virt;
   document.getElementById('ap_ready_timeout_s').value = (cfg.ap_ready_timeout_s ?? 6.0);
   document.getElementById('fallback_channel_2g').value = (cfg.fallback_channel_2g ?? 6);
+  document.getElementById('lan_gateway_ip').value = (cfg.lan_gateway_ip || '192.168.68.1');
+  document.getElementById('dhcp_start_ip').value = (cfg.dhcp_start_ip || '192.168.68.10');
+  document.getElementById('dhcp_end_ip').value = (cfg.dhcp_end_ip || '192.168.68.250');
+  document.getElementById('dhcp_dns').value = (cfg.dhcp_dns || 'gateway');
+  document.getElementById('enable_internet').checked = (cfg.enable_internet !== false);
   document.getElementById('firewalld_enabled').checked = !!cfg.firewalld_enabled;
   document.getElementById('firewalld_enable_masquerade').checked = !!cfg.firewalld_enable_masquerade;
   document.getElementById('firewalld_enable_forward').checked = !!cfg.firewalld_enable_forward;
@@ -1189,6 +1245,57 @@ class APIHandler(BaseHTTPRequestHandler):
                 else:
                     out[k] = nv
 
+            if k in _IP_KEYS:
+                if isinstance(v, str):
+                    s = v.strip()
+                elif isinstance(v, (int, float)):
+                    s = str(v)
+                else:
+                    if v is not None:
+                        warnings.append(f"invalid_ip:{k}")
+                    out.pop(k, None)
+                    continue
+                if not s:
+                    out.pop(k, None)
+                else:
+                    try:
+                        ipaddress.IPv4Address(s)
+                        out[k] = s
+                    except Exception:
+                        warnings.append(f"invalid_ip:{k}")
+                        out.pop(k, None)
+
+            if k == "dhcp_dns":
+                normalized = None
+                if isinstance(v, list):
+                    tokens = [str(x).strip() for x in v if str(x).strip()]
+                    v = ",".join(tokens) if tokens else ""
+                if isinstance(v, str):
+                    s = v.strip()
+                    if s:
+                        low = s.lower()
+                        if low in ("gateway", "gw"):
+                            normalized = "gateway"
+                        elif low in ("no", "none", "off", "false"):
+                            normalized = "no"
+                        else:
+                            ips = [p.strip() for p in s.split(",") if p.strip()]
+                            bad = False
+                            for ip in ips:
+                                try:
+                                    ipaddress.IPv4Address(ip)
+                                except Exception:
+                                    bad = True
+                                    break
+                            if bad or not ips:
+                                warnings.append("invalid_dhcp_dns")
+                            else:
+                                normalized = ",".join(ips)
+                if normalized is None:
+                    out.pop(k, None)
+                else:
+                    out[k] = normalized
+
         # Validate country format if provided
         if "country" in out:
             cc = out.get("country")
@@ -1210,6 +1317,26 @@ class APIHandler(BaseHTTPRequestHandler):
                 ch6 = int(out.get("channel_6g"))
                 if ch6 < 1 or ch6 > 233:
                     warnings.append("channel_6g_out_of_range")
+            except Exception:
+                pass
+
+        # Validate DHCP range if gateway is provided in this payload.
+        gw = out.get("lan_gateway_ip")
+        dhcp_start = out.get("dhcp_start_ip")
+        dhcp_end = out.get("dhcp_end_ip")
+        if gw and dhcp_start and dhcp_end:
+            try:
+                gw_ip = ipaddress.IPv4Address(gw)
+                start_ip = ipaddress.IPv4Address(dhcp_start)
+                end_ip = ipaddress.IPv4Address(dhcp_end)
+                if (int(start_ip) >= int(end_ip)):
+                    warnings.append("dhcp_range_invalid")
+                    out.pop("dhcp_start_ip", None)
+                    out.pop("dhcp_end_ip", None)
+                elif (gw_ip.packed[:3] != start_ip.packed[:3]) or (gw_ip.packed[:3] != end_ip.packed[:3]):
+                    warnings.append("dhcp_range_not_in_gateway_subnet")
+                    out.pop("dhcp_start_ip", None)
+                    out.pop("dhcp_end_ip", None)
             except Exception:
                 pass
 

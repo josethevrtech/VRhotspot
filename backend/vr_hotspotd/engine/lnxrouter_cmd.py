@@ -22,6 +22,9 @@ def build_cmd(
     channel: Optional[int] = None,
     no_virt: bool = False,
     wifi6: bool = True,
+    gateway_ip: Optional[str] = None,
+    dhcp_dns: Optional[str] = None,
+    enable_internet: bool = True,
 ) -> List[str]:
     """
     Build a deterministic lnxrouter command for linux-router 0.8.1.
@@ -77,5 +80,17 @@ def build_cmd(
     # Regulatory domain
     if country:
         cmd += ["--country", country]
+
+    # Gateway IP (forces a stable /24 subnet)
+    if gateway_ip:
+        cmd += ["-g", gateway_ip]
+
+    # DHCP DNS offer
+    if dhcp_dns:
+        cmd += ["--dhcp-dns", dhcp_dns]
+
+    # Disable Internet/NAT
+    if enable_internet is False:
+        cmd += ["-n"]
 
     return cmd

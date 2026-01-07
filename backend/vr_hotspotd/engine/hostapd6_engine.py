@@ -1,4 +1,5 @@
 import argparse
+import ipaddress
 import os
 import shutil
 import signal
@@ -168,6 +169,8 @@ def _write_hostapd_6ghz_conf(
     lines = [
         f"interface={ifname}",
         "driver=nl80211",
+        "ctrl_interface=/run/hostapd",
+        "ctrl_interface_group=0",
         f"ssid={ssid}",
         "hw_mode=a",
         f"channel={int(channel)}",
@@ -197,7 +200,14 @@ def _write_hostapd_6ghz_conf(
     os.chmod(path, 0o600)
 
 
-def _write_dnsmasq_conf(path: str, ap_if: str, gw_ip: str, dhcp_start: str, dhcp_end: str) -> None:
+def _write_dnsmasq_conf(
+    path: str,
+    ap_if: str,
+    gw_ip: str,
+    dhcp_start: str,
+    dhcp_end: str,
+    dhcp_dns: str,
+) -> None:
     lines = [
         "bind-interfaces",
         f"interface={ap_if}",
@@ -205,13 +215,15 @@ def _write_dnsmasq_conf(path: str, ap_if: str, gw_ip: str, dhcp_start: str, dhcp
         "dhcp-authoritative",
         f"dhcp-range={dhcp_start},{dhcp_end},255.255.255.0,12h",
         f"dhcp-option=option:router,{gw_ip}",
-        f"dhcp-option=option:dns-server,{gw_ip}",
         # Keep dnsmasq minimal; upstream DNS is handled by the host
         "domain-needed",
         "bogus-priv",
         "log-dhcp",
         "log-facility=-",
     ]
+    if dhcp_dns and dhcp_dns != "no":
+        dns_offer = gw_ip if dhcp_dns == "gateway" else dhcp_dns
+        lines.append(f"dhcp-option=option:dns-server,{dns_offer}")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -225,6 +237,11 @@ def main() -> int:
     ap.add_argument("--channel", type=int, default=1)
     ap.add_argument("--no-virt", action="store_true")
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--gateway-ip", default=None)
+    ap.add_argument("--dhcp-start", default=None)
+    ap.add_argument("--dhcp-end", default=None)
+    ap.add_argument("--dhcp-dns", default=None)
+    ap.add_argument("--no-internet", action="store_true")
     args = ap.parse_args()
 
     if len(args.passphrase) < 8:
@@ -233,10 +250,37 @@ def main() -> int:
     _maybe_set_regdom(args.country)
 
     # Network plan
-    gw_ip = "192.168.68.1"
+    gw_ip = (args.gateway_ip or "192.168.68.1").strip()
+    try:
+        gw_addr = ipaddress.IPv4Address(gw_ip)
+    except Exception as exc:
+        raise RuntimeError("invalid_gateway_ip") from exc
+    subnet_prefix = ".".join(gw_ip.split(".")[:3])
+    dhcp_start = (args.dhcp_start or f"{subnet_prefix}.10").strip()
+    dhcp_end = (args.dhcp_end or f"{subnet_prefix}.250").strip()
+    try:
+        start_addr = ipaddress.IPv4Address(dhcp_start)
+        end_addr = ipaddress.IPv4Address(dhcp_end)
+    except Exception as exc:
+        raise RuntimeError("invalid_dhcp_range") from exc
+    if int(start_addr) >= int(end_addr):
+        raise RuntimeError("invalid_dhcp_range")
+    if (gw_addr.packed[:3] != start_addr.packed[:3]) or (gw_addr.packed[:3] != end_addr.packed[:3]):
+        raise RuntimeError("invalid_dhcp_range_subnet")
     cidr = f"{gw_ip}/24"
-    dhcp_start = "192.168.68.10"
-    dhcp_end = "192.168.68.250"
+    dhcp_dns = (args.dhcp_dns or "gateway").strip().lower()
+    if not dhcp_dns:
+        dhcp_dns = "gateway"
+    if dhcp_dns not in ("gateway", "no"):
+        ips = [p.strip() for p in dhcp_dns.split(",") if p.strip()]
+        if not ips:
+            raise RuntimeError("invalid_dhcp_dns")
+        try:
+            for ip in ips:
+                ipaddress.IPv4Address(ip)
+        except Exception as exc:
+            raise RuntimeError("invalid_dhcp_dns") from exc
+        dhcp_dns = ",".join(ips)
 
     hostapd = _resolve_binary("hostapd", "HOSTAPD")
     dnsmasq = _resolve_binary("dnsmasq", "DNSMASQ")
@@ -262,14 +306,16 @@ def main() -> int:
     # NAT
     uplink = _default_uplink_iface()
     nat_rules: List[List[str]] = []
-    _sysctl_ip_forward(True)
-    if uplink and not _is_firewalld_active():
-        try:
-            nat_rules = _nat_up(ap_iface, uplink)
-        except Exception:
-            nat_rules = []
+    if not args.no_internet:
+        _sysctl_ip_forward(True)
+        if uplink and not _is_firewalld_active():
+            try:
+                nat_rules = _nat_up(ap_iface, uplink)
+            except Exception:
+                nat_rules = []
 
     # Write configs
+    os.makedirs("/run/hostapd", exist_ok=True)
     _write_hostapd_6ghz_conf(
         path=hostapd_conf,
         ifname=ap_iface,
@@ -278,7 +324,7 @@ def main() -> int:
         country=args.country,
         channel=int(args.channel),
     )
-    _write_dnsmasq_conf(dnsmasq_conf, ap_iface, gw_ip, dhcp_start, dhcp_end)
+    _write_dnsmasq_conf(dnsmasq_conf, ap_iface, gw_ip, dhcp_start, dhcp_end, dhcp_dns)
 
     # Start processes
     hostapd_cmd = [hostapd, hostapd_conf]

@@ -15,6 +15,7 @@ from vr_hotspotd.state import load_state, update_state
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.config import load_config, ensure_config_file
 from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
+from vr_hotspotd.engine import lnxrouter_conf
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
 from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running
 
@@ -43,6 +44,12 @@ _START_OVERRIDE_KEYS = {
     "ap_security",   # "wpa2" (default) or "wpa3_sae"
     "channel_6g",    # int
     "wifi6",         # "auto" | true | false
+    # Network
+    "lan_gateway_ip",
+    "dhcp_start_ip",
+    "dhcp_end_ip",
+    "dhcp_dns",
+    "enable_internet",
 }
 
 # Broaden virtual AP detection: still safe because we only delete if type == AP.
@@ -316,27 +323,6 @@ def _kill_pid(pid: int, timeout_s: float = 3.0) -> None:
         pass
 
 
-def _read_pid_file(path: Path) -> Optional[int]:
-    if not path.exists():
-        return None
-    try:
-        raw = path.read_text(errors="ignore").strip()
-    except Exception:
-        return None
-    if not raw:
-        return None
-    try:
-        return int(raw.split()[0])
-    except Exception:
-        return None
-
-
-def _pid_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    return os.path.exists(f"/proc/{pid}")
-
-
 def _pid_is_hostapd(pid: int) -> bool:
     cmdline = _pid_cmdline(pid)
     return "hostapd" in cmdline.lower()
@@ -347,92 +333,28 @@ def _pid_is_dnsmasq(pid: int) -> bool:
     return "dnsmasq" in cmdline.lower()
 
 
+def _pid_running(pid: int) -> bool:
+    return lnxrouter_conf.pid_running(pid)
+
+
 def _candidate_conf_dirs(adapter_ifname: Optional[str]) -> List[Path]:
-    if not _LNXROUTER_TMP.exists():
-        return []
-    patterns = [f"lnxrouter.{adapter_ifname}.conf.*"] if adapter_ifname else ["lnxrouter.*.conf.*"]
-    candidates: List[Path] = []
-    for pat in patterns:
-        candidates.extend([p for p in _LNXROUTER_TMP.glob(pat) if p.is_dir()])
-    return candidates
-
-
-def _parse_kv_file(path: Path) -> Dict[str, str]:
-    kv: Dict[str, str] = {}
-    if not path.exists():
-        return kv
-    for line in path.read_text(errors="ignore").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        kv[k.strip()] = v.strip()
-    return kv
-
-
-def _read_subn_iface(conf_dir: Path) -> Optional[str]:
-    path = conf_dir / "subn_iface"
-    if not path.exists():
-        return None
-    raw = path.read_text(errors="ignore").strip()
-    if not raw:
-        return None
-    return raw.splitlines()[0].strip() or None
-
-
-def _read_hostapd_conf_interface(conf_dir: Path) -> Optional[str]:
-    hostapd_conf = conf_dir / "hostapd.conf"
-    kv = _parse_kv_file(hostapd_conf)
-    return kv.get("interface")
-
-
-def _read_dnsmasq_conf_interface(conf_dir: Path) -> Optional[str]:
-    dnsmasq_conf = conf_dir / "dnsmasq.conf"
-    kv = _parse_kv_file(dnsmasq_conf)
-    return kv.get("interface")
-
-
-def _conf_dir_matches_ap(conf_dir: Path, ap_interface: str) -> bool:
-    if _read_hostapd_conf_interface(conf_dir) == ap_interface:
-        return True
-    if _read_dnsmasq_conf_interface(conf_dir) == ap_interface:
-        return True
-    return _read_subn_iface(conf_dir) == ap_interface
+    return lnxrouter_conf.candidate_conf_dirs(adapter_ifname, tmp_dir=_LNXROUTER_TMP)
 
 
 def _find_latest_conf_dir(adapter_ifname: Optional[str], ap_interface: Optional[str]) -> Optional[Path]:
-    candidates = _candidate_conf_dirs(adapter_ifname)
-    if not candidates:
-        return None
-    if ap_interface:
-        matches = [c for c in candidates if _conf_dir_matches_ap(c, ap_interface)]
-        if matches:
-            matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            return matches[0]
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
-
-
-def _ctrl_dir_from_conf(conf_dir: Path) -> Optional[Path]:
-    hostapd_conf = conf_dir / "hostapd.conf"
-    kv = _parse_kv_file(hostapd_conf)
-    ctrl = kv.get("ctrl_interface")
-    if not ctrl:
-        return None
-    return Path(ctrl)
+    return lnxrouter_conf.find_latest_conf_dir(
+        adapter_ifname,
+        ap_interface,
+        tmp_dir=_LNXROUTER_TMP,
+    )
 
 
 def _find_ctrl_dir(conf_dir: Optional[Path], ap_interface: str) -> Optional[Path]:
-    candidates: List[Path] = []
-    if conf_dir:
-        ctrl_dir = _ctrl_dir_from_conf(conf_dir)
-        if ctrl_dir:
-            candidates.append(ctrl_dir)
-    candidates.extend([p for p in _HOSTAPD_CTRL_CANDIDATES])
-    for cand in candidates:
-        if (cand / ap_interface).exists():
-            return cand
-    return None
+    return lnxrouter_conf.find_ctrl_dir(
+        conf_dir,
+        ap_interface,
+        extra_candidates=list(_HOSTAPD_CTRL_CANDIDATES),
+    )
 
 
 def _hostapd_cli_ping(ctrl_dir: Path, ap_interface: str) -> bool:
@@ -454,14 +376,14 @@ def _hostapd_cli_ping(ctrl_dir: Path, ap_interface: str) -> bool:
 
 
 def _hostapd_pid_running(conf_dir: Path) -> bool:
-    pid = _read_pid_file(conf_dir / "hostapd.pid")
+    pid = lnxrouter_conf.read_pid_file(conf_dir / "hostapd.pid")
     if pid is None or not _pid_running(pid):
         return False
     return _pid_is_hostapd(pid)
 
 
 def _dnsmasq_pid_running(conf_dir: Path) -> bool:
-    pid = _read_pid_file(conf_dir / "dnsmasq.pid")
+    pid = lnxrouter_conf.read_pid_file(conf_dir / "dnsmasq.pid")
     if pid is None or not _pid_running(pid):
         return False
     return _pid_is_dnsmasq(pid)
@@ -521,7 +443,7 @@ def _collect_ap_logs(adapter_ifname: Optional[str], ap_interface: Optional[str])
 def _find_hostapd_pids(adapter_ifname: Optional[str]) -> List[int]:
     pids: List[int] = []
     for conf_dir in _candidate_conf_dirs(adapter_ifname):
-        pid = _read_pid_file(conf_dir / "hostapd.pid")
+        pid = lnxrouter_conf.read_pid_file(conf_dir / "hostapd.pid")
         if pid and _pid_running(pid) and _pid_is_hostapd(pid):
             pids.append(pid)
     return sorted(set(pids))
@@ -530,7 +452,7 @@ def _find_hostapd_pids(adapter_ifname: Optional[str]) -> List[int]:
 def _find_dnsmasq_pids(adapter_ifname: Optional[str]) -> List[int]:
     pids: List[int] = []
     for conf_dir in _candidate_conf_dirs(adapter_ifname):
-        pid = _read_pid_file(conf_dir / "dnsmasq.pid")
+        pid = lnxrouter_conf.read_pid_file(conf_dir / "dnsmasq.pid")
         if pid and _pid_running(pid) and _pid_is_dnsmasq(pid):
             pids.append(pid)
     return sorted(set(pids))
@@ -638,11 +560,12 @@ def _get_adapter_phy(inv: dict, ifname: str) -> Optional[str]:
 
 
 def _build_firewalld_cfg(cfg: dict) -> dict:
+    enable_internet = bool(cfg.get("enable_internet", True))
     return {
         "firewalld_enabled": bool(cfg.get("firewalld_enabled", True)),
         "firewalld_zone": str(cfg.get("firewalld_zone", "trusted")),
-        "firewalld_enable_masquerade": bool(cfg.get("firewalld_enable_masquerade", True)),
-        "firewalld_enable_forward": bool(cfg.get("firewalld_enable_forward", False)),
+        "firewalld_enable_masquerade": enable_internet and bool(cfg.get("firewalld_enable_masquerade", True)),
+        "firewalld_enable_forward": enable_internet and bool(cfg.get("firewalld_enable_forward", False)),
         "firewalld_cleanup_on_stop": bool(cfg.get("firewalld_cleanup_on_stop", True)),
     }
 
@@ -777,6 +700,17 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     ap_ready_timeout_s = float(cfg.get("ap_ready_timeout_s", 6.0))
     optimized_no_virt = bool(cfg.get("optimized_no_virt", False))
     debug = bool(cfg.get("debug", False))
+    enable_internet = bool(cfg.get("enable_internet", True))
+
+    def _norm_str(v: object) -> Optional[str]:
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        return None
+
+    gateway_ip = _norm_str(cfg.get("lan_gateway_ip"))
+    dhcp_start_ip = _norm_str(cfg.get("dhcp_start_ip"))
+    dhcp_end_ip = _norm_str(cfg.get("dhcp_end_ip"))
+    dhcp_dns = _norm_str(cfg.get("dhcp_dns"))
 
     # Normalize band
     bp = str(band_pref or "").lower().strip()
@@ -907,6 +841,11 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             channel=channel_6g,
             no_virt=optimized_no_virt,
             debug=debug,
+            gateway_ip=gateway_ip,
+            dhcp_start_ip=dhcp_start_ip,
+            dhcp_end_ip=dhcp_end_ip,
+            dhcp_dns=dhcp_dns,
+            enable_internet=enable_internet,
         )
     else:
         cmd1 = build_cmd(
@@ -918,6 +857,9 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             channel=None,
             no_virt=optimized_no_virt,
             wifi6=effective_wifi6,
+            gateway_ip=gateway_ip,
+            dhcp_dns=dhcp_dns,
+            enable_internet=enable_internet,
         )
 
     res = start_engine(cmd1, firewalld_cfg=fw_cfg)
@@ -1012,6 +954,9 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             channel=channel,
             no_virt=no_virt,
             wifi6=effective_wifi6,
+            gateway_ip=gateway_ip,
+            dhcp_dns=dhcp_dns,
+            enable_internet=enable_internet,
         )
 
         res_fallback = start_engine(cmd_fallback, firewalld_cfg=fw_cfg)
