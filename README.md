@@ -305,7 +305,7 @@ Diagnostics notes:
 
 ## License
 
-MIT License. See `LICENSE` and `LICENSE.md`.
+MIT License. See `LICENSE.md`.
 
 ---
 
