@@ -1,8 +1,8 @@
 # VR Hotspot
 
-**VR Hotspot** is an open-source connectivity suite optimized for VR headsets. It turns a Linux machine into a dedicated Wi-Fi access point (AP) for a headset (or any client) to create a seamless, low-latency PC ↔ VR network without relying on a router.
+**VR Hotspot** is an open-source connectivity suite for VR headsets, designed to deliver a seamless, low-latency PC ↔ headset network without relying on a router. It turns your PC into a dedicated Wi-Fi access point (AP) for a headset (or any client), creating a direct, reliable connection optimized for VR streaming and remote access.
 
-It provides a clean, one-button control plane for **Start / Stop / Repair**, adapter selection, safe diagnostics, and optional boot autostart.
+It’s ideal for users who travel with a MiniPC or “headless” computer puck and want confidence they can connect to and manage their PC’s hotspot, even without a monitor!, so they can connect a VR headset and stream to it.
 
 Built around **lnxrouter + hostapd + dnsmasq**, it supports **bundled binaries** (consistent installs across distros) and integrates with **firewalld** on platforms like SteamOS where firewalld owns nftables.
 
@@ -12,7 +12,7 @@ Built around **lnxrouter + hostapd + dnsmasq**, it supports **bundled binaries**
 
 - Creates a Wi-Fi hotspot (AP) from a selected Wi-Fi adapter
 - Provides DHCP + DNS via **dnsmasq**
-- Enables NAT/forwarding so the headset can reach the internet (when configured)
+- Enables NAT/forwarding so the headset can reach the internet
 - Exposes a local portal (web UI) for configuration and lifecycle management
 - Supports a **Repair** workflow to clean up and reapply state if the system gets stuck
 
@@ -39,18 +39,6 @@ Built around **lnxrouter + hostapd + dnsmasq**, it supports **bundled binaries**
   - `POST /v1/diagnostics/ping`
 - Ping under load (curl default, iperf3 optional):
   - `POST /v1/diagnostics/ping_under_load`
-
-Diagnostics notes:
-- ICMP may be blocked by host or client firewalls; ping results can be incomplete.
-- `curl` load works without headset-side software; `iperf3` requires a reachable iperf3 server.
-
-Example request:
-```bash
-curl -fsS -X POST http://127.0.0.1:8732/v1/diagnostics/ping_under_load \\
-  -H "Content-Type: application/json" \\
-  -H "X-Api-Token: $TOKEN" \\
-  -d '{"target_ip":"192.168.68.10","duration_s":10,"interval_ms":20,"load":{"method":"curl","mbps":150}}'
-```
 
 ### Adapter intelligence
 
@@ -79,16 +67,16 @@ This avoids conflicts on platforms where firewalld is the authority on firewall 
 
 ### Security and privacy
 
-#### Optional API token enforcement
+#### API token enforcement to manage Hotspot via webportal!
 
-When `VR_HOTSPOTD_API_TOKEN` is set, all `/v1/*` endpoints require authentication.
+ `VR_HOTSPOTD_API_TOKEN` is set, all `/v1/*` web or app based endpoints require authentication via token.
 
 Supported headers (either works):
 
 - `X-Api-Token: <token>`
 - `Authorization: Bearer <token>`
 
-#### Privacy mode (portal)
+#### Privacy mode
 
 - Masks SSID and passphrase
 - Redacts `-p/--passphrase` arguments in the engine command display
@@ -99,8 +87,6 @@ Designed to work whether the system has `hostapd` / `dnsmasq` installed or not:
 
 - Prefers system binaries when available
 - Otherwise uses bundled copies from `backend/vendor/bin`
-
-This makes deployments repeatable: copy the folder, run the install script, and installs behave consistently.
 
 ---
 
@@ -127,7 +113,7 @@ This makes deployments repeatable: copy the folder, run the install script, and 
 │       └── main.py                       # Daemon entrypoint
 ├── pyproject.toml
 └── vr-keygen/
-    └── keygen.py                         # Optional: key/token helper
+    └── keygen.py                         # Optional: key/token helper (NOT WORKING YET! Do it manually using token generate command)
 ```
 
 ---
@@ -136,10 +122,11 @@ This makes deployments repeatable: copy the folder, run the install script, and 
 
 Once installed and running, open:
 
-- Portal: `http://127.0.0.1:8732/ui`
+- Local Portal: `http://127.0.0.1:8732/ui`
+- Portal From Another Device: `http://hotspotdeviceip:8732/ui`
 - Health check: `http://127.0.0.1:8732/healthz`
 
-If API token enforcement is enabled, use the token printed by the install script and paste it into the **API token** field in the portal.
+API token enforcement is enabled, use the token printed by the install script and paste it into the **API token** field in the portal.
 To access the portal from other devices, bind the daemon to a non-local address (see Remote portal access).
 
 ---
@@ -168,7 +155,7 @@ sudo mkdir -p /var/lib/vr-hotspot/app
 sudo rsync -a ./ /var/lib/vr-hotspot/app/
 ```
 
-### Install (generic)
+### Install (CachyOS and SteamOS Supported)
 
 ```bash
 cd /var/lib/vr-hotspot/app/backend/scripts
@@ -182,7 +169,7 @@ Optional: allow portal/API access from LAN or hotspot clients:
 sudo ./install.sh --bind 0.0.0.0
 ```
 
-Optional: enable autostart:
+Optional: enable autostart (recommended):
 
 ```bash
 sudo ./install.sh --enable-autostart
@@ -221,23 +208,6 @@ Look for:
 ```bash
 VR_HOTSPOTD_API_TOKEN=...
 ```
-
-### Use the token with curl
-
-```bash
-TOKEN="$(sudo awk -F= '($1=="VR_HOTSPOTD_API_TOKEN"){gsub(/\r/,"",$2); print $2; exit}' /etc/vr-hotspot/env)"
-
-curl -fsS http://127.0.0.1:8732/v1/status -H "X-Api-Token: $TOKEN"
-curl -fsS http://127.0.0.1:8732/v1/status -H "Authorization: Bearer $TOKEN"
-```
-
-Notes:
-
-- `/ui` is always available, but it will prompt for a token before it can call `/v1/*`.
-- If `VR_HOTSPOTD_API_TOKEN` is empty or missing, `/v1/*` is open.
-
----
-
 ## Firewall ports
 
 VR Hotspot’s portal/API listens on:
@@ -266,34 +236,7 @@ sudo ufw status verbose
 
 ---
 
-## Remote portal access (LAN/AP)
-
-By default the daemon binds to `127.0.0.1`, so the portal is local-only. To access it from other devices:
-
-1) Bind to all interfaces:
-
-```bash
-sudo ./install.sh --bind 0.0.0.0
-sudo systemctl restart vr-hotspotd.service
-```
-
-2) Use the Deck's IP address (the AP/gateway IP), not the client IP. For example:
-
-```bash
-ip -4 addr show dev x0wlan2
-```
-
-Then browse to:
-
-```
-http://<deck_ap_ip>:8732/ui
-```
-
-If `x0wlan2` does not exist, replace it with your AP adapter (e.g., `wlan2`).
-
----
-
-## Optional: Autostart on boot
+## Autostart on boot
 
 If enabled, VR Hotspot can automatically bring up the hotspot after boot.
 
@@ -327,7 +270,7 @@ sudo journalctl -u vr-hotspotd.service -b --no-pager -n 200 -o cat
 
 ### API authorization checks
 
-If token enforcement is enabled, you should see:
+token enforcement is enabled, you should see:
 
 - `401` without token
 - `200` with token
@@ -346,11 +289,15 @@ TOKEN="$(sudo awk -F= '($1=="VR_HOTSPOTD_API_TOKEN"){gsub(/\r/,"",$2); print $2;
 curl -fsS "http://127.0.0.1:8732/v1/status?include_logs=1" -H "X-Api-Token: $TOKEN" | python3 -m json.tool
 ```
 
+Diagnostics notes:
+- ICMP may be blocked by host or client firewalls; ping results can be incomplete.
+- `curl` load works without headset-side software; `iperf3` requires a reachable iperf3 server.
+
 ---
 
 ## Security and privacy notes
 
-- **Token enforcement:** If `VR_HOTSPOTD_API_TOKEN` is set, treat it like a password. Do not paste it into logs or screenshots.
+- **Token enforcement:** treat it like a password. Do not paste it into logs or screenshots.
 - **Local-only UI:** The portal is intended to be accessed locally (e.g., `127.0.0.1`). If you bind to non-local addresses, use a firewall and keep token enforcement enabled.
 - **Privacy mode:** Use privacy mode in the portal when screen sharing or collecting logs.
 
