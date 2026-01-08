@@ -17,12 +17,16 @@ from vr_hotspotd.config import load_config, ensure_config_file
 from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
 from vr_hotspotd.engine import lnxrouter_conf
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
+from vr_hotspotd.engine.hostapd_bridge_cmd import build_cmd_bridge
 from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running
-from vr_hotspotd import system_tuning
+from vr_hotspotd import system_tuning, preflight, network_tuning
 
 log = logging.getLogger("vr_hotspotd.lifecycle")
 
 _OP_LOCK = threading.Lock()
+_WATCHDOG_THREAD: Optional[threading.Thread] = None
+_WATCHDOG_STOP = threading.Event()
+_WATCHDOG_BACKOFF_MAX_S = 30.0
 
 
 class LifecycleResult:
@@ -57,6 +61,17 @@ _START_OVERRIDE_KEYS = {
     "cpu_governor_performance",
     "cpu_affinity",
     "sysctl_tuning",
+    # Watchdog / telemetry / QoS / NAT
+    "watchdog_enable",
+    "watchdog_interval_s",
+    "telemetry_enable",
+    "telemetry_interval_s",
+    "qos_preset",
+    "nat_accel",
+    # Bridge mode
+    "bridge_mode",
+    "bridge_name",
+    "bridge_uplink",
 }
 
 # Broaden virtual AP detection: still safe because we only delete if type == AP.
@@ -300,6 +315,13 @@ def _safe_revert_tuning(tuning_state: Optional[Dict[str, object]]) -> List[str]:
         return [f"system_tuning_revert_failed:{e}"]
 
 
+def _safe_revert_network_tuning(net_state: Optional[Dict[str, object]]) -> List[str]:
+    try:
+        return network_tuning.revert(net_state)
+    except Exception as e:
+        return [f"network_tuning_revert_failed:{e}"]
+
+
 def _child_pids(pid: Optional[int]) -> List[int]:
     if not pid or pid <= 0:
         return []
@@ -515,6 +537,115 @@ def _collect_affinity_pids(
     return sorted(set(pids))
 
 
+def _watchdog_enabled(cfg: Optional[Dict[str, object]]) -> bool:
+    if not isinstance(cfg, dict):
+        return False
+    return bool(cfg.get("watchdog_enable", True))
+
+
+def _watchdog_interval(cfg: Optional[Dict[str, object]]) -> float:
+    if not isinstance(cfg, dict):
+        return 2.0
+    try:
+        val = float(cfg.get("watchdog_interval_s", 2.0))
+        return max(0.5, min(10.0, val))
+    except Exception:
+        return 2.0
+
+
+def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[str]:
+    adapter_ifname = state.get("adapter") if isinstance(state, dict) else None
+    ap_interface = state.get("ap_interface") if isinstance(state, dict) else None
+    engine_pid = state.get("engine", {}).get("pid") if isinstance(state, dict) else None
+    expect_dns = not bool(cfg.get("bridge_mode", False))
+
+    conf_dir = _find_latest_conf_dir(adapter_ifname, ap_interface)
+    if conf_dir:
+        if not _hostapd_pid_running(conf_dir):
+            return "hostapd_exited"
+        if expect_dns and not _dnsmasq_pid_running(conf_dir):
+            return "dnsmasq_exited"
+        return None
+
+    if engine_pid and _pid_running(engine_pid):
+        children = _child_pids(engine_pid)
+        has_hostapd = any(_pid_is_hostapd(pid) for pid in children)
+        has_dnsmasq = any(_pid_is_dnsmasq(pid) for pid in children)
+        if not has_hostapd:
+            return "hostapd_missing"
+        if expect_dns and not has_dnsmasq:
+            return "dnsmasq_missing"
+        return None
+
+    if not _find_hostapd_pids(adapter_ifname):
+        return "hostapd_missing"
+    if expect_dns and not _find_dnsmasq_pids(adapter_ifname):
+        return "dnsmasq_missing"
+    return None
+
+
+def _restart_from_watchdog(reason: str) -> None:
+    cid = f"watchdog-{int(time.time())}"
+    with _OP_LOCK:
+        _stop_hotspot_impl(correlation_id=cid + ":stop")
+        _start_hotspot_impl(correlation_id=cid + ":start")
+
+    try:
+        st = load_state()
+        warnings = list(st.get("warnings") if isinstance(st, dict) and st.get("warnings") else [])
+        warnings.append(f"watchdog_restart:{reason}")
+        update_state(warnings=warnings)
+    except Exception:
+        pass
+
+
+def _watchdog_loop() -> None:
+    backoff_s = 2.0
+    next_restart = 0.0
+    while not _WATCHDOG_STOP.is_set():
+        cfg = load_config()
+        interval = _watchdog_interval(cfg)
+        if _WATCHDOG_STOP.wait(interval):
+            break
+
+        if not _watchdog_enabled(cfg):
+            backoff_s = max(2.0, interval)
+            continue
+
+        st = load_state()
+        if not st.get("running") or st.get("phase") != "running":
+            backoff_s = max(2.0, interval)
+            continue
+
+        if not is_running():
+            reason = "engine_not_running"
+        else:
+            reason = _watchdog_reason(st, cfg)
+
+        if not reason:
+            backoff_s = max(2.0, interval)
+            next_restart = 0.0
+            continue
+
+        now = time.time()
+        if next_restart and now < next_restart:
+            continue
+
+        delay = min(_WATCHDOG_BACKOFF_MAX_S, max(backoff_s, interval))
+        next_restart = now + delay
+        backoff_s = min(_WATCHDOG_BACKOFF_MAX_S, delay * 2)
+        _restart_from_watchdog(reason)
+
+
+def _ensure_watchdog_started() -> None:
+    global _WATCHDOG_THREAD
+    if _WATCHDOG_THREAD and _WATCHDOG_THREAD.is_alive():
+        return
+    _WATCHDOG_STOP.clear()
+    _WATCHDOG_THREAD = threading.Thread(target=_watchdog_loop, daemon=True)
+    _WATCHDOG_THREAD.start()
+
+
 def _remove_conf_dirs(adapter_ifname: Optional[str]) -> List[str]:
     removed: List[str] = []
     for conf_dir in _candidate_conf_dirs(adapter_ifname):
@@ -618,6 +749,8 @@ def _get_adapter_phy(inv: dict, ifname: str) -> Optional[str]:
 
 def _build_firewalld_cfg(cfg: dict) -> dict:
     enable_internet = bool(cfg.get("enable_internet", True))
+    if bool(cfg.get("bridge_mode", False)):
+        enable_internet = False
     return {
         "firewalld_enabled": bool(cfg.get("firewalld_enabled", True)),
         "firewalld_zone": str(cfg.get("firewalld_zone", "trusted")),
@@ -671,6 +804,9 @@ def _repair_impl(correlation_id: str = "repair"):
 
     st = load_state()
     tuning_warnings = _safe_revert_tuning(st.get("tuning") if isinstance(st, dict) else None)
+    net_warnings = _safe_revert_network_tuning(
+        st.get("network_tuning") if isinstance(st, dict) else None
+    )
     removed_ifaces: List[str] = []
     removed_conf_dirs: List[str] = []
 
@@ -696,6 +832,7 @@ def _repair_impl(correlation_id: str = "repair"):
 
     warnings: List[str] = []
     warnings.extend(tuning_warnings)
+    warnings.extend(net_warnings)
     if removed_ifaces:
         warnings.append("repair_removed_virtual_ap_ifaces:" + ",".join(removed_ifaces))
     if removed_conf_dirs:
@@ -710,6 +847,7 @@ def _repair_impl(correlation_id: str = "repair"):
         last_correlation_id=correlation_id,
         warnings=warnings,
         tuning={},
+        network_tuning={},
         engine={
             "pid": None,
             "cmd": None,
@@ -761,6 +899,9 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     optimized_no_virt = bool(cfg.get("optimized_no_virt", False))
     debug = bool(cfg.get("debug", False))
     enable_internet = bool(cfg.get("enable_internet", True))
+    bridge_mode = bool(cfg.get("bridge_mode", False))
+    bridge_name = cfg.get("bridge_name")
+    bridge_uplink = cfg.get("bridge_uplink")
 
     def _norm_str(v: object) -> Optional[str]:
         if isinstance(v, str) and v.strip():
@@ -884,6 +1025,32 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
         return LifecycleResult("start_failed", state)
 
+    preflight_result = preflight.run(
+        cfg,
+        adapter=a if isinstance(a, dict) else None,
+        band=bp,
+        ap_security=ap_security,
+        enable_internet=enable_internet,
+    )
+    if preflight_result.get("warnings"):
+        start_warnings.extend([str(w) for w in preflight_result.get("warnings")])
+    update_state(preflight=preflight_result)
+    if preflight_result.get("errors"):
+        err = "preflight_failed:" + ",".join([str(e) for e in preflight_result.get("errors")])
+        state = update_state(
+            phase="error",
+            running=False,
+            ap_interface=None,
+            last_error=err,
+            last_correlation_id=correlation_id,
+            warnings=start_warnings,
+            preflight=preflight_result,
+            tuning={},
+            network_tuning={},
+            engine={"last_error": err, "ap_logs_tail": []},
+        )
+        return LifecycleResult("start_failed", state)
+
     try:
         tuning_state, tuning_warnings = system_tuning.apply_pre(cfg)
     except Exception as e:
@@ -893,7 +1060,36 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         start_warnings.extend(tuning_warnings)
 
     # Attempt 1: requested band
-    if bp == "6ghz":
+    if bridge_mode:
+        bridge_channel: Optional[int] = None
+        if bp == "6ghz":
+            bridge_channel = cfg.get("channel_6g", None)
+            if bridge_channel is not None:
+                try:
+                    bridge_channel = int(bridge_channel)
+                except Exception:
+                    bridge_channel = None
+        elif bp == "2.4ghz":
+            try:
+                bridge_channel = int(cfg.get("fallback_channel_2g", 6))
+            except Exception:
+                bridge_channel = 6
+
+        cmd1 = build_cmd_bridge(
+            ap_ifname=ap_ifname,
+            ssid=ssid,
+            passphrase=passphrase,
+            band=bp,
+            ap_security=ap_security,
+            country=country if isinstance(country, str) else None,
+            channel=bridge_channel,
+            no_virt=optimized_no_virt,
+            debug=debug,
+            wifi6=effective_wifi6,
+            bridge_name=str(bridge_name).strip() if isinstance(bridge_name, str) else None,
+            bridge_uplink=str(bridge_uplink).strip() if isinstance(bridge_uplink, str) else None,
+        )
+    elif bp == "6ghz":
         channel_6g = cfg.get("channel_6g", None)
         if channel_6g is not None:
             try:
@@ -956,6 +1152,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             last_correlation_id=correlation_id,
             warnings=start_warnings + revert_warnings,
             tuning={},
+            network_tuning={},
         )
         return LifecycleResult("start_failed", state)
 
@@ -979,6 +1176,18 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             runtime_warnings = [f"system_tuning_runtime_failed:{e}"]
         if runtime_warnings:
             start_warnings.extend(runtime_warnings)
+        try:
+            net_state, net_warnings = network_tuning.apply(
+                cfg,
+                ap_ifname=ap_info.ifname,
+                enable_internet=enable_internet,
+                firewalld_cfg=fw_cfg,
+            )
+        except Exception as e:
+            net_state = {}
+            net_warnings = [f"network_tuning_apply_failed:{e}"]
+        if net_warnings:
+            start_warnings.extend(net_warnings)
         state = update_state(
             phase="running",
             running=True,
@@ -990,8 +1199,11 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             last_error=None,
             last_correlation_id=correlation_id,
             tuning=tuning_state,
+            network_tuning=net_state,
             engine={"last_error": None, "last_exit_code": None, "ap_logs_tail": []},
         )
+        if _watchdog_enabled(cfg) and is_running():
+            _ensure_watchdog_started()
         return LifecycleResult("started", state)
 
     # If requested band failed to become ready, fallback (6 -> 5 -> 2.4).
@@ -1009,6 +1221,22 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     warnings: List[str] = list(start_warnings)
     warnings.append("optimized_ap_start_timed_out")
     fallback_chain: List[Tuple[str, Optional[int], bool, str]] = []
+
+    if bridge_mode:
+        revert_warnings = _safe_revert_tuning(tuning_state)
+        warnings.extend(revert_warnings)
+        state = update_state(
+            phase="error",
+            running=False,
+            ap_interface=None,
+            last_error="ap_ready_timeout_bridge_mode",
+            last_correlation_id=correlation_id,
+            fallback_reason=None,
+            warnings=warnings,
+            tuning={},
+            network_tuning={},
+        )
+        return LifecycleResult("start_failed", state)
 
     if bp == "6ghz":
         fallback_chain = [
@@ -1031,6 +1259,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             fallback_reason=None,
             warnings=warnings,
             tuning={},
+            network_tuning={},
         )
         return LifecycleResult("start_failed", state)
 
@@ -1078,6 +1307,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 fallback_reason="ap_ready_timeout",
                 warnings=warnings,
                 tuning={},
+                network_tuning={},
             )
             return LifecycleResult("start_failed", state)
 
@@ -1103,6 +1333,18 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 runtime_warnings = [f"system_tuning_runtime_failed:{e}"]
             if runtime_warnings:
                 warnings.extend(runtime_warnings)
+            try:
+                net_state, net_warnings = network_tuning.apply(
+                    cfg,
+                    ap_ifname=ap_info_fallback.ifname,
+                    enable_internet=enable_internet,
+                    firewalld_cfg=fw_cfg,
+                )
+            except Exception as e:
+                net_state = {}
+                net_warnings = [f"network_tuning_apply_failed:{e}"]
+            if net_warnings:
+                warnings.extend(net_warnings)
             state = update_state(
                 phase="running",
                 running=True,
@@ -1114,8 +1356,11 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 last_error=None,
                 last_correlation_id=correlation_id,
                 tuning=tuning_state,
+                network_tuning=net_state,
                 engine={"last_error": None, "last_exit_code": None, "ap_logs_tail": []},
             )
+            if _watchdog_enabled(cfg) and is_running():
+                _ensure_watchdog_started()
             return LifecycleResult("started_with_fallback", state)
 
         ap_candidate = None
@@ -1140,6 +1385,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         fallback_reason="ap_ready_timeout",
         warnings=warnings,
         tuning={},
+        network_tuning={},
     )
     return LifecycleResult("start_failed", state)
 
@@ -1152,6 +1398,9 @@ def stop_hotspot(correlation_id: str = "stop"):
 def _stop_hotspot_impl(correlation_id: str = "stop"):
     state = load_state()
     tuning_warnings = _safe_revert_tuning(state.get("tuning") if isinstance(state, dict) else None)
+    net_warnings = _safe_revert_network_tuning(
+        state.get("network_tuning") if isinstance(state, dict) else None
+    )
 
     if state["phase"] == "stopped":
         return LifecycleResult("already_stopped", state)
@@ -1180,6 +1429,7 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
 
     warnings: List[str] = []
     warnings.extend(tuning_warnings)
+    warnings.extend(net_warnings)
     if removed_ifaces:
         warnings.append("stop_removed_virtual_ap_ifaces:" + ",".join(removed_ifaces))
     if removed_conf_dirs:
@@ -1210,6 +1460,7 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
         last_error=(err if not ok else None),
         last_correlation_id=correlation_id,
         tuning={},
+        network_tuning={},
     )
 
     return LifecycleResult("stopped" if ok else "stop_failed", state)

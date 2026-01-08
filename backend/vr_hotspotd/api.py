@@ -16,6 +16,7 @@ from vr_hotspotd.lifecycle import repair, start_hotspot, stop_hotspot, reconcile
 from vr_hotspotd.diagnostics.clients import get_clients_snapshot
 from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator
+from vr_hotspotd import telemetry
 from vr_hotspotd.state import load_state
 
 log = logging.getLogger("vr_hotspotd.api")
@@ -46,6 +47,16 @@ _CONFIG_MUTABLE_KEYS = {
     "cpu_governor_performance",
     "cpu_affinity",
     "sysctl_tuning",
+    # Watchdog / telemetry / QoS / NAT / bridge
+    "watchdog_enable",
+    "watchdog_interval_s",
+    "telemetry_enable",
+    "telemetry_interval_s",
+    "qos_preset",
+    "nat_accel",
+    "bridge_mode",
+    "bridge_name",
+    "bridge_uplink",
     # Firewall
     "firewalld_enabled",
     "firewalld_zone",
@@ -81,6 +92,15 @@ _START_OVERRIDE_KEYS = {
     "cpu_governor_performance",
     "cpu_affinity",
     "sysctl_tuning",
+    "watchdog_enable",
+    "watchdog_interval_s",
+    "telemetry_enable",
+    "telemetry_interval_s",
+    "qos_preset",
+    "nat_accel",
+    "bridge_mode",
+    "bridge_name",
+    "bridge_uplink",
     "debug",
 }
 
@@ -95,6 +115,10 @@ _BOOL_KEYS = {
     "usb_autosuspend_disable",
     "cpu_governor_performance",
     "sysctl_tuning",
+    "watchdog_enable",
+    "telemetry_enable",
+    "nat_accel",
+    "bridge_mode",
     "firewalld_enabled",
     "firewalld_enable_masquerade",
     "firewalld_enable_forward",
@@ -102,7 +126,7 @@ _BOOL_KEYS = {
     "debug",
 }
 _INT_KEYS = {"fallback_channel_2g", "channel_6g"}
-_FLOAT_KEYS = {"ap_ready_timeout_s"}
+_FLOAT_KEYS = {"ap_ready_timeout_s", "watchdog_interval_s", "telemetry_interval_s"}
 _IP_KEYS = {"lan_gateway_ip", "dhcp_start_ip", "dhcp_end_ip"}
 
 # Country: ISO 3166-1 alpha-2 or "00".
@@ -111,6 +135,7 @@ _COUNTRY_RE = re.compile(r"^(00|[A-Z]{2})$")
 # Allowed values (normalized)
 _ALLOWED_BANDS = {"2.4ghz", "5ghz", "6ghz"}
 _ALLOWED_SECURITY = {"wpa2", "wpa3_sae"}
+_ALLOWED_QOS = {"off", "vr", "balanced"}
 
 SERVER_VERSION = "vr-hotspotd/0.4"
 
@@ -225,6 +250,10 @@ UI_HTML = r"""<!doctype html>
   @media(max-width: 900px){ .two{ grid-template-columns: 1fr; } }
   .pillWarn { display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px; border:1px solid rgba(255,176,32,.30);
              background: rgba(255,176,32,.10); color: rgba(255,255,255,.72); }
+  table { width:100%; border-collapse: collapse; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--bd); font-size:12px; }
+  th { color: var(--mut); font-weight:600; }
+  .muted { color: var(--mut); }
 </style>
 </head>
 <body>
@@ -434,6 +463,55 @@ UI_HTML = r"""<!doctype html>
       </div>
 
       <div>
+        <label>Telemetry & watchdog</label>
+        <div class="row">
+          <label class="tog"><input type="checkbox" id="telemetry_enable" /> telemetry_enable</label>
+          <label class="tog"><input type="checkbox" id="watchdog_enable" /> watchdog_enable</label>
+        </div>
+        <div class="two" style="margin-top:8px;">
+          <div>
+            <label for="telemetry_interval_s">telemetry_interval_s</label>
+            <input id="telemetry_interval_s" type="number" step="0.5" min="0.5" />
+          </div>
+          <div>
+            <label for="watchdog_interval_s">watchdog_interval_s</label>
+            <input id="watchdog_interval_s" type="number" step="0.5" min="0.5" />
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <label for="qos_preset">QoS preset</label>
+        <select id="qos_preset">
+          <option value="off">off</option>
+          <option value="vr">vr (DSCP CS5 + cake)</option>
+          <option value="balanced">balanced (DSCP AF41 + fq_codel)</option>
+        </select>
+        <div class="row" style="margin-top:8px;">
+          <label class="tog"><input type="checkbox" id="nat_accel" /> nat_accel</label>
+        </div>
+        <div class="small" style="margin-top:6px;">DSCP marking is skipped when firewalld is managing rules.</div>
+      </div>
+
+      <div>
+        <label>Bridge mode</label>
+        <div class="row">
+          <label class="tog"><input type="checkbox" id="bridge_mode" /> bridge_mode</label>
+        </div>
+        <div class="two" style="margin-top:8px;">
+          <div>
+            <label for="bridge_name">bridge_name</label>
+            <input id="bridge_name" placeholder="vrbr0" />
+          </div>
+          <div>
+            <label for="bridge_uplink">bridge_uplink</label>
+            <input id="bridge_uplink" placeholder="e.g. eth0" />
+          </div>
+        </div>
+        <div class="small" style="margin-top:6px;">Bridge mode bypasses NAT/DHCP; AP clients join your LAN.</div>
+      </div>
+
+      <div>
         <label>Firewall (firewalld)</label>
         <div class="row">
           <label class="tog"><input type="checkbox" id="firewalld_enabled" /> enabled</label>
@@ -445,6 +523,7 @@ UI_HTML = r"""<!doctype html>
     </div>
 
     <div class="row" style="margin-top:12px;">
+      <button id="btnApplyVrProfile">Apply VR profile</button>
       <button class="primary" id="btnSaveConfig">Save config</button>
       <button class="primary" id="btnSaveRestart">Save & Restart</button>
     </div>
@@ -452,6 +531,26 @@ UI_HTML = r"""<!doctype html>
     <div class="small" style="margin-top:10px;">
       Security: API never returns passphrases in cleartext. To change passphrase, type a new one then Save.
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Telemetry</h2>
+    <div class="small">RSSI, bitrate, retries, loss (from station stats).</div>
+    <div class="small" id="telemetrySummary" style="margin-top:6px;"></div>
+    <div class="small muted" id="telemetryWarnings" style="margin-top:6px;"></div>
+    <table style="margin-top:10px;">
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>RSSI</th>
+          <th>TX Mbps</th>
+          <th>RX Mbps</th>
+          <th>Retries %</th>
+          <th>Loss %</th>
+        </tr>
+      </thead>
+      <tbody id="telemetryBody"></tbody>
+    </table>
   </div>
 
   <div class="card">
@@ -485,6 +584,8 @@ const CFG_IDS = [
   "optimized_no_virt","ap_adapter","ap_ready_timeout_s","fallback_channel_2g",
   "lan_gateway_ip","dhcp_start_ip","dhcp_end_ip","dhcp_dns","enable_internet",
   "wifi_power_save_disable","usb_autosuspend_disable","cpu_governor_performance","cpu_affinity","sysctl_tuning",
+  "telemetry_enable","telemetry_interval_s","watchdog_enable","watchdog_interval_s",
+  "qos_preset","nat_accel","bridge_mode","bridge_name","bridge_uplink",
   "firewalld_enabled","firewalld_enable_masquerade","firewalld_enable_forward","firewalld_cleanup_on_stop",
   "debug"
 ];
@@ -554,6 +655,79 @@ function setToken(v){
 function fmtTs(epoch){
   if (!epoch) return '—';
   try{ return new Date(epoch * 1000).toLocaleString(); }catch{ return String(epoch); }
+}
+
+function fmtNum(v, digits=1){
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  const n = Number(v);
+  if (Number.isNaN(n)) return '—';
+  return n.toFixed(digits);
+}
+
+function fmtPct(v){
+  return (v === null || v === undefined) ? '—' : fmtNum(v, 1);
+}
+
+function fmtDbm(v){
+  return (v === null || v === undefined) ? '—' : `${v} dBm`;
+}
+
+function fmtMbps(v){
+  return (v === null || v === undefined) ? '—' : fmtNum(v, 1);
+}
+
+function renderTelemetry(t){
+  const sumEl = document.getElementById('telemetrySummary');
+  const warnEl = document.getElementById('telemetryWarnings');
+  const body = document.getElementById('telemetryBody');
+  if (!body || !sumEl || !warnEl) return;
+
+  body.innerHTML = '';
+  if (!t || t.enabled === false){
+    sumEl.textContent = 'Telemetry disabled.';
+    warnEl.textContent = '';
+    return;
+  }
+
+  const summary = t.summary || {};
+  sumEl.textContent =
+    `clients=${summary.client_count ?? 0} ` +
+    `rssi_avg=${fmtDbm(summary.rssi_avg_dbm)} ` +
+    `loss_avg=${fmtPct(summary.loss_pct_avg)}%`;
+
+  const warns = (t.warnings || []).join(' · ');
+  warnEl.textContent = warns ? `warnings: ${warns}` : '';
+
+  const clients = t.clients || [];
+  if (!clients.length){
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.textContent = 'No clients connected.';
+    td.className = 'muted';
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
+
+  for (const c of clients){
+    const tr = document.createElement('tr');
+    const id = (c.mac || '—') + (c.ip ? ` (${c.ip})` : '');
+    const cols = [
+      id,
+      fmtDbm(c.signal_dbm),
+      fmtMbps(c.tx_bitrate_mbps),
+      fmtMbps(c.rx_bitrate_mbps),
+      fmtPct(c.retry_pct),
+      fmtPct(c.loss_pct),
+    ];
+    for (const text of cols){
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
 }
 
 async function api(path, opts={}){
@@ -672,6 +846,27 @@ function maybeAutoPickAdapterForBand(){
   }
 }
 
+function applyVrProfile(){
+  document.getElementById('band_preference').value = '5ghz';
+  document.getElementById('ap_security').value = 'wpa2';
+  document.getElementById('optimized_no_virt').checked = false;
+  document.getElementById('enable_internet').checked = true;
+  document.getElementById('wifi_power_save_disable').checked = true;
+  document.getElementById('usb_autosuspend_disable').checked = true;
+  document.getElementById('cpu_governor_performance').checked = true;
+  document.getElementById('sysctl_tuning').checked = true;
+  document.getElementById('telemetry_enable').checked = true;
+  document.getElementById('telemetry_interval_s').value = '2.0';
+  document.getElementById('watchdog_enable').checked = true;
+  document.getElementById('watchdog_interval_s').value = '2.0';
+  document.getElementById('qos_preset').value = 'vr';
+  document.getElementById('nat_accel').checked = true;
+  document.getElementById('bridge_mode').checked = false;
+  enforceBandRules();
+  maybeAutoPickAdapterForBand();
+  setDirty(true);
+}
+
 function getForm(){
   const out = {
     ssid: document.getElementById('ssid').value,
@@ -687,6 +882,13 @@ function getForm(){
     usb_autosuspend_disable: document.getElementById('usb_autosuspend_disable').checked,
     cpu_governor_performance: document.getElementById('cpu_governor_performance').checked,
     sysctl_tuning: document.getElementById('sysctl_tuning').checked,
+    telemetry_enable: document.getElementById('telemetry_enable').checked,
+    telemetry_interval_s: parseFloat(document.getElementById('telemetry_interval_s').value || '2.0'),
+    watchdog_enable: document.getElementById('watchdog_enable').checked,
+    watchdog_interval_s: parseFloat(document.getElementById('watchdog_interval_s').value || '2.0'),
+    qos_preset: document.getElementById('qos_preset').value,
+    nat_accel: document.getElementById('nat_accel').checked,
+    bridge_mode: document.getElementById('bridge_mode').checked,
     firewalld_enabled: document.getElementById('firewalld_enabled').checked,
     firewalld_enable_masquerade: document.getElementById('firewalld_enable_masquerade').checked,
     firewalld_enable_forward: document.getElementById('firewalld_enable_forward').checked,
@@ -715,6 +917,9 @@ function getForm(){
   if (dhcpDns) out.dhcp_dns = dhcpDns;
 
   out.cpu_affinity = (document.getElementById('cpu_affinity').value || '').trim();
+
+  out.bridge_name = (document.getElementById('bridge_name').value || '').trim();
+  out.bridge_uplink = (document.getElementById('bridge_uplink').value || '').trim();
 
   // Only send passphrase if user typed a new one.
   const pw = (document.getElementById('wpa2_passphrase').value || '').trim();
@@ -751,6 +956,15 @@ function applyConfig(cfg){
   document.getElementById('usb_autosuspend_disable').checked = !!cfg.usb_autosuspend_disable;
   document.getElementById('cpu_governor_performance').checked = !!cfg.cpu_governor_performance;
   document.getElementById('sysctl_tuning').checked = !!cfg.sysctl_tuning;
+  document.getElementById('telemetry_enable').checked = (cfg.telemetry_enable !== false);
+  document.getElementById('telemetry_interval_s').value = (cfg.telemetry_interval_s ?? 2.0);
+  document.getElementById('watchdog_enable').checked = (cfg.watchdog_enable !== false);
+  document.getElementById('watchdog_interval_s').value = (cfg.watchdog_interval_s ?? 2.0);
+  document.getElementById('qos_preset').value = (cfg.qos_preset || 'off');
+  document.getElementById('nat_accel').checked = !!cfg.nat_accel;
+  document.getElementById('bridge_mode').checked = !!cfg.bridge_mode;
+  document.getElementById('bridge_name').value = (cfg.bridge_name || 'vrbr0');
+  document.getElementById('bridge_uplink').value = (cfg.bridge_uplink || '');
   document.getElementById('cpu_affinity').value = (cfg.cpu_affinity || '');
   document.getElementById('firewalld_enabled').checked = !!cfg.firewalld_enabled;
   document.getElementById('firewalld_enable_masquerade').checked = !!cfg.firewalld_enable_masquerade;
@@ -850,6 +1064,8 @@ async function refresh(){
   const err = (eng.stderr_tail || []).join('\n');
   document.getElementById('stdout').textContent = privacy ? '(hidden)' : (out || '(empty)');
   document.getElementById('stderr').textContent = privacy ? '(hidden)' : (err || '(empty)');
+
+  renderTelemetry(s.telemetry);
 }
 
 let refreshTimer = null;
@@ -954,6 +1170,11 @@ document.getElementById('btnSaveConfig').addEventListener('click', async () => {
     document.getElementById('wpa2_passphrase').value = '';
   }
   await refresh();
+});
+
+document.getElementById('btnApplyVrProfile').addEventListener('click', () => {
+  applyVrProfile();
+  setMsg('VR profile applied (not saved).');
 });
 
 document.getElementById('btnSaveRestart').addEventListener('click', async () => {
@@ -1163,6 +1384,8 @@ class APIHandler(BaseHTTPRequestHandler):
             "security": "ap_security",
             "channel6g": "channel_6g",
             "channel_6ghz": "channel_6g",
+            "qos": "qos_preset",
+            "bridge": "bridge_mode",
         }
         for src, dst in alias_map.items():
             if src in d and dst not in d:
@@ -1303,6 +1526,32 @@ class APIHandler(BaseHTTPRequestHandler):
                         out[k] = s
                 elif v is not None:
                     warnings.append("invalid_cpu_affinity")
+                    out.pop(k, None)
+
+            if k == "qos_preset":
+                if isinstance(v, str):
+                    s = v.strip().lower()
+                    if s in _ALLOWED_QOS:
+                        out[k] = s
+                    else:
+                        warnings.append("invalid_qos_preset")
+                        out.pop(k, None)
+                elif v is not None:
+                    warnings.append("invalid_qos_preset")
+                    out.pop(k, None)
+
+            if k in ("bridge_name", "bridge_uplink"):
+                if isinstance(v, str):
+                    s = v.strip()
+                    if not s:
+                        out[k] = ""
+                    elif len(s) > 15 or not re.match(r"^[a-zA-Z0-9_.:-]+$", s):
+                        warnings.append(f"invalid_{k}")
+                        out.pop(k, None)
+                    else:
+                        out[k] = s
+                elif v is not None:
+                    warnings.append(f"invalid_{k}")
                     out.pop(k, None)
 
             if k in _IP_KEYS:
@@ -1449,6 +1698,24 @@ class APIHandler(BaseHTTPRequestHandler):
             secrets.append(pw)
 
         out = copy.deepcopy(st)
+        telemetry_enabled = bool(cfg.get("telemetry_enable", True))
+        if telemetry_enabled:
+            interval = cfg.get("telemetry_interval_s", 2.0)
+            if out.get("running"):
+                out["telemetry"] = telemetry.get_snapshot(
+                    adapter_ifname=out.get("adapter"),
+                    enabled=True,
+                    interval_s=float(interval) if interval is not None else 2.0,
+                )
+            else:
+                out["telemetry"] = {
+                    "enabled": True,
+                    "clients": [],
+                    "summary": {"client_count": 0},
+                    "warnings": ["not_running"],
+                }
+        else:
+            out["telemetry"] = {"enabled": False}
         eng = out.get("engine") if isinstance(out, dict) else None
         if isinstance(eng, dict):
             eng["cmd"] = self._redact_cmd_list(eng.get("cmd"))

@@ -86,10 +86,49 @@ System tuning options:
 - `cpu_governor_performance`: sets CPU governor to `performance` while the hotspot runs
 - `cpu_affinity`: pins hostapd/dnsmasq/engine to specific CPUs (e.g., `"2"` or `"2-3"` or `"2,4"`)
 - `sysctl_tuning`: raises socket buffers and enables `bbr` + `fq` if supported
+- `watchdog_enable`: restarts hostapd/dnsmasq on unexpected exits (with backoff)
+- `watchdog_interval_s`: watchdog polling interval
+- `telemetry_enable`: continuous station telemetry (RSSI/bitrate/retries/loss)
+- `telemetry_interval_s`: telemetry sampling interval
+- `qos_preset`: apply DSCP marking + qdisc preset (`off` | `vr` | `balanced`)
+- `nat_accel`: best-effort nftables flowtable offload (skips when firewalld is active)
+- `bridge_mode`: bridge AP to uplink (bypass NAT/DHCP)
+- `bridge_name`: Linux bridge interface name (default: `vrbr0`)
+- `bridge_uplink`: explicit uplink interface (optional; defaults to system uplink)
 
 Notes:
 - These changes are applied on start and reverted on stop/repair when possible.
 - Some systems may block governor or sysctl changes; VR Hotspot will warn but continue.
+
+## Preflight checks
+
+Before start, the daemon performs best-effort preflight checks for:
+- rfkill (blocked Wi-Fi devices)
+- regulatory domain mismatches
+- missing hostapd features (SAE/11ax where required)
+- subnet conflicts (NAT mode)
+
+Preflight warnings are surfaced in `/v1/status` and the UI.
+
+## QoS presets and NAT acceleration (optional)
+
+- QoS presets apply DSCP marking and a qdisc (`cake` or `fq_codel`) on the AP interface.
+- NAT acceleration uses nftables flowtable offload when firewalld is not managing rules.
+
+## Bridge mode (optional)
+
+Bridge mode bypasses NAT and DHCP by bridging the AP to an uplink interface.
+It is useful when you want the headset on the same LAN as the host.
+
+Notes:
+- Uses a dedicated hostapd bridge engine (no dnsmasq).
+- Moves IPv4 addresses from the uplink to the bridge during runtime and restores on stop.
+- Requires a valid uplink interface (set `bridge_uplink` to override).
+
+## VR profile preset
+
+The UI includes a **VR profile** button that applies known-good defaults for streaming
+without saving immediately (you can review and Save/Restart).
 
 ## Hardware tips
 
@@ -139,7 +178,7 @@ Designed to work whether the system has `hostapd` / `dnsmasq` installed or not:
 │   │   └── bin/                          # Bundled binaries (dnsmasq/hostapd/hostapd_cli/lnxrouter)
 │   └── vr_hotspotd/
 │       ├── adapters/                     # Adapter enumeration + capability detection
-│       ├── engine/                       # lnxrouter and 6 GHz hostapd engines
+│       ├── engine/                       # lnxrouter, 6 GHz hostapd, and bridge engine
 │       ├── api.py                        # REST API endpoints (/v1/*, /healthz)
 │       ├── lifecycle.py                  # Start/stop/repair orchestration (serialized + reconciled)
 │       ├── server.py                     # HTTP server wiring (UI + API)
