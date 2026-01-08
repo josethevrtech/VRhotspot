@@ -71,6 +71,7 @@ def detect_adapter_profile(adapter_info: Dict) -> Optional[Dict[str, any]]:
     usb_id = adapter_info.get("usb_id")
     if usb_id:
         # Could add USB ID matching here if we have that info
+        pass
     
     return None
 
