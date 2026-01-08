@@ -212,659 +212,215 @@ UI_HTML = r"""<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
 <title>VR Hotspot</title>
-<meta name="theme-color" content="#0a0d12" />
+<meta name="theme-color" content="#0b0f14" />
 <style>
-  :root { 
-    color-scheme: dark; 
-    --bg: #0a0d12;
-    --bg-elevated: #11151a;
-    --bg-card: #151a20;
-    --fg: rgba(255,255,255,.95);
-    --fg-muted: rgba(255,255,255,.65);
-    --fg-subtle: rgba(255,255,255,.45);
-    --bd: rgba(255,255,255,.08);
-    --bd-hover: rgba(255,255,255,.15);
-    --accent: #5b9fff;
-    --accent-hover: #6ba8ff;
-    --accent-light: rgba(91,159,255,.15);
-    --good: #2fe08b;
-    --good-light: rgba(47,224,139,.15);
-    --bad: #ff5b5b;
-    --bad-light: rgba(255,91,91,.15);
-    --warn: #ffb020;
-    --warn-light: rgba(255,176,32,.15);
-    --shadow-sm: 0 2px 8px rgba(0,0,0,.3);
-    --shadow-md: 0 4px 16px rgba(0,0,0,.4);
-    --shadow-lg: 0 8px 32px rgba(0,0,0,.5);
-    --radius: 12px;
-    --radius-sm: 8px;
-    --radius-lg: 16px;
-    --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { 
-    margin: 0; 
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-    background: var(--bg);
-    background-image: radial-gradient(circle at 20% 50%, rgba(91,159,255,.03) 0%, transparent 50%),
-                      radial-gradient(circle at 80% 80%, rgba(47,224,139,.02) 0%, transparent 50%);
-    color: var(--fg);
-    line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-  .container { 
-    max-width: 1400px; 
-    margin: 0 auto; 
-    padding: 24px 20px;
-  }
-  @media (min-width: 768px) {
-    .container { padding: 32px 24px; }
-  }
-  @media (min-width: 1200px) {
-    .container { padding: 40px 32px; }
-  }
-
-  /* Header */
-  .header {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-    margin-bottom: 32px;
-    padding-bottom: 24px;
-    border-bottom: 1px solid var(--bd);
-  }
-  @media (min-width: 768px) {
-    .header {
-      flex-direction: row;
-      justify-content: space-between;
-      align-items: flex-start;
-    }
-  }
-  .header-left h1 {
-    font-size: 28px;
-    font-weight: 700;
-    margin: 0 0 6px 0;
-    background: linear-gradient(135deg, var(--fg) 0%, var(--fg-muted) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-  .header-left .subtitle {
-    font-size: 14px;
-    color: var(--fg-muted);
-    margin: 0;
-  }
-  .header-right {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    width: 100%;
-  }
-  @media (min-width: 768px) {
-    .header-right {
-      width: auto;
-      flex-direction: row;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-  }
-  .status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    border-radius: 999px;
-    border: 1px solid var(--bd);
-    background: var(--bg-card);
-    color: var(--fg-muted);
-    font-size: 13px;
-    font-weight: 500;
-    box-shadow: var(--shadow-sm);
-    transition: var(--transition);
-  }
-  .status-pill.ok {
-    border-color: var(--good);
-    background: var(--good-light);
-    color: var(--good);
-  }
-  .status-pill.err {
-    border-color: var(--bad);
-    background: var(--bad-light);
-    color: var(--bad);
-  }
-  .status-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--warn);
-    box-shadow: 0 0 0 3px rgba(255,176,32,.2);
-    animation: pulse 2s ease-in-out infinite;
-  }
-  .status-pill.ok .status-dot {
-    background: var(--good);
-    box-shadow: 0 0 0 3px rgba(47,224,139,.2);
-  }
-  .status-pill.err .status-dot {
-    background: var(--bad);
-    box-shadow: 0 0 0 3px rgba(255,91,91,.2);
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
-  }
-  .header-controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-  }
-  .header-controls-group {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    padding: 8px 12px;
-    background: var(--bg-card);
-    border: 1px solid var(--bd);
-    border-radius: var(--radius);
-  }
-
-  /* Cards */
-  .card {
-    background: var(--bg-card);
-    border: 1px solid var(--bd);
-    border-radius: var(--radius-lg);
-    padding: 24px;
-    margin-bottom: 24px;
-    box-shadow: var(--shadow-sm);
-    transition: var(--transition);
-  }
-  .card:hover {
-    border-color: var(--bd-hover);
-    box-shadow: var(--shadow-md);
-  }
-  .card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--bd);
-  }
-  .card-title {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--fg);
-    margin: 0;
-  }
-  .card-content {
-    display: grid;
-    gap: 20px;
-  }
-
-  /* Grid layouts */
-  .grid {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 20px;
-  }
-  @media (min-width: 768px) {
-    .grid { grid-template-columns: repeat(2, 1fr); }
-  }
-  @media (min-width: 1200px) {
-    .grid-3 { grid-template-columns: repeat(3, 1fr); }
-  }
-  .grid-full {
-    grid-column: 1 / -1;
-  }
-
-  /* Form elements */
-  .form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  label {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--fg-muted);
-    display: block;
-  }
-  input, select, textarea {
-    width: 100%;
-    padding: 12px 14px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--bd);
-    background: rgba(0,0,0,.3);
-    color: var(--fg);
-    font-size: 14px;
-    font-family: inherit;
-    transition: var(--transition);
-  }
-  input:focus, select:focus, textarea:focus {
-    outline: none;
-    border-color: var(--accent);
-    background: rgba(0,0,0,.4);
-    box-shadow: 0 0 0 3px var(--accent-light);
-  }
-  input::placeholder {
-    color: var(--fg-subtle);
-  }
-  .form-hint {
-    font-size: 12px;
-    color: var(--fg-subtle);
-    margin-top: 4px;
-  }
-
-  /* Buttons */
-  .btn {
-    padding: 12px 20px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--bd);
-    background: rgba(255,255,255,.05);
-    color: var(--fg);
-    font-size: 14px;
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    white-space: nowrap;
-    transition: var(--transition);
-    min-height: 44px;
-  }
-  .btn:hover:not(:disabled) {
-    background: rgba(255,255,255,.1);
-    border-color: var(--bd-hover);
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-sm);
-  }
-  .btn:active:not(:disabled) {
-    transform: translateY(0);
-  }
-  .btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  .btn-primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: white;
-  }
-  .btn-primary:hover:not(:disabled) {
-    background: var(--accent-hover);
-    border-color: var(--accent-hover);
-  }
-  .btn-danger {
-    background: var(--bad-light);
-    border-color: var(--bad);
-    color: var(--bad);
-  }
-  .btn-danger:hover:not(:disabled) {
-    background: var(--bad);
-    color: white;
-  }
-  .btn-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-
-  /* Toggle switches */
-  .toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--fg-muted);
-    font-size: 13px;
-    user-select: none;
-    cursor: pointer;
-  }
-  .toggle input[type="checkbox"] {
-    width: auto;
-    margin: 0;
-    cursor: pointer;
-  }
-  .toggle-group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 16px;
-  }
-
-  /* Sections */
-  .section {
-    margin-bottom: 32px;
-  }
-  .section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 16px;
-  }
-  .section-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--fg);
-  }
-  .collapsible {
-    cursor: pointer;
-    user-select: none;
-  }
-  .collapsible-content {
-    max-height: 0;
-    overflow: hidden;
-    transition: max-height 0.3s ease-out;
-  }
-  .collapsible-content.expanded {
-    max-height: 5000px;
-    transition: max-height 0.5s ease-in;
-  }
-  .collapsible-icon {
-    transition: transform 0.3s ease;
-    color: var(--fg-muted);
-  }
-  .collapsible.expanded .collapsible-icon {
-    transform: rotate(180deg);
-  }
-
-  /* Status and messages */
-  .status-meta {
-    font-size: 12px;
-    color: var(--fg-subtle);
-    font-family: ui-monospace, monospace;
-  }
-  .message {
-    padding: 12px 16px;
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    margin-top: 12px;
-  }
-  .message-success {
-    background: var(--good-light);
-    color: var(--good);
-    border: 1px solid var(--good);
-  }
-  .message-error {
-    background: var(--bad-light);
-    color: var(--bad);
-    border: 1px solid var(--bad);
-  }
-  .message-warning {
-    background: var(--warn-light);
-    color: var(--warn);
-    border: 1px solid var(--warn);
-  }
-
-  /* Hints and info boxes */
-  .hint {
-    margin-top: 8px;
-    padding: 12px 14px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--bd);
-    background: rgba(255,255,255,.03);
-    color: var(--fg-muted);
-    font-size: 12px;
-    line-height: 1.5;
-  }
-  .hint strong {
-    color: var(--fg);
-    font-weight: 600;
-  }
-  .pill-warn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    border-radius: 999px;
-    border: 1px solid var(--warn);
-    background: var(--warn-light);
-    color: var(--warn);
-    font-size: 12px;
-    font-weight: 500;
-  }
-
-  /* Code/mono blocks */
-  .mono {
-    font-family: ui-monospace, 'SF Mono', 'Monaco', 'Consolas', monospace;
-    font-size: 12px;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-    background: rgba(0,0,0,.4);
-    border: 1px solid var(--bd);
-    border-radius: var(--radius-sm);
-    padding: 16px;
-    max-height: 300px;
-    overflow: auto;
-    color: var(--fg-muted);
-    line-height: 1.6;
-  }
-  .mono::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  .mono::-webkit-scrollbar-track {
-    background: rgba(0,0,0,.2);
-    border-radius: 4px;
-  }
-  .mono::-webkit-scrollbar-thumb {
-    background: var(--bd);
-    border-radius: 4px;
-  }
-  .mono::-webkit-scrollbar-thumb:hover {
-    background: var(--bd-hover);
-  }
-
-  /* Tables */
-  .table-wrapper {
-    overflow-x: auto;
-    margin-top: 16px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--bd);
-  }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 600px;
-  }
-  th, td {
-    text-align: left;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--bd);
-    font-size: 13px;
-  }
-  th {
-    color: var(--fg-muted);
-    font-weight: 600;
-    background: rgba(0,0,0,.2);
-    position: sticky;
-    top: 0;
-  }
-  tbody tr {
-    transition: var(--transition);
-  }
-  tbody tr:hover {
-    background: rgba(255,255,255,.03);
-  }
-  tbody tr:last-child td {
-    border-bottom: none;
-  }
-  .muted {
-    color: var(--fg-subtle);
-  }
-
-  /* Responsive utilities */
-  .row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: center;
-  }
-  .small {
-    font-size: 12px;
-    color: var(--fg-muted);
-  }
-  .text-center {
-    text-align: center;
-  }
+  :root { color-scheme: dark; --bg:#0b0f14; --fg:rgba(255,255,255,.92); --mut:rgba(255,255,255,.70);
+          --bd:rgba(255,255,255,.12); --p:#101823; --a:#4aa3ff; --good:#2fe08b; --bad:#ff5b5b;
+          --shadow-sm: 0 2px 8px rgba(0,0,0,.2); --shadow-md: 0 4px 16px rgba(0,0,0,.3);
+          --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; 
+         background:var(--bg); background-image: radial-gradient(circle at 20% 50%, rgba(74,163,255,.02) 0%, transparent 50%),
+                      radial-gradient(circle at 80% 80%, rgba(47,224,139,.015) 0%, transparent 50%);
+         color:var(--fg); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 16px 12px; }
+  @media (min-width: 768px) { .wrap { padding: 24px 20px; } }
+  @media (max-width: 480px) { 
+    .wrap { padding: 12px 10px; }
+    h1 { font-size: 18px; }
+    .row { gap: 8px; }
+    .card { padding: 14px; margin-top: 12px; }
+    button { padding: 10px 14px; font-size: 13px; min-height: 38px; }
+  }
+  .row { display:flex; gap:10px; flex-wrap: wrap; align-items: center; }
+  @media (max-width: 480px) {
+    .row { gap: 8px; }
+    .row[style*="justify-content: space-between"] { flex-direction: column; align-items: flex-start; gap: 16px; }
+    .row[style*="justify-content:flex-end"] { flex-direction: column; align-items: stretch; gap: 12px; }
+    .row[style*="justify-content:flex-end"] > * { width: 100%; }
+    .row[style*="justify-content:flex-end"] button,
+    .row[style*="justify-content:flex-end"] select { width: 100%; }
+    .row[style*="justify-content:flex-end"] > div[style*="min-width"] { min-width: 100% !important; }
+    h1 { margin-bottom: 8px; }
+  }
+  .card { border:1px solid var(--bd); background: var(--p); border-radius: 14px; padding: 16px; margin-top: 16px;
+          box-shadow: var(--shadow-sm); transition: var(--transition); }
+  .card:hover { box-shadow: var(--shadow-md); border-color: rgba(255,255,255,.16); }
+  h1 { font-size: 20px; margin:0 0 4px 0; font-weight: 700; }
+  @media (min-width: 768px) { h1 { font-size: 24px; } }
+  h2 { font-size: 15px; margin:0 0 12px 0; color: rgba(255,255,255,.92); font-weight: 600; }
+  label { font-size: 12px; color: var(--mut); display:block; margin-bottom: 6px; font-weight: 500; }
+  input, select { width:100%; padding:10px 12px; border-radius: 10px; border:1px solid var(--bd); 
+                  background: rgba(0,0,0,.25); color: var(--fg); font-size: 14px;
+                  transition: var(--transition); }
+  input:focus, select:focus { outline: none; border-color: var(--a); background: rgba(0,0,0,.35);
+                               box-shadow: 0 0 0 3px rgba(74,163,255,.1); }
+  input::placeholder { color: rgba(255,255,255,.4); }
+  button { padding:10px 16px; border-radius: 10px; border:1px solid var(--bd); 
+           background: rgba(255,255,255,.06); color: var(--fg);
+           cursor:pointer; font-weight: 600; min-height: 40px; 
+           display:inline-flex; align-items:center; justify-content:center; white-space: nowrap;
+           transition: var(--transition); font-size: 14px; }
+  button:hover:not(:disabled) { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.18);
+                                  transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+  button:active:not(:disabled) { transform: translateY(0); }
+  button.primary { border-color: rgba(74,163,255,.4); background: rgba(74,163,255,.18); }
+  button.primary:hover:not(:disabled) { background: rgba(74,163,255,.25); border-color: rgba(74,163,255,.5); }
+  button.danger  { border-color: rgba(255,91,91,.4); background: rgba(255,91,91,.16); }
+  button.danger:hover:not(:disabled) { background: rgba(255,91,91,.22); border-color: rgba(255,91,91,.5); }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+  .pill { display:inline-flex; gap:8px; align-items:center; padding:10px 16px; border-radius:10px; 
+          border:1px solid var(--bd); background: rgba(255,255,255,.06); color: var(--mut); 
+          max-width:100%; box-shadow: var(--shadow-sm); transition: var(--transition);
+          font-size: 13px; font-weight: 500; }
   @media (max-width: 767px) {
-    .hide-mobile {
-      display: none !important;
-    }
-    .card {
-      padding: 20px 16px;
-    }
-    .btn-group {
-      flex-direction: column;
-    }
-    .btn-group .btn {
-      width: 100%;
-    }
+    .pill { padding: 8px 12px; font-size: 12px; }
   }
-
-  /* Loading states */
-  .loading {
-    opacity: 0.6;
-    pointer-events: none;
-  }
-
-  /* Animations */
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .card {
-    animation: fadeIn 0.3s ease-out;
-  }
+  .dot { width:10px; height:10px; border-radius:999px; background: #ffb020; 
+         box-shadow: 0 0 0 3px rgba(255,176,32,.2); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+  .pill.ok { border-color: rgba(47,224,139,.3); background: rgba(47,224,139,.1); color: var(--good); }
+  .pill.ok .dot  { background: var(--good); box-shadow: 0 0 0 3px rgba(47,224,139,.25); }
+  .pill.err { border-color: rgba(255,91,91,.3); background: rgba(255,91,91,.1); color: var(--bad); }
+  .pill.err .dot { background: var(--bad);  box-shadow: 0 0 0 3px rgba(255,91,91,.25); }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media(max-width: 900px){ .grid{ grid-template-columns: 1fr; } }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+          font-size: 12px; white-space: pre-wrap; overflow-wrap:anywhere; word-break: break-word;
+          background: rgba(0,0,0,.35); border:1px solid var(--bd); border-radius: 10px; padding: 12px; 
+          max-height: 260px; overflow:auto; line-height: 1.6; }
+  .mono::-webkit-scrollbar { width: 8px; height: 8px; }
+  .mono::-webkit-scrollbar-track { background: rgba(0,0,0,.2); border-radius: 4px; }
+  .mono::-webkit-scrollbar-thumb { background: var(--bd); border-radius: 4px; }
+  .mono::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); }
+  .small { font-size: 12px; color: rgba(255,255,255,.70); }
+  .tog { display:inline-flex; align-items:center; gap:8px; color: var(--mut); font-size: 13px; user-select:none; }
+  .tog input { width:auto; }
+  .dangerText { color: rgba(255,91,91,.92); }
+  .hint { margin-top:8px; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,.12); 
+          background: rgba(255,255,255,.05); color: rgba(255,255,255,.75); line-height: 1.5; }
+  .hint strong { color: rgba(255,255,255,.92); font-weight: 600; }
+  .two { display:grid; grid-template-columns: 1fr 220px; gap: 10px; }
+  @media(max-width: 900px){ .two{ grid-template-columns: 1fr; } }
+  .pillWarn { display:inline-flex; gap:8px; align-items:center; padding:6px 12px; border-radius:999px; 
+              border:1px solid rgba(255,176,32,.35); background: rgba(255,176,32,.12); 
+              color: rgba(255,255,255,.85); font-weight: 500; }
+  table { width:100%; border-collapse: collapse; }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--bd); font-size:12px; }
+  th { color: var(--mut); font-weight:600; background: rgba(0,0,0,.15); position: sticky; top: 0; }
+  tbody tr { transition: var(--transition); }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+  tbody tr:last-child td { border-bottom: none; }
+  .muted { color: var(--mut); }
 </style>
 </head>
 <body>
-<div class="container">
-  <header class="header">
-    <div class="header-left">
+<div class="wrap">
+  <div class="row" style="justify-content: space-between;">
+    <div>
       <h1>VR Hotspot</h1>
-      <p class="subtitle">Local control panel for hotspot management</p>
+      <div class="small">Local control panel (start/stop, adapters, config)</div>
     </div>
-    <div class="header-right">
-      <div id="pill" class="status-pill">
-        <span class="status-dot"></span>
-        <span id="pillTxt">Loading…</span>
-      </div>
-      <div class="header-controls">
-        <button id="btnRefresh" class="btn">Refresh</button>
-        <label class="toggle" title="Auto refresh">
-          <input type="checkbox" id="autoRefresh" />
-          <span>Auto</span>
-        </label>
-        <select id="refreshEvery" title="Auto refresh interval" class="btn" style="padding: 12px 14px; min-width: 80px; background: var(--bg-card);">
-          <option value="2000">2s</option>
-          <option value="3000">3s</option>
-          <option value="5000">5s</option>
-          <option value="10000">10s</option>
-        </select>
-        <label class="toggle" title="Hide logs (recommended while streaming)">
-          <input type="checkbox" id="privacyMode" checked />
-          <span>Privacy</span>
-        </label>
-      </div>
-      <div class="form-group" style="min-width: 280px;">
-        <label for="apiToken">API Token (optional)</label>
-        <input id="apiToken" placeholder="Paste token if required" />
-        <div class="form-hint">Saved locally in your browser</div>
-      </div>
-    </div>
-  </header>
-
-  <!-- Controls and Status -->
-  <div class="grid">
-    <div class="card">
-      <div class="card-header">
-        <h2 class="card-title">Controls</h2>
-      </div>
-      <div class="card-content">
-        <div class="btn-group">
-          <button class="btn btn-primary" id="btnStart">Start</button>
-          <button class="btn" id="btnStartOverrides">Start (use form)</button>
-          <button class="btn btn-danger" id="btnStop">Stop</button>
-          <button class="btn" id="btnRestart">Restart</button>
-          <button class="btn" id="btnRepair">Repair</button>
-        </div>
-        <div id="msg" class="message" style="display: none;"></div>
-        <div id="dirty" class="message message-warning" style="display: none;"></div>
-        <div class="small" style="margin-top: 12px;">
-          Polling will not overwrite unsaved edits. Save config to persist changes.
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <h2 class="card-title">Status</h2>
-      </div>
-      <div class="card-content">
-        <div class="status-meta" id="statusMeta">—</div>
-        <div class="mono" id="rawStatus" style="margin-top: 16px;"></div>
+    <div class="row" style="justify-content:flex-end;">
+      <button id="btnRefresh">Refresh</button>
+      <label class="tog" title="Auto refresh">
+        <input type="checkbox" id="autoRefresh" />
+        Auto
+      </label>
+      <select id="refreshEvery" title="Auto refresh interval" style="width:auto; min-width: 70px;">
+        <option value="2000">2s</option>
+        <option value="3000">3s</option>
+        <option value="5000">5s</option>
+        <option value="10000">10s</option>
+      </select>
+      <label class="tog" title="Hide logs (recommended while streaming)">
+        <input type="checkbox" id="privacyMode" checked />
+        Privacy
+      </label>
+      <div style="min-width:260px;">
+        <label for="apiToken">API token</label>
+        <input id="apiToken" placeholder="Enter API token" />
+        <div class="small" style="margin-top:6px;">Saved locally in your browser.</div>
       </div>
     </div>
   </div>
 
-  <!-- Configuration -->
-  <div class="card">
-    <div class="card-header">
-      <h2 class="card-title">Configuration</h2>
+  <div class="grid">
+    <div class="card">
+      <h2>Controls</h2>
+      <div class="row">
+        <button class="primary" id="btnStart">Start</button>
+        <button id="btnStartOverrides">Start (use form)</button>
+        <button class="danger" id="btnStop">Stop</button>
+        <button id="btnRestart">Restart</button>
+        <button id="btnRepair">Repair</button>
+      </div>
+      <div id="msg" class="small" style="margin-top:10px;"></div>
+      <div id="dirty" class="small" style="margin-top:6px;"></div>
+      <div class="small" style="margin-top:10px;">
+        Polling will not overwrite unsaved edits. Save config to persist changes.
+      </div>
     </div>
-    <div class="card-content">
-      <div class="grid">
-        <!-- Basic Settings -->
-        <div class="form-group grid-full">
-          <h3 class="section-title" style="margin-bottom: 16px;">Basic Settings</h3>
-        </div>
-        <div class="form-group">
-          <label for="ssid">SSID</label>
-          <input id="ssid" />
-        </div>
-        <div class="form-group">
-          <label for="wpa2_passphrase">Passphrase (8–63 chars)</label>
-          <input id="wpa2_passphrase" type="password" placeholder="Type a new passphrase to change it" />
-          <div class="row" style="margin-top: 8px;">
-            <label class="toggle"><input type="checkbox" id="showPass" /> Show</label>
-            <div class="small" id="passHint"></div>
-          </div>
-        </div>
 
-        <!-- Wireless Settings -->
-        <div class="form-group grid-full">
-          <h3 class="section-title" style="margin-top: 8px; margin-bottom: 16px;">Wireless Settings</h3>
+    <div class="card">
+      <h2>Status</h2>
+      <div id="statusPillContainer" style="margin-bottom: 12px;">
+        <div id="pill" class="pill" style="display: none;"><span class="dot"></span><span id="pillTxt">Loading…</span></div>
+      </div>
+      <div class="small" id="statusMeta">—</div>
+      <div class="mono" id="rawStatus" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Config</h2>
+
+    <div class="grid">
+      <div>
+        <label for="ssid">SSID</label>
+        <input id="ssid" />
+      </div>
+
+      <div>
+        <label for="wpa2_passphrase">Passphrase (8–63 chars)</label>
+        <input id="wpa2_passphrase" type="password" placeholder="Type a new passphrase to change it" />
+        <div class="row" style="margin-top:8px;">
+          <label class="tog"><input type="checkbox" id="showPass" /> show</label>
+          <div class="small" id="passHint"></div>
         </div>
-        <div class="form-group">
-          <label for="band_preference">Band Preference</label>
-          <select id="band_preference">
-            <option value="6ghz">6 GHz (Wi-Fi 6E)</option>
-            <option value="5ghz">5 GHz</option>
-            <option value="2.4ghz">2.4 GHz</option>
-          </select>
-          <div class="hint" id="bandHint"></div>
+      </div>
+
+      <div>
+        <label for="band_preference">Band preference</label>
+        <select id="band_preference">
+          <option value="6ghz">6ghz (Wi-Fi 6E)</option>
+          <option value="5ghz">5ghz</option>
+          <option value="2.4ghz">2.4ghz</option>
+        </select>
+        <div class="hint" id="bandHint"></div>
+      </div>
+
+      <div>
+        <label for="ap_security">Security</label>
+        <select id="ap_security">
+          <option value="wpa2">WPA2 (PSK)</option>
+          <option value="wpa3_sae">WPA3 (SAE)</option>
+        </select>
+        <div class="hint" id="secHint"></div>
+      </div>
+
+      <div id="sixgBox" style="display:none;">
+        <label for="channel_6g">6 GHz channel (optional)</label>
+        <input id="channel_6g" type="number" step="1" min="1" max="233" placeholder="Leave blank for auto" />
+        <div class="small" style="margin-top:6px;">
+          If your driver is strict, you may need to set Country above (JP/AU/US etc.) for 6 GHz channels to be available.
         </div>
-        <div class="form-group">
-          <label for="ap_security">Security</label>
-          <select id="ap_security">
-            <option value="wpa2">WPA2 (PSK)</option>
-            <option value="wpa3_sae">WPA3 (SAE)</option>
-          </select>
-          <div class="hint" id="secHint"></div>
-        </div>
-        <div class="form-group" id="sixgBox" style="display:none;">
-          <label for="channel_6g">6 GHz Channel (optional)</label>
-          <input id="channel_6g" type="number" step="1" min="1" max="233" placeholder="Leave blank for auto" />
-          <div class="form-hint">
-            If your driver is strict, you may need to set Country above (JP/AU/US etc.) for 6 GHz channels to be available.
-          </div>
-        </div>
-        <div class="form-group">
-          <label>Country (Regulatory Domain)</label>
-          <div class="grid" style="grid-template-columns: 1fr 120px; gap: 12px;">
+      </div>
+
+      <div>
+        <label>Country (regulatory domain)</label>
+        <div class="two">
+          <div>
             <select id="country_sel" title="Common countries">
               <option value="US">United States (US)</option>
               <option value="JP">Japan (JP)</option>
@@ -891,184 +447,177 @@ UI_HTML = r"""<!doctype html>
               <option value="00">World / unset (00)</option>
               <option value="__custom">Custom…</option>
             </select>
+          </div>
+          <div>
             <input id="country" placeholder="US" maxlength="2" title="ISO alpha-2 or 00" />
           </div>
-          <div class="form-hint">
-            Use the country where the device is physically operating. Kernel enforces channel/power rules.
-          </div>
         </div>
-        <div class="form-group">
-          <label for="ap_adapter">AP Adapter</label>
-          <select id="ap_adapter"></select>
-          <div class="btn-group" style="margin-top: 8px;">
-            <button class="btn" id="btnUseRecommended">Use Recommended</button>
-            <button class="btn" id="btnReloadAdapters">Reload Adapters</button>
-          </div>
-          <div class="small" id="adapterHint" style="margin-top: 8px;"></div>
+        <div class="small" style="margin-top:6px;">
+          Use the country where the device is physically operating. Kernel enforces channel/power rules.
         </div>
-        <div class="form-group">
-          <label for="ap_ready_timeout_s">AP Ready Timeout (s)</label>
-          <input id="ap_ready_timeout_s" type="number" step="0.1" min="1" />
-        </div>
-        <div class="form-group">
-          <label for="fallback_channel_2g">Fallback 2.4GHz Channel (1–13)</label>
-          <input id="fallback_channel_2g" type="number" step="1" min="1" max="13" />
-        </div>
+      </div>
 
-        <!-- Network Settings -->
-        <div class="form-group grid-full">
-          <h3 class="section-title" style="margin-top: 8px; margin-bottom: 16px;">Network Settings</h3>
+      <div>
+        <label for="ap_adapter">AP adapter</label>
+        <select id="ap_adapter"></select>
+        <div class="row" style="margin-top:8px;">
+          <button id="btnUseRecommended">Use recommended</button>
+          <button id="btnReloadAdapters">Reload adapters</button>
         </div>
-        <div class="form-group">
-          <label for="lan_gateway_ip">LAN Gateway IP</label>
-          <input id="lan_gateway_ip" placeholder="192.168.68.1" />
-          <div class="form-hint">/24 subnet is assumed for now.</div>
-        </div>
-        <div class="form-group">
-          <label for="dhcp_start_ip">DHCP Start IP</label>
-          <input id="dhcp_start_ip" placeholder="192.168.68.10" />
-        </div>
-        <div class="form-group">
-          <label for="dhcp_end_ip">DHCP End IP</label>
-          <input id="dhcp_end_ip" placeholder="192.168.68.250" />
-        </div>
-        <div class="form-group">
-          <label for="dhcp_dns">DHCP DNS</label>
-          <input id="dhcp_dns" placeholder="gateway or 1.1.1.1,8.8.8.8" />
-          <div class="form-hint">Use "gateway" (default) or "no" to omit.</div>
-        </div>
+        <div class="small" id="adapterHint" style="margin-top:6px;"></div>
+      </div>
 
-        <!-- Advanced Settings -->
-        <div class="form-group grid-full">
-          <h3 class="section-title" style="margin-top: 8px; margin-bottom: 16px;">Advanced Settings</h3>
+      <div>
+        <label for="ap_ready_timeout_s">AP ready timeout (s)</label>
+        <input id="ap_ready_timeout_s" type="number" step="0.1" min="1" />
+      </div>
+
+      <div>
+        <label for="fallback_channel_2g">Fallback 2.4GHz channel (1–13)</label>
+        <input id="fallback_channel_2g" type="number" step="1" min="1" max="13" />
+      </div>
+
+      <div>
+        <label for="lan_gateway_ip">LAN gateway IP</label>
+        <input id="lan_gateway_ip" placeholder="192.168.68.1" />
+        <div class="small" style="margin-top:6px;">/24 subnet is assumed for now.</div>
+      </div>
+
+      <div>
+        <label for="dhcp_start_ip">DHCP start IP</label>
+        <input id="dhcp_start_ip" placeholder="192.168.68.10" />
+      </div>
+
+      <div>
+        <label for="dhcp_end_ip">DHCP end IP</label>
+        <input id="dhcp_end_ip" placeholder="192.168.68.250" />
+      </div>
+
+      <div>
+        <label for="dhcp_dns">DHCP DNS</label>
+        <input id="dhcp_dns" placeholder="gateway or 1.1.1.1,8.8.8.8" />
+        <div class="small" style="margin-top:6px;">Use "gateway" (default) or "no" to omit.</div>
+      </div>
+
+      <div>
+        <label>Flags</label>
+        <div class="row">
+          <label class="tog"><input type="checkbox" id="optimized_no_virt" /> optimized_no_virt</label>
+          <label class="tog"><input type="checkbox" id="enable_internet" /> enable_internet</label>
+          <label class="tog"><input type="checkbox" id="debug" /> debug</label>
         </div>
-        <div class="form-group">
-          <label>Flags</label>
-          <div class="toggle-group">
-            <label class="toggle"><input type="checkbox" id="optimized_no_virt" /> optimized_no_virt</label>
-            <label class="toggle"><input type="checkbox" id="enable_internet" /> enable_internet</label>
-            <label class="toggle"><input type="checkbox" id="debug" /> debug</label>
-          </div>
+      </div>
+
+      <div>
+        <label>System tuning</label>
+        <div class="row">
+          <label class="tog"><input type="checkbox" id="wifi_power_save_disable" /> wifi_power_save_disable</label>
+          <label class="tog"><input type="checkbox" id="usb_autosuspend_disable" /> usb_autosuspend_disable</label>
+          <label class="tog"><input type="checkbox" id="cpu_governor_performance" /> cpu_governor_performance</label>
+          <label class="tog"><input type="checkbox" id="sysctl_tuning" /> sysctl_tuning</label>
         </div>
-        <div class="form-group">
-          <label>System Tuning</label>
-          <div class="toggle-group">
-            <label class="toggle"><input type="checkbox" id="wifi_power_save_disable" /> wifi_power_save_disable</label>
-            <label class="toggle"><input type="checkbox" id="usb_autosuspend_disable" /> usb_autosuspend_disable</label>
-            <label class="toggle"><input type="checkbox" id="cpu_governor_performance" /> cpu_governor_performance</label>
-            <label class="toggle"><input type="checkbox" id="sysctl_tuning" /> sysctl_tuning</label>
-          </div>
-          <div style="margin-top: 12px;">
-            <label for="cpu_affinity">CPU Affinity</label>
-            <input id="cpu_affinity" placeholder="e.g. 2 or 2-3 or 2,4" />
-          </div>
+        <div style="margin-top:8px;">
+          <label for="cpu_affinity">cpu_affinity</label>
+          <input id="cpu_affinity" placeholder="e.g. 2 or 2-3 or 2,4" />
         </div>
-        <div class="form-group">
-          <label>Telemetry & Watchdog</label>
-          <div class="toggle-group">
-            <label class="toggle"><input type="checkbox" id="telemetry_enable" /> telemetry_enable</label>
-            <label class="toggle"><input type="checkbox" id="watchdog_enable" /> watchdog_enable</label>
-          </div>
-          <div class="grid" style="margin-top: 12px;">
-            <div class="form-group">
-              <label for="telemetry_interval_s">Telemetry Interval (s)</label>
-              <input id="telemetry_interval_s" type="number" step="0.5" min="0.5" />
-            </div>
-            <div class="form-group">
-              <label for="watchdog_interval_s">Watchdog Interval (s)</label>
-              <input id="watchdog_interval_s" type="number" step="0.5" min="0.5" />
-            </div>
-          </div>
+      </div>
+
+      <div>
+        <label>Telemetry & watchdog</label>
+        <div class="row">
+          <label class="tog"><input type="checkbox" id="telemetry_enable" /> telemetry_enable</label>
+          <label class="tog"><input type="checkbox" id="watchdog_enable" /> watchdog_enable</label>
         </div>
-        <div class="form-group">
-          <label for="qos_preset">QoS Preset</label>
-          <select id="qos_preset">
-            <option value="off">off</option>
-            <option value="vr">vr (DSCP CS5 + cake)</option>
-            <option value="balanced">balanced (DSCP AF41 + fq_codel)</option>
-          </select>
-          <div class="toggle-group" style="margin-top: 12px;">
-            <label class="toggle"><input type="checkbox" id="nat_accel" /> nat_accel</label>
+        <div class="two" style="margin-top:8px;">
+          <div>
+            <label for="telemetry_interval_s">telemetry_interval_s</label>
+            <input id="telemetry_interval_s" type="number" step="0.5" min="0.5" />
           </div>
-          <div class="form-hint">DSCP marking is skipped when firewalld is managing rules.</div>
-        </div>
-        <div class="form-group">
-          <label>Bridge Mode</label>
-          <div class="toggle-group">
-            <label class="toggle"><input type="checkbox" id="bridge_mode" /> bridge_mode</label>
-          </div>
-          <div class="grid" style="margin-top: 12px;">
-            <div class="form-group">
-              <label for="bridge_name">Bridge Name</label>
-              <input id="bridge_name" placeholder="vrbr0" />
-            </div>
-            <div class="form-group">
-              <label for="bridge_uplink">Bridge Uplink</label>
-              <input id="bridge_uplink" placeholder="e.g. eth0" />
-            </div>
-          </div>
-          <div class="form-hint">Bridge mode bypasses NAT/DHCP; AP clients join your LAN.</div>
-        </div>
-        <div class="form-group">
-          <label>Firewall (firewalld)</label>
-          <div class="toggle-group">
-            <label class="toggle"><input type="checkbox" id="firewalld_enabled" /> enabled</label>
-            <label class="toggle"><input type="checkbox" id="firewalld_enable_masquerade" /> masquerade</label>
-            <label class="toggle"><input type="checkbox" id="firewalld_enable_forward" /> forward</label>
-            <label class="toggle"><input type="checkbox" id="firewalld_cleanup_on_stop" /> cleanup_on_stop</label>
+          <div>
+            <label for="watchdog_interval_s">watchdog_interval_s</label>
+            <input id="watchdog_interval_s" type="number" step="0.5" min="0.5" />
           </div>
         </div>
       </div>
 
-      <div class="btn-group" style="margin-top: 24px;">
-        <button class="btn" id="btnApplyVrProfile">Apply VR Profile</button>
-        <button class="btn btn-primary" id="btnSaveConfig">Save Config</button>
-        <button class="btn btn-primary" id="btnSaveRestart">Save & Restart</button>
+      <div>
+        <label for="qos_preset">QoS preset</label>
+        <select id="qos_preset">
+          <option value="off">off</option>
+          <option value="vr">vr (DSCP CS5 + cake)</option>
+          <option value="balanced">balanced (DSCP AF41 + fq_codel)</option>
+        </select>
+        <div class="row" style="margin-top:8px;">
+          <label class="tog"><input type="checkbox" id="nat_accel" /> nat_accel</label>
+        </div>
+        <div class="small" style="margin-top:6px;">DSCP marking is skipped when firewalld is managing rules.</div>
       </div>
 
-      <div class="small" style="margin-top: 16px; padding: 12px; background: rgba(255,255,255,.03); border-radius: var(--radius-sm);">
-        Security: API never returns passphrases in cleartext. To change passphrase, type a new one then Save.
+      <div>
+        <label>Bridge mode</label>
+        <div class="row">
+          <label class="tog"><input type="checkbox" id="bridge_mode" /> bridge_mode</label>
+        </div>
+        <div class="two" style="margin-top:8px;">
+          <div>
+            <label for="bridge_name">bridge_name</label>
+            <input id="bridge_name" placeholder="vrbr0" />
+          </div>
+          <div>
+            <label for="bridge_uplink">bridge_uplink</label>
+            <input id="bridge_uplink" placeholder="e.g. eth0" />
+          </div>
+        </div>
+        <div class="small" style="margin-top:6px;">Bridge mode bypasses NAT/DHCP; AP clients join your LAN.</div>
       </div>
+
+      <div>
+        <label>Firewall (firewalld)</label>
+        <div class="row">
+          <label class="tog"><input type="checkbox" id="firewalld_enabled" /> enabled</label>
+          <label class="tog"><input type="checkbox" id="firewalld_enable_masquerade" /> masquerade</label>
+          <label class="tog"><input type="checkbox" id="firewalld_enable_forward" /> forward</label>
+          <label class="tog"><input type="checkbox" id="firewalld_cleanup_on_stop" /> cleanup_on_stop</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="btnApplyVrProfile">Apply VR profile</button>
+      <button class="primary" id="btnSaveConfig">Save config</button>
+      <button class="primary" id="btnSaveRestart">Save & Restart</button>
+    </div>
+
+    <div class="small" style="margin-top:10px;">
+      Security: API never returns passphrases in cleartext. To change passphrase, type a new one then Save.
     </div>
   </div>
 
-  <!-- Telemetry -->
   <div class="card">
-    <div class="card-header">
-      <h2 class="card-title">Telemetry</h2>
-    </div>
-    <div class="card-content">
-      <div class="small">RSSI, bitrate, retries, loss (from station stats).</div>
-      <div class="small" id="telemetrySummary" style="margin-top: 12px;"></div>
-      <div class="small muted" id="telemetryWarnings" style="margin-top: 8px;"></div>
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>Client</th>
-              <th>RSSI</th>
-              <th>TX Mbps</th>
-              <th>RX Mbps</th>
-              <th>Retries %</th>
-              <th>Loss %</th>
-            </tr>
-          </thead>
-          <tbody id="telemetryBody"></tbody>
-        </table>
-      </div>
-    </div>
+    <h2>Telemetry</h2>
+    <div class="small">RSSI, bitrate, retries, loss (from station stats).</div>
+    <div class="small" id="telemetrySummary" style="margin-top:6px;"></div>
+    <div class="small muted" id="telemetryWarnings" style="margin-top:6px;"></div>
+    <table style="margin-top:10px;">
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>RSSI</th>
+          <th>TX Mbps</th>
+          <th>RX Mbps</th>
+          <th>Retries %</th>
+          <th>Loss %</th>
+        </tr>
+      </thead>
+      <tbody id="telemetryBody"></tbody>
+    </table>
   </div>
 
-  <!-- Engine Logs -->
   <div class="card">
-    <div class="card-header">
-      <h2 class="card-title">Engine Logs</h2>
-    </div>
-    <div class="card-content">
-      <div class="small">Logs are hidden while Privacy is ON.</div>
-      <div class="mono" id="stdout" style="margin-top: 16px;"></div>
-      <div class="mono" id="stderr" style="margin-top: 16px;"></div>
-    </div>
+    <h2>Engine logs</h2>
+    <div class="small">Logs are hidden while Privacy is ON.</div>
+    <div class="mono" id="stdout" style="margin-top:10px;"></div>
+    <div class="mono" id="stderr" style="margin-top:10px;"></div>
   </div>
 </div>
 
@@ -1103,14 +652,7 @@ const CFG_IDS = [
 
 function setDirty(v){
   cfgDirty = !!v;
-  const el = document.getElementById('dirty');
-  if (cfgDirty) {
-    el.textContent = '⚠️ Unsaved changes';
-    el.className = 'message message-warning';
-    el.style.display = '';
-  } else {
-    el.style.display = 'none';
-  }
+  document.getElementById('dirty').textContent = cfgDirty ? 'Unsaved changes' : '';
 }
 
 function markDirty(ev){
@@ -1263,18 +805,8 @@ async function api(path, opts={}){
 
 function setMsg(text, kind=''){
   const el = document.getElementById('msg');
-  if (!text) {
-    el.style.display = 'none';
-    return;
-  }
-  el.textContent = text;
-  el.className = 'message';
-  if (kind === 'dangerText') {
-    el.className = 'message message-error';
-  } else if (kind) {
-    el.className = 'message message-' + kind;
-  }
-  el.style.display = '';
+  el.textContent = text || '';
+  el.className = 'small ' + (kind || '');
 }
 
 function setPill(state){
@@ -1290,7 +822,41 @@ function setPill(state){
   if (running) pill.classList.add('ok');
   else if (phase === 'error') pill.classList.add('err');
 
-  txt.textContent = `running=${running} phase=${phase} adapter=${adapter} band=${band} mode=${mode}`;
+  // Show the pill
+  pill.style.display = 'inline-flex';
+
+  // Create clean, readable status text
+  const statusParts = [];
+  
+  if (running) {
+    statusParts.push('Running');
+  } else if (phase === 'error') {
+    statusParts.push('Error');
+  } else {
+    statusParts.push('Stopped');
+  }
+  
+  if (phase && phase !== '—' && phase !== 'stopped' && phase !== 'error' && !(phase === 'stopped' && !running)) {
+    statusParts.push(phase.charAt(0).toUpperCase() + phase.slice(1));
+  }
+  
+  if (adapter && adapter !== '—') {
+    statusParts.push(adapter);
+  }
+  
+  if (band && band !== '—') {
+    statusParts.push(band);
+  }
+  
+  if (mode && mode !== '—' && mode !== 'nat') {
+    statusParts.push(mode);
+  }
+
+  if (statusParts.length === 0) {
+    txt.textContent = 'Loading…';
+  } else {
+    txt.textContent = statusParts.join(' · ');
+  }
 }
 
 function syncCountrySelectFromInput(){
@@ -1357,7 +923,7 @@ function maybeAutoPickAdapterForBand(){
   if (band === '6ghz'){
     const any6 = lastAdapters.adapters.filter(a => a.supports_ap && a.supports_6ghz);
     if (!any6.length){
-      hint.innerHTML = "<span class='pill-warn'>No 6 GHz-capable AP adapter detected</span>";
+      hint.innerHTML = "<span class='pillWarn'>No 6 GHz-capable AP adapter detected</span>";
       return;
     }
     hint.textContent = "6 GHz requires an adapter that supports 6 GHz in AP mode.";
@@ -1588,10 +1154,8 @@ async function refresh(){
   document.getElementById('rawStatus').textContent = JSON.stringify(st.json, null, 2);
 
   const eng = (s.engine || {});
-  const out = (eng.stdout_tail || []).join('
-');
-  const err = (eng.stderr_tail || []).join('
-');
+  const out = (eng.stdout_tail || []).join('\n');
+  const err = (eng.stderr_tail || []).join('\n');
   document.getElementById('stdout').textContent = privacy ? '(hidden)' : (out || '(empty)');
   document.getElementById('stderr').textContent = privacy ? '(hidden)' : (err || '(empty)');
 
