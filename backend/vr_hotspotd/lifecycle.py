@@ -18,6 +18,7 @@ from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
 from vr_hotspotd.engine import lnxrouter_conf
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
 from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running
+from vr_hotspotd import system_tuning
 
 log = logging.getLogger("vr_hotspotd.lifecycle")
 
@@ -50,6 +51,12 @@ _START_OVERRIDE_KEYS = {
     "dhcp_end_ip",
     "dhcp_dns",
     "enable_internet",
+    # System tuning
+    "wifi_power_save_disable",
+    "usb_autosuspend_disable",
+    "cpu_governor_performance",
+    "cpu_affinity",
+    "sysctl_tuning",
 }
 
 # Broaden virtual AP detection: still safe because we only delete if type == AP.
@@ -286,6 +293,29 @@ def _pid_cmdline(pid: int) -> str:
         return ""
 
 
+def _safe_revert_tuning(tuning_state: Optional[Dict[str, object]]) -> List[str]:
+    try:
+        return system_tuning.revert(tuning_state)
+    except Exception as e:
+        return [f"system_tuning_revert_failed:{e}"]
+
+
+def _child_pids(pid: Optional[int]) -> List[int]:
+    if not pid or pid <= 0:
+        return []
+    try:
+        raw = Path(f"/proc/{pid}/task/{pid}/children").read_text().strip()
+    except Exception:
+        return []
+    if not raw:
+        return []
+    out: List[int] = []
+    for tok in raw.split():
+        if tok.isdigit():
+            out.append(int(tok))
+    return out
+
+
 def _pid_is_our_lnxrouter(pid: int) -> bool:
     cmdline = _pid_cmdline(pid)
     return bool(cmdline) and (_LNXROUTER_PATH in cmdline or "lnxrouter" in cmdline)
@@ -458,6 +488,33 @@ def _find_dnsmasq_pids(adapter_ifname: Optional[str]) -> List[int]:
     return sorted(set(pids))
 
 
+def _collect_affinity_pids(
+    *,
+    adapter_ifname: Optional[str],
+    ap_interface: Optional[str],
+    engine_pid: Optional[int],
+) -> List[int]:
+    pids: List[int] = []
+
+    conf_dir = _find_latest_conf_dir(adapter_ifname, ap_interface)
+    if conf_dir:
+        for name, matcher in (("hostapd.pid", _pid_is_hostapd), ("dnsmasq.pid", _pid_is_dnsmasq)):
+            pid = lnxrouter_conf.read_pid_file(conf_dir / name)
+            if pid and _pid_running(pid) and matcher(pid):
+                pids.append(pid)
+
+    if engine_pid and not pids:
+        for child in _child_pids(engine_pid):
+            cmd = _pid_cmdline(child).lower()
+            if "hostapd" in cmd or "dnsmasq" in cmd:
+                pids.append(child)
+
+    if engine_pid:
+        pids.append(engine_pid)
+
+    return sorted(set(pids))
+
+
 def _remove_conf_dirs(adapter_ifname: Optional[str]) -> List[str]:
     removed: List[str] = []
     for conf_dir in _candidate_conf_dirs(adapter_ifname):
@@ -613,6 +670,7 @@ def _repair_impl(correlation_id: str = "repair"):
     fw_cfg = _build_firewalld_cfg(cfg)
 
     st = load_state()
+    tuning_warnings = _safe_revert_tuning(st.get("tuning") if isinstance(st, dict) else None)
     removed_ifaces: List[str] = []
     removed_conf_dirs: List[str] = []
 
@@ -637,6 +695,7 @@ def _repair_impl(correlation_id: str = "repair"):
         removed_ifaces = []
 
     warnings: List[str] = []
+    warnings.extend(tuning_warnings)
     if removed_ifaces:
         warnings.append("repair_removed_virtual_ap_ifaces:" + ",".join(removed_ifaces))
     if removed_conf_dirs:
@@ -650,6 +709,7 @@ def _repair_impl(correlation_id: str = "repair"):
         last_op="repair",
         last_correlation_id=correlation_id,
         warnings=warnings,
+        tuning={},
         engine={
             "pid": None,
             "cmd": None,
@@ -824,6 +884,14 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
         return LifecycleResult("start_failed", state)
 
+    try:
+        tuning_state, tuning_warnings = system_tuning.apply_pre(cfg)
+    except Exception as e:
+        tuning_state = {}
+        tuning_warnings = [f"system_tuning_pre_failed:{e}"]
+    if tuning_warnings:
+        start_warnings.extend(tuning_warnings)
+
     # Attempt 1: requested band
     if bp == "6ghz":
         channel_6g = cfg.get("channel_6g", None)
@@ -879,18 +947,38 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     )
 
     if not res.ok:
+        revert_warnings = _safe_revert_tuning(tuning_state)
         state = update_state(
             phase="error",
             running=False,
             ap_interface=None,
             last_error=res.error or "engine_start_failed",
             last_correlation_id=correlation_id,
+            warnings=start_warnings + revert_warnings,
+            tuning={},
         )
         return LifecycleResult("start_failed", state)
 
     ap_info = _wait_for_ap_ready(target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname)
     if ap_info:
         detected_band = _band_from_freq_mhz(ap_info.freq_mhz)
+        affinity_pids = _collect_affinity_pids(
+            adapter_ifname=ap_ifname,
+            ap_interface=ap_info.ifname,
+            engine_pid=res.pid,
+        )
+        try:
+            tuning_state, runtime_warnings = system_tuning.apply_runtime(
+                tuning_state,
+                cfg,
+                ap_ifname=ap_info.ifname,
+                adapter_ifname=ap_ifname,
+                cpu_affinity_pids=affinity_pids,
+            )
+        except Exception as e:
+            runtime_warnings = [f"system_tuning_runtime_failed:{e}"]
+        if runtime_warnings:
+            start_warnings.extend(runtime_warnings)
         state = update_state(
             phase="running",
             running=True,
@@ -901,6 +989,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             warnings=start_warnings,
             last_error=None,
             last_correlation_id=correlation_id,
+            tuning=tuning_state,
             engine={"last_error": None, "last_exit_code": None, "ap_logs_tail": []},
         )
         return LifecycleResult("started", state)
@@ -931,6 +1020,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), optimized_no_virt, "fallback_to_2_4ghz"),
         ]
     else:
+        revert_warnings = _safe_revert_tuning(tuning_state)
+        warnings.extend(revert_warnings)
         state = update_state(
             phase="error",
             running=False,
@@ -939,6 +1030,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             last_correlation_id=correlation_id,
             fallback_reason=None,
             warnings=warnings,
+            tuning={},
         )
         return LifecycleResult("start_failed", state)
 
@@ -975,6 +1067,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
 
         if not res_fallback.ok:
+            revert_warnings = _safe_revert_tuning(tuning_state)
+            warnings.extend(revert_warnings)
             state = update_state(
                 phase="error",
                 running=False,
@@ -983,6 +1077,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 last_correlation_id=correlation_id,
                 fallback_reason="ap_ready_timeout",
                 warnings=warnings,
+                tuning={},
             )
             return LifecycleResult("start_failed", state)
 
@@ -991,6 +1086,23 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
         if ap_info_fallback:
             detected_band = _band_from_freq_mhz(ap_info_fallback.freq_mhz)
+            affinity_pids = _collect_affinity_pids(
+                adapter_ifname=ap_ifname,
+                ap_interface=ap_info_fallback.ifname,
+                engine_pid=res_fallback.pid,
+            )
+            try:
+                tuning_state, runtime_warnings = system_tuning.apply_runtime(
+                    tuning_state,
+                    cfg,
+                    ap_ifname=ap_info_fallback.ifname,
+                    adapter_ifname=ap_ifname,
+                    cpu_affinity_pids=affinity_pids,
+                )
+            except Exception as e:
+                runtime_warnings = [f"system_tuning_runtime_failed:{e}"]
+            if runtime_warnings:
+                warnings.extend(runtime_warnings)
             state = update_state(
                 phase="running",
                 running=True,
@@ -1001,6 +1113,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 warnings=warnings,
                 last_error=None,
                 last_correlation_id=correlation_id,
+                tuning=tuning_state,
                 engine={"last_error": None, "last_exit_code": None, "ap_logs_tail": []},
             )
             return LifecycleResult("started_with_fallback", state)
@@ -1016,6 +1129,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         _kill_runtime_processes(ap_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
         _remove_conf_dirs(ap_ifname)
 
+    revert_warnings = _safe_revert_tuning(tuning_state)
+    warnings.extend(revert_warnings)
     state = update_state(
         phase="error",
         running=False,
@@ -1024,6 +1139,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         last_correlation_id=correlation_id,
         fallback_reason="ap_ready_timeout",
         warnings=warnings,
+        tuning={},
     )
     return LifecycleResult("start_failed", state)
 
@@ -1035,6 +1151,7 @@ def stop_hotspot(correlation_id: str = "stop"):
 
 def _stop_hotspot_impl(correlation_id: str = "stop"):
     state = load_state()
+    tuning_warnings = _safe_revert_tuning(state.get("tuning") if isinstance(state, dict) else None)
 
     if state["phase"] == "stopped":
         return LifecycleResult("already_stopped", state)
@@ -1062,6 +1179,7 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
         removed_ifaces = []
 
     warnings: List[str] = []
+    warnings.extend(tuning_warnings)
     if removed_ifaces:
         warnings.append("stop_removed_virtual_ap_ifaces:" + ",".join(removed_ifaces))
     if removed_conf_dirs:
@@ -1091,6 +1209,7 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
         warnings=warnings,
         last_error=(err if not ok else None),
         last_correlation_id=correlation_id,
+        tuning={},
     )
 
     return LifecycleResult("stopped" if ok else "stop_failed", state)

@@ -41,6 +41,8 @@ DEFAULT_STATE: Dict[str, Any] = {
     "last_op": None,
     "last_op_ts": None,
     "last_correlation_id": None,
+
+    "tuning": {},
 }
 
 

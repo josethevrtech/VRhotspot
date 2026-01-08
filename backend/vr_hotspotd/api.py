@@ -40,6 +40,12 @@ _CONFIG_MUTABLE_KEYS = {
     "dhcp_end_ip",
     "dhcp_dns",
     "enable_internet",
+    # System tuning
+    "wifi_power_save_disable",
+    "usb_autosuspend_disable",
+    "cpu_governor_performance",
+    "cpu_affinity",
+    "sysctl_tuning",
     # Firewall
     "firewalld_enabled",
     "firewalld_zone",
@@ -69,6 +75,12 @@ _START_OVERRIDE_KEYS = {
     "dhcp_end_ip",
     "dhcp_dns",
     "enable_internet",
+    # System tuning
+    "wifi_power_save_disable",
+    "usb_autosuspend_disable",
+    "cpu_governor_performance",
+    "cpu_affinity",
+    "sysctl_tuning",
     "debug",
 }
 
@@ -79,6 +91,10 @@ _SENSITIVE_CONFIG_KEYS = {"wpa2_passphrase"}
 _BOOL_KEYS = {
     "optimized_no_virt",
     "enable_internet",
+    "wifi_power_save_disable",
+    "usb_autosuspend_disable",
+    "cpu_governor_performance",
+    "sysctl_tuning",
     "firewalld_enabled",
     "firewalld_enable_masquerade",
     "firewalld_enable_forward",
@@ -404,6 +420,20 @@ UI_HTML = r"""<!doctype html>
       </div>
 
       <div>
+        <label>System tuning</label>
+        <div class="row">
+          <label class="tog"><input type="checkbox" id="wifi_power_save_disable" /> wifi_power_save_disable</label>
+          <label class="tog"><input type="checkbox" id="usb_autosuspend_disable" /> usb_autosuspend_disable</label>
+          <label class="tog"><input type="checkbox" id="cpu_governor_performance" /> cpu_governor_performance</label>
+          <label class="tog"><input type="checkbox" id="sysctl_tuning" /> sysctl_tuning</label>
+        </div>
+        <div style="margin-top:8px;">
+          <label for="cpu_affinity">cpu_affinity</label>
+          <input id="cpu_affinity" placeholder="e.g. 2 or 2-3 or 2,4" />
+        </div>
+      </div>
+
+      <div>
         <label>Firewall (firewalld)</label>
         <div class="row">
           <label class="tog"><input type="checkbox" id="firewalld_enabled" /> enabled</label>
@@ -454,6 +484,7 @@ const CFG_IDS = [
   "ssid","wpa2_passphrase","band_preference","ap_security","channel_6g","country","country_sel",
   "optimized_no_virt","ap_adapter","ap_ready_timeout_s","fallback_channel_2g",
   "lan_gateway_ip","dhcp_start_ip","dhcp_end_ip","dhcp_dns","enable_internet",
+  "wifi_power_save_disable","usb_autosuspend_disable","cpu_governor_performance","cpu_affinity","sysctl_tuning",
   "firewalld_enabled","firewalld_enable_masquerade","firewalld_enable_forward","firewalld_cleanup_on_stop",
   "debug"
 ];
@@ -652,6 +683,10 @@ function getForm(){
     ap_ready_timeout_s: parseFloat(document.getElementById('ap_ready_timeout_s').value || '6.0'),
     fallback_channel_2g: parseInt(document.getElementById('fallback_channel_2g').value || '6', 10),
     enable_internet: document.getElementById('enable_internet').checked,
+    wifi_power_save_disable: document.getElementById('wifi_power_save_disable').checked,
+    usb_autosuspend_disable: document.getElementById('usb_autosuspend_disable').checked,
+    cpu_governor_performance: document.getElementById('cpu_governor_performance').checked,
+    sysctl_tuning: document.getElementById('sysctl_tuning').checked,
     firewalld_enabled: document.getElementById('firewalld_enabled').checked,
     firewalld_enable_masquerade: document.getElementById('firewalld_enable_masquerade').checked,
     firewalld_enable_forward: document.getElementById('firewalld_enable_forward').checked,
@@ -678,6 +713,8 @@ function getForm(){
 
   const dhcpDns = (document.getElementById('dhcp_dns').value || '').trim();
   if (dhcpDns) out.dhcp_dns = dhcpDns;
+
+  out.cpu_affinity = (document.getElementById('cpu_affinity').value || '').trim();
 
   // Only send passphrase if user typed a new one.
   const pw = (document.getElementById('wpa2_passphrase').value || '').trim();
@@ -710,6 +747,11 @@ function applyConfig(cfg){
   document.getElementById('dhcp_end_ip').value = (cfg.dhcp_end_ip || '192.168.68.250');
   document.getElementById('dhcp_dns').value = (cfg.dhcp_dns || 'gateway');
   document.getElementById('enable_internet').checked = (cfg.enable_internet !== false);
+  document.getElementById('wifi_power_save_disable').checked = !!cfg.wifi_power_save_disable;
+  document.getElementById('usb_autosuspend_disable').checked = !!cfg.usb_autosuspend_disable;
+  document.getElementById('cpu_governor_performance').checked = !!cfg.cpu_governor_performance;
+  document.getElementById('sysctl_tuning').checked = !!cfg.sysctl_tuning;
+  document.getElementById('cpu_affinity').value = (cfg.cpu_affinity || '');
   document.getElementById('firewalld_enabled').checked = !!cfg.firewalld_enabled;
   document.getElementById('firewalld_enable_masquerade').checked = !!cfg.firewalld_enable_masquerade;
   document.getElementById('firewalld_enable_forward').checked = !!cfg.firewalld_enable_forward;
@@ -1244,6 +1286,24 @@ class APIHandler(BaseHTTPRequestHandler):
                     out.pop(k, None)
                 else:
                     out[k] = nv
+
+            if k == "cpu_affinity":
+                if isinstance(v, (int, float)):
+                    out[k] = str(int(v))
+                elif isinstance(v, str):
+                    s = v.strip()
+                    if not s:
+                        out[k] = ""
+                    elif s.lower() == "auto":
+                        out[k] = "auto"
+                    elif not re.match(r"^[0-9,\-\s]+$", s):
+                        warnings.append("invalid_cpu_affinity")
+                        out.pop(k, None)
+                    else:
+                        out[k] = s
+                elif v is not None:
+                    warnings.append("invalid_cpu_affinity")
+                    out.pop(k, None)
 
             if k in _IP_KEYS:
                 if isinstance(v, str):
