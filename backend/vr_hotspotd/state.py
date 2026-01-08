@@ -43,6 +43,8 @@ DEFAULT_STATE: Dict[str, Any] = {
     "last_correlation_id": None,
 
     "tuning": {},
+    "network_tuning": {},
+    "preflight": {},
 }
 
 

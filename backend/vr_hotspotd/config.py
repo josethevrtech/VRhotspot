@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 CONFIG_PATH = Path("/var/lib/vr-hotspot/config.json")
 CONFIG_TMP = Path("/var/lib/vr-hotspot/config.json.tmp")
-CONFIG_SCHEMA_VERSION = 2
+CONFIG_SCHEMA_VERSION = 3
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "version": CONFIG_SCHEMA_VERSION,
@@ -48,6 +48,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "cpu_governor_performance": False,
     "cpu_affinity": "",
     "sysctl_tuning": False,
+
+    # Watchdog / telemetry / QoS / NAT
+    "watchdog_enable": True,
+    "watchdog_interval_s": 2.0,
+    "telemetry_enable": True,
+    "telemetry_interval_s": 2.0,
+    "qos_preset": "off",  # off | vr | balanced
+    "nat_accel": False,
+
+    # Bridge mode (experimental)
+    "bridge_mode": False,
+    "bridge_name": "vrbr0",
+    "bridge_uplink": "",
 
     # Firewalld integration (SteamOS: firewalld owns nftables, so use firewall-cmd)
     "firewalld_enabled": True,
@@ -114,6 +127,24 @@ def _apply_migrations(cfg: Dict[str, Any]) -> Dict[str, Any]:
         out["cpu_affinity"] = DEFAULT_CONFIG["cpu_affinity"]
     if "sysctl_tuning" not in out:
         out["sysctl_tuning"] = DEFAULT_CONFIG["sysctl_tuning"]
+    if "watchdog_enable" not in out:
+        out["watchdog_enable"] = DEFAULT_CONFIG["watchdog_enable"]
+    if "watchdog_interval_s" not in out:
+        out["watchdog_interval_s"] = DEFAULT_CONFIG["watchdog_interval_s"]
+    if "telemetry_enable" not in out:
+        out["telemetry_enable"] = DEFAULT_CONFIG["telemetry_enable"]
+    if "telemetry_interval_s" not in out:
+        out["telemetry_interval_s"] = DEFAULT_CONFIG["telemetry_interval_s"]
+    if "qos_preset" not in out:
+        out["qos_preset"] = DEFAULT_CONFIG["qos_preset"]
+    if "nat_accel" not in out:
+        out["nat_accel"] = DEFAULT_CONFIG["nat_accel"]
+    if "bridge_mode" not in out:
+        out["bridge_mode"] = DEFAULT_CONFIG["bridge_mode"]
+    if "bridge_name" not in out:
+        out["bridge_name"] = DEFAULT_CONFIG["bridge_name"]
+    if "bridge_uplink" not in out:
+        out["bridge_uplink"] = DEFAULT_CONFIG["bridge_uplink"]
     return out
 
 
