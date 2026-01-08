@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 CONFIG_PATH = Path("/var/lib/vr-hotspot/config.json")
 CONFIG_TMP = Path("/var/lib/vr-hotspot/config.json.tmp")
-CONFIG_SCHEMA_VERSION = 3
+CONFIG_SCHEMA_VERSION = 4
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "version": CONFIG_SCHEMA_VERSION,
@@ -20,6 +20,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "wifi6": "auto",             # "auto" | true | false
     "ap_security": "wpa2",        # "wpa2" | "wpa3_sae"
     "channel_6g": None,          # optional int
+    "channel_width": "auto",     # "auto" | "20" | "40" | "80" | "160" (MHz)
+    "beacon_interval": 50,        # Beacon interval in TU (Time Units, 1 TU = 1024 us), default 50ms for VR
+    "dtim_period": 1,            # DTIM period (1-255), default 1 for VR streaming
+    "short_guard_interval": True, # Enable short guard interval for improved throughput
+    "tx_power": None,            # Transmit power in dBm (None = auto/adapter default)
+    "channel_auto_select": False, # Auto-select channel with interference scanning
 
     # Steam Deck / SteamOS stability:
     # False => allow lnxrouter to create a virtual AP interface (often best default).
@@ -54,8 +60,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "watchdog_interval_s": 2.0,
     "telemetry_enable": True,
     "telemetry_interval_s": 2.0,
-    "qos_preset": "off",  # off | vr | balanced
+    "qos_preset": "off",  # off | vr | balanced | ultra_low_latency | high_throughput
     "nat_accel": False,
+    "connection_quality_monitoring": True,  # Enable real-time connection quality scoring
+    "auto_channel_switch": False,  # Auto-switch channels on interference
+    "irq_affinity": "",  # IRQ affinity for network interfaces (e.g., "2" or "2-3")
+    "interrupt_coalescing": False,  # Tune interrupt coalescing for network interfaces
+    "tcp_low_latency": False,  # Enable TCP low-latency mode with optimized buffers
+    "memory_tuning": False,  # VR-specific memory tuning (swappiness, dirty_ratio)
+    "io_scheduler_optimize": False,  # Optimize I/O scheduler for network devices
 
     # Bridge mode (experimental)
     "bridge_mode": False,
@@ -71,6 +84,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # Debugging / diagnostics
     "debug": False,
+    
+    # VR Profile presets (applied via UI, not stored here)
+    # "ultra_low_latency", "high_throughput", "balanced", "stability"
 }
 
 
@@ -145,6 +161,32 @@ def _apply_migrations(cfg: Dict[str, Any]) -> Dict[str, Any]:
         out["bridge_name"] = DEFAULT_CONFIG["bridge_name"]
     if "bridge_uplink" not in out:
         out["bridge_uplink"] = DEFAULT_CONFIG["bridge_uplink"]
+    if "channel_width" not in out:
+        out["channel_width"] = DEFAULT_CONFIG["channel_width"]
+    if "beacon_interval" not in out:
+        out["beacon_interval"] = DEFAULT_CONFIG["beacon_interval"]
+    if "dtim_period" not in out:
+        out["dtim_period"] = DEFAULT_CONFIG["dtim_period"]
+    if "short_guard_interval" not in out:
+        out["short_guard_interval"] = DEFAULT_CONFIG["short_guard_interval"]
+    if "tx_power" not in out:
+        out["tx_power"] = DEFAULT_CONFIG["tx_power"]
+    if "channel_auto_select" not in out:
+        out["channel_auto_select"] = DEFAULT_CONFIG["channel_auto_select"]
+    if "connection_quality_monitoring" not in out:
+        out["connection_quality_monitoring"] = DEFAULT_CONFIG["connection_quality_monitoring"]
+    if "auto_channel_switch" not in out:
+        out["auto_channel_switch"] = DEFAULT_CONFIG["auto_channel_switch"]
+    if "irq_affinity" not in out:
+        out["irq_affinity"] = DEFAULT_CONFIG["irq_affinity"]
+    if "interrupt_coalescing" not in out:
+        out["interrupt_coalescing"] = DEFAULT_CONFIG["interrupt_coalescing"]
+    if "tcp_low_latency" not in out:
+        out["tcp_low_latency"] = DEFAULT_CONFIG["tcp_low_latency"]
+    if "memory_tuning" not in out:
+        out["memory_tuning"] = DEFAULT_CONFIG["memory_tuning"]
+    if "io_scheduler_optimize" not in out:
+        out["io_scheduler_optimize"] = DEFAULT_CONFIG["io_scheduler_optimize"]
     return out
 
 

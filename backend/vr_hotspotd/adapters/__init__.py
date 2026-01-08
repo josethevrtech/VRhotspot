@@ -1,0 +1,1 @@
+"""Adapter detection and profiles."""

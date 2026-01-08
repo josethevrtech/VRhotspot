@@ -16,6 +16,7 @@ from vr_hotspotd.lifecycle import repair, start_hotspot, stop_hotspot, reconcile
 from vr_hotspotd.diagnostics.clients import get_clients_snapshot
 from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator
+from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
 from vr_hotspotd import telemetry
 from vr_hotspotd.state import load_state
 
@@ -35,6 +36,12 @@ _CONFIG_MUTABLE_KEYS = {
     # NEW:
     "ap_security",   # "wpa2" | "wpa3_sae"
     "channel_6g",    # int (optional)
+    "channel_width",  # "auto" | "20" | "40" | "80" | "160"
+    "beacon_interval",  # int (TU, default 50)
+    "dtim_period",  # int (1-255, default 1)
+    "short_guard_interval",  # bool
+    "tx_power",  # int (dBm) or None for auto
+    "channel_auto_select",  # bool
     # Network
     "lan_gateway_ip",
     "dhcp_start_ip",
@@ -47,6 +54,11 @@ _CONFIG_MUTABLE_KEYS = {
     "cpu_governor_performance",
     "cpu_affinity",
     "sysctl_tuning",
+    "irq_affinity",  # IRQ affinity for network interfaces
+    "interrupt_coalescing",  # bool
+    "tcp_low_latency",  # bool
+    "memory_tuning",  # bool
+    "io_scheduler_optimize",  # bool
     # Watchdog / telemetry / QoS / NAT / bridge
     "watchdog_enable",
     "watchdog_interval_s",
@@ -57,6 +69,8 @@ _CONFIG_MUTABLE_KEYS = {
     "bridge_mode",
     "bridge_name",
     "bridge_uplink",
+    "connection_quality_monitoring",  # bool
+    "auto_channel_switch",  # bool
     # Firewall
     "firewalld_enabled",
     "firewalld_zone",
@@ -80,6 +94,12 @@ _START_OVERRIDE_KEYS = {
     # NEW:
     "ap_security",
     "channel_6g",
+    "channel_width",
+    "beacon_interval",
+    "dtim_period",
+    "short_guard_interval",
+    "tx_power",
+    "channel_auto_select",
     # Network
     "lan_gateway_ip",
     "dhcp_start_ip",
@@ -92,6 +112,11 @@ _START_OVERRIDE_KEYS = {
     "cpu_governor_performance",
     "cpu_affinity",
     "sysctl_tuning",
+    "irq_affinity",
+    "interrupt_coalescing",
+    "tcp_low_latency",
+    "memory_tuning",
+    "io_scheduler_optimize",
     "watchdog_enable",
     "watchdog_interval_s",
     "telemetry_enable",
@@ -101,6 +126,8 @@ _START_OVERRIDE_KEYS = {
     "bridge_mode",
     "bridge_name",
     "bridge_uplink",
+    "connection_quality_monitoring",
+    "auto_channel_switch",
     "debug",
 }
 
@@ -124,8 +151,16 @@ _BOOL_KEYS = {
     "firewalld_enable_forward",
     "firewalld_cleanup_on_stop",
     "debug",
+    "short_guard_interval",
+    "channel_auto_select",
+    "connection_quality_monitoring",
+    "auto_channel_switch",
+    "interrupt_coalescing",
+    "tcp_low_latency",
+    "memory_tuning",
+    "io_scheduler_optimize",
 }
-_INT_KEYS = {"fallback_channel_2g", "channel_6g"}
+_INT_KEYS = {"fallback_channel_2g", "channel_6g", "beacon_interval", "dtim_period", "tx_power"}
 _FLOAT_KEYS = {"ap_ready_timeout_s", "watchdog_interval_s", "telemetry_interval_s"}
 _IP_KEYS = {"lan_gateway_ip", "dhcp_start_ip", "dhcp_end_ip"}
 
@@ -135,7 +170,7 @@ _COUNTRY_RE = re.compile(r"^(00|[A-Z]{2})$")
 # Allowed values (normalized)
 _ALLOWED_BANDS = {"2.4ghz", "5ghz", "6ghz"}
 _ALLOWED_SECURITY = {"wpa2", "wpa3_sae"}
-_ALLOWED_QOS = {"off", "vr", "balanced"}
+_ALLOWED_QOS = {"off", "vr", "balanced", "ultra_low_latency", "high_throughput"}
 
 SERVER_VERSION = "vr-hotspotd/0.4"
 
@@ -418,6 +453,46 @@ UI_HTML = r"""<!doctype html>
       </div>
 
       <div>
+        <label for="channel_width">Channel width</label>
+        <select id="channel_width">
+          <option value="auto">auto (select best)</option>
+          <option value="20">20 MHz</option>
+          <option value="40">40 MHz</option>
+          <option value="80">80 MHz (recommended for VR)</option>
+          <option value="160">160 MHz (maximum throughput)</option>
+        </select>
+        <div class="small" style="margin-top:6px;">Wider channels = higher throughput but more interference sensitivity.</div>
+      </div>
+
+      <div class="two">
+        <div>
+          <label for="beacon_interval">Beacon interval (TU)</label>
+          <input id="beacon_interval" type="number" step="1" min="20" max="1000" placeholder="50" />
+        </div>
+        <div>
+          <label for="dtim_period">DTIM period</label>
+          <input id="dtim_period" type="number" step="1" min="1" max="255" placeholder="1" />
+        </div>
+      </div>
+      <div class="small" style="margin-top:6px;">
+        Lower beacon interval = faster association but more overhead. DTIM=1 ensures immediate frame delivery for VR.
+      </div>
+
+      <div>
+        <label class="tog"><input type="checkbox" id="short_guard_interval" /> short_guard_interval (improves throughput)</label>
+      </div>
+
+      <div>
+        <label for="tx_power">TX power (dBm)</label>
+        <input id="tx_power" type="number" step="1" min="1" max="30" placeholder="Leave blank for auto/adapter default" />
+        <div class="small" style="margin-top:6px;">Auto-adjusts based on RSSI telemetry when left blank.</div>
+      </div>
+
+      <div>
+        <label class="tog"><input type="checkbox" id="channel_auto_select" /> channel_auto_select (scan for interference)</label>
+      </div>
+
+      <div>
         <label>Country (regulatory domain)</label>
         <div class="two">
           <div>
@@ -520,6 +595,16 @@ UI_HTML = r"""<!doctype html>
           <label for="cpu_affinity">cpu_affinity</label>
           <input id="cpu_affinity" placeholder="e.g. 2 or 2-3 or 2,4" />
         </div>
+        <div style="margin-top:8px;">
+          <label for="irq_affinity">irq_affinity (network IRQs)</label>
+          <input id="irq_affinity" placeholder="e.g. 2 or 2-3 or 2,4" />
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <label class="tog"><input type="checkbox" id="interrupt_coalescing" /> interrupt_coalescing</label>
+          <label class="tog"><input type="checkbox" id="tcp_low_latency" /> tcp_low_latency</label>
+          <label class="tog"><input type="checkbox" id="memory_tuning" /> memory_tuning</label>
+          <label class="tog"><input type="checkbox" id="io_scheduler_optimize" /> io_scheduler_optimize</label>
+        </div>
       </div>
 
       <div>
@@ -527,6 +612,8 @@ UI_HTML = r"""<!doctype html>
         <div class="row">
           <label class="tog"><input type="checkbox" id="telemetry_enable" /> telemetry_enable</label>
           <label class="tog"><input type="checkbox" id="watchdog_enable" /> watchdog_enable</label>
+          <label class="tog"><input type="checkbox" id="connection_quality_monitoring" /> connection_quality_monitoring</label>
+          <label class="tog"><input type="checkbox" id="auto_channel_switch" /> auto_channel_switch</label>
         </div>
         <div class="two" style="margin-top:8px;">
           <div>
@@ -544,7 +631,9 @@ UI_HTML = r"""<!doctype html>
         <label for="qos_preset">QoS preset</label>
         <select id="qos_preset">
           <option value="off">off</option>
+          <option value="ultra_low_latency">ultra_low_latency (strict priority + UDP priority)</option>
           <option value="vr">vr (DSCP CS5 + cake)</option>
+          <option value="high_throughput">high_throughput (DSCP AF42 + cake)</option>
           <option value="balanced">balanced (DSCP AF41 + fq_codel)</option>
         </select>
         <div class="row" style="margin-top:8px;">
@@ -583,7 +672,10 @@ UI_HTML = r"""<!doctype html>
     </div>
 
     <div class="row" style="margin-top:12px;">
-      <button id="btnApplyVrProfile">Apply VR profile</button>
+      <button id="btnApplyVrProfileUltra">Ultra Low Latency</button>
+      <button id="btnApplyVrProfileHigh">High Throughput</button>
+      <button id="btnApplyVrProfile">Balanced</button>
+      <button id="btnApplyVrProfileStable">Stability</button>
       <button class="primary" id="btnSaveConfig">Save config</button>
       <button class="primary" id="btnSaveRestart">Save & Restart</button>
     </div>
@@ -605,6 +697,7 @@ UI_HTML = r"""<!doctype html>
           <th>RSSI</th>
           <th>TX Mbps</th>
           <th>RX Mbps</th>
+          <th>Quality</th>
           <th>Retries %</th>
           <th>Loss %</th>
         </tr>
@@ -642,9 +735,12 @@ let lastAdapters = null;
 const CFG_IDS = [
   "ssid","wpa2_passphrase","band_preference","ap_security","channel_6g","country","country_sel",
   "optimized_no_virt","ap_adapter","ap_ready_timeout_s","fallback_channel_2g",
+  "channel_width","beacon_interval","dtim_period","short_guard_interval","tx_power","channel_auto_select",
   "lan_gateway_ip","dhcp_start_ip","dhcp_end_ip","dhcp_dns","enable_internet",
   "wifi_power_save_disable","usb_autosuspend_disable","cpu_governor_performance","cpu_affinity","sysctl_tuning",
+  "irq_affinity","interrupt_coalescing","tcp_low_latency","memory_tuning","io_scheduler_optimize",
   "telemetry_enable","telemetry_interval_s","watchdog_enable","watchdog_interval_s",
+  "connection_quality_monitoring","auto_channel_switch",
   "qos_preset","nat_accel","bridge_mode","bridge_name","bridge_uplink",
   "firewalld_enabled","firewalld_enable_masquerade","firewalld_enable_forward","firewalld_cleanup_on_stop",
   "debug"
@@ -753,6 +849,7 @@ function renderTelemetry(t){
   sumEl.textContent =
     `clients=${summary.client_count ?? 0} ` +
     `rssi_avg=${fmtDbm(summary.rssi_avg_dbm)} ` +
+    `quality_avg=${fmtNum(summary.quality_score_avg, 0)} ` +
     `loss_avg=${fmtPct(summary.loss_pct_avg)}%`;
 
   const warns = (t.warnings || []).join(' · ');
@@ -762,7 +859,7 @@ function renderTelemetry(t){
   if (!clients.length){
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.textContent = 'No clients connected.';
     td.className = 'muted';
     tr.appendChild(td);
@@ -773,11 +870,13 @@ function renderTelemetry(t){
   for (const c of clients){
     const tr = document.createElement('tr');
     const id = (c.mac || '—') + (c.ip ? ` (${c.ip})` : '');
+    const qualityScore = (c.quality_score !== null && c.quality_score !== undefined) ? fmtNum(c.quality_score, 0) : '—';
     const cols = [
       id,
       fmtDbm(c.signal_dbm),
       fmtMbps(c.tx_bitrate_mbps),
       fmtMbps(c.rx_bitrate_mbps),
+      qualityScore,
       fmtPct(c.retry_pct),
       fmtPct(c.loss_pct),
     ];
@@ -940,22 +1039,132 @@ function maybeAutoPickAdapterForBand(){
   }
 }
 
-function applyVrProfile(){
-  document.getElementById('band_preference').value = '5ghz';
-  document.getElementById('ap_security').value = 'wpa2';
-  document.getElementById('optimized_no_virt').checked = false;
-  document.getElementById('enable_internet').checked = true;
-  document.getElementById('wifi_power_save_disable').checked = true;
-  document.getElementById('usb_autosuspend_disable').checked = true;
-  document.getElementById('cpu_governor_performance').checked = true;
-  document.getElementById('sysctl_tuning').checked = true;
-  document.getElementById('telemetry_enable').checked = true;
-  document.getElementById('telemetry_interval_s').value = '2.0';
-  document.getElementById('watchdog_enable').checked = true;
-  document.getElementById('watchdog_interval_s').value = '2.0';
-  document.getElementById('qos_preset').value = 'vr';
-  document.getElementById('nat_accel').checked = true;
-  document.getElementById('bridge_mode').checked = false;
+function applyVrProfile(profileName = 'balanced'){
+  const profiles = {
+    'ultra_low_latency': {
+      band_preference: '5ghz',
+      ap_security: 'wpa2',
+      optimized_no_virt: false,
+      enable_internet: true,
+      wifi_power_save_disable: true,
+      usb_autosuspend_disable: true,
+      cpu_governor_performance: true,
+      sysctl_tuning: true,
+      tcp_low_latency: true,
+      memory_tuning: true,
+      interrupt_coalescing: true,
+      telemetry_enable: true,
+      telemetry_interval_s: '1.0',
+      watchdog_enable: true,
+      watchdog_interval_s: '1.0',
+      qos_preset: 'ultra_low_latency',
+      nat_accel: true,
+      bridge_mode: false,
+      beacon_interval: 20,
+      dtim_period: 1,
+      short_guard_interval: true,
+    },
+    'high_throughput': {
+      band_preference: '5ghz',
+      ap_security: 'wpa2',
+      optimized_no_virt: false,
+      enable_internet: true,
+      wifi_power_save_disable: true,
+      usb_autosuspend_disable: true,
+      cpu_governor_performance: true,
+      sysctl_tuning: true,
+      telemetry_enable: true,
+      telemetry_interval_s: '2.0',
+      watchdog_enable: true,
+      watchdog_interval_s: '2.0',
+      qos_preset: 'high_throughput',
+      nat_accel: true,
+      bridge_mode: false,
+      channel_width: '80',
+      beacon_interval: 100,
+      dtim_period: 1,
+      short_guard_interval: true,
+    },
+    'balanced': {
+      band_preference: '5ghz',
+      ap_security: 'wpa2',
+      optimized_no_virt: false,
+      enable_internet: true,
+      wifi_power_save_disable: true,
+      usb_autosuspend_disable: true,
+      cpu_governor_performance: true,
+      sysctl_tuning: true,
+      telemetry_enable: true,
+      telemetry_interval_s: '2.0',
+      watchdog_enable: true,
+      watchdog_interval_s: '2.0',
+      qos_preset: 'vr',
+      nat_accel: true,
+      bridge_mode: false,
+      beacon_interval: 50,
+      dtim_period: 1,
+      short_guard_interval: true,
+    },
+    'stability': {
+      band_preference: '5ghz',
+      ap_security: 'wpa2',
+      optimized_no_virt: false,
+      enable_internet: true,
+      wifi_power_save_disable: true,
+      usb_autosuspend_disable: true,
+      cpu_governor_performance: false,
+      sysctl_tuning: false,
+      telemetry_enable: true,
+      telemetry_interval_s: '3.0',
+      watchdog_enable: true,
+      watchdog_interval_s: '3.0',
+      qos_preset: 'balanced',
+      nat_accel: false,
+      bridge_mode: false,
+      beacon_interval: 100,
+      dtim_period: 3,
+      short_guard_interval: false,
+    }
+  };
+  
+  const profile = profiles[profileName] || profiles['balanced'];
+  
+  document.getElementById('band_preference').value = profile.band_preference;
+  document.getElementById('ap_security').value = profile.ap_security;
+  document.getElementById('optimized_no_virt').checked = profile.optimized_no_virt;
+  document.getElementById('enable_internet').checked = profile.enable_internet;
+  document.getElementById('wifi_power_save_disable').checked = profile.wifi_power_save_disable;
+  document.getElementById('usb_autosuspend_disable').checked = profile.usb_autosuspend_disable;
+  document.getElementById('cpu_governor_performance').checked = profile.cpu_governor_performance;
+  document.getElementById('sysctl_tuning').checked = profile.sysctl_tuning;
+  if (document.getElementById('tcp_low_latency')) {
+    document.getElementById('tcp_low_latency').checked = profile.tcp_low_latency || false;
+  }
+  if (document.getElementById('memory_tuning')) {
+    document.getElementById('memory_tuning').checked = profile.memory_tuning || false;
+  }
+  if (document.getElementById('interrupt_coalescing')) {
+    document.getElementById('interrupt_coalescing').checked = profile.interrupt_coalescing || false;
+  }
+  document.getElementById('telemetry_enable').checked = profile.telemetry_enable;
+  document.getElementById('telemetry_interval_s').value = profile.telemetry_interval_s;
+  document.getElementById('watchdog_enable').checked = profile.watchdog_enable;
+  document.getElementById('watchdog_interval_s').value = profile.watchdog_interval_s;
+  document.getElementById('qos_preset').value = profile.qos_preset;
+  document.getElementById('nat_accel').checked = profile.nat_accel;
+  document.getElementById('bridge_mode').checked = profile.bridge_mode;
+  if (document.getElementById('channel_width')) {
+    document.getElementById('channel_width').value = profile.channel_width || 'auto';
+  }
+  if (document.getElementById('beacon_interval')) {
+    document.getElementById('beacon_interval').value = profile.beacon_interval;
+  }
+  if (document.getElementById('dtim_period')) {
+    document.getElementById('dtim_period').value = profile.dtim_period;
+  }
+  if (document.getElementById('short_guard_interval')) {
+    document.getElementById('short_guard_interval').checked = profile.short_guard_interval;
+  }
   enforceBandRules();
   maybeAutoPickAdapterForBand();
   setDirty(true);
@@ -971,15 +1180,26 @@ function getForm(){
     ap_adapter: document.getElementById('ap_adapter').value,
     ap_ready_timeout_s: parseFloat(document.getElementById('ap_ready_timeout_s').value || '6.0'),
     fallback_channel_2g: parseInt(document.getElementById('fallback_channel_2g').value || '6', 10),
+    channel_width: document.getElementById('channel_width').value,
+    beacon_interval: parseInt(document.getElementById('beacon_interval').value || '50', 10),
+    dtim_period: parseInt(document.getElementById('dtim_period').value || '1', 10),
+    short_guard_interval: document.getElementById('short_guard_interval').checked,
+    channel_auto_select: document.getElementById('channel_auto_select').checked,
     enable_internet: document.getElementById('enable_internet').checked,
     wifi_power_save_disable: document.getElementById('wifi_power_save_disable').checked,
     usb_autosuspend_disable: document.getElementById('usb_autosuspend_disable').checked,
     cpu_governor_performance: document.getElementById('cpu_governor_performance').checked,
     sysctl_tuning: document.getElementById('sysctl_tuning').checked,
+    interrupt_coalescing: document.getElementById('interrupt_coalescing').checked,
+    tcp_low_latency: document.getElementById('tcp_low_latency').checked,
+    memory_tuning: document.getElementById('memory_tuning').checked,
+    io_scheduler_optimize: document.getElementById('io_scheduler_optimize').checked,
     telemetry_enable: document.getElementById('telemetry_enable').checked,
     telemetry_interval_s: parseFloat(document.getElementById('telemetry_interval_s').value || '2.0'),
     watchdog_enable: document.getElementById('watchdog_enable').checked,
     watchdog_interval_s: parseFloat(document.getElementById('watchdog_interval_s').value || '2.0'),
+    connection_quality_monitoring: document.getElementById('connection_quality_monitoring').checked,
+    auto_channel_switch: document.getElementById('auto_channel_switch').checked,
     qos_preset: document.getElementById('qos_preset').value,
     nat_accel: document.getElementById('nat_accel').checked,
     bridge_mode: document.getElementById('bridge_mode').checked,
@@ -998,6 +1218,13 @@ function getForm(){
     if (!Number.isNaN(n)) out.channel_6g = n;
   }
 
+  // Optional TX power
+  const txPower = (document.getElementById('tx_power').value || '').trim();
+  if (txPower){
+    const n = parseInt(txPower, 10);
+    if (!Number.isNaN(n)) out.tx_power = n;
+  }
+
   const gw = (document.getElementById('lan_gateway_ip').value || '').trim();
   if (gw) out.lan_gateway_ip = gw;
 
@@ -1011,6 +1238,7 @@ function getForm(){
   if (dhcpDns) out.dhcp_dns = dhcpDns;
 
   out.cpu_affinity = (document.getElementById('cpu_affinity').value || '').trim();
+  out.irq_affinity = (document.getElementById('irq_affinity').value || '').trim();
 
   out.bridge_name = (document.getElementById('bridge_name').value || '').trim();
   out.bridge_uplink = (document.getElementById('bridge_uplink').value || '').trim();
@@ -1041,6 +1269,24 @@ function applyConfig(cfg){
   document.getElementById('optimized_no_virt').checked = !!cfg.optimized_no_virt;
   document.getElementById('ap_ready_timeout_s').value = (cfg.ap_ready_timeout_s ?? 6.0);
   document.getElementById('fallback_channel_2g').value = (cfg.fallback_channel_2g ?? 6);
+  if (document.getElementById('channel_width')) {
+    document.getElementById('channel_width').value = (cfg.channel_width || 'auto');
+  }
+  if (document.getElementById('beacon_interval')) {
+    document.getElementById('beacon_interval').value = (cfg.beacon_interval ?? 50);
+  }
+  if (document.getElementById('dtim_period')) {
+    document.getElementById('dtim_period').value = (cfg.dtim_period ?? 1);
+  }
+  if (document.getElementById('short_guard_interval')) {
+    document.getElementById('short_guard_interval').checked = (cfg.short_guard_interval !== false);
+  }
+  if (document.getElementById('tx_power')) {
+    document.getElementById('tx_power').value = (cfg.tx_power ?? '');
+  }
+  if (document.getElementById('channel_auto_select')) {
+    document.getElementById('channel_auto_select').checked = !!cfg.channel_auto_select;
+  }
   document.getElementById('lan_gateway_ip').value = (cfg.lan_gateway_ip || '192.168.68.1');
   document.getElementById('dhcp_start_ip').value = (cfg.dhcp_start_ip || '192.168.68.10');
   document.getElementById('dhcp_end_ip').value = (cfg.dhcp_end_ip || '192.168.68.250');
@@ -1050,10 +1296,31 @@ function applyConfig(cfg){
   document.getElementById('usb_autosuspend_disable').checked = !!cfg.usb_autosuspend_disable;
   document.getElementById('cpu_governor_performance').checked = !!cfg.cpu_governor_performance;
   document.getElementById('sysctl_tuning').checked = !!cfg.sysctl_tuning;
+  if (document.getElementById('irq_affinity')) {
+    document.getElementById('irq_affinity').value = (cfg.irq_affinity || '');
+  }
+  if (document.getElementById('interrupt_coalescing')) {
+    document.getElementById('interrupt_coalescing').checked = !!cfg.interrupt_coalescing;
+  }
+  if (document.getElementById('tcp_low_latency')) {
+    document.getElementById('tcp_low_latency').checked = !!cfg.tcp_low_latency;
+  }
+  if (document.getElementById('memory_tuning')) {
+    document.getElementById('memory_tuning').checked = !!cfg.memory_tuning;
+  }
+  if (document.getElementById('io_scheduler_optimize')) {
+    document.getElementById('io_scheduler_optimize').checked = !!cfg.io_scheduler_optimize;
+  }
   document.getElementById('telemetry_enable').checked = (cfg.telemetry_enable !== false);
   document.getElementById('telemetry_interval_s').value = (cfg.telemetry_interval_s ?? 2.0);
   document.getElementById('watchdog_enable').checked = (cfg.watchdog_enable !== false);
   document.getElementById('watchdog_interval_s').value = (cfg.watchdog_interval_s ?? 2.0);
+  if (document.getElementById('connection_quality_monitoring')) {
+    document.getElementById('connection_quality_monitoring').checked = (cfg.connection_quality_monitoring !== false);
+  }
+  if (document.getElementById('auto_channel_switch')) {
+    document.getElementById('auto_channel_switch').checked = !!cfg.auto_channel_switch;
+  }
   document.getElementById('qos_preset').value = (cfg.qos_preset || 'off');
   document.getElementById('nat_accel').checked = !!cfg.nat_accel;
   document.getElementById('bridge_mode').checked = !!cfg.bridge_mode;
@@ -1267,8 +1534,20 @@ document.getElementById('btnSaveConfig').addEventListener('click', async () => {
 });
 
 document.getElementById('btnApplyVrProfile').addEventListener('click', () => {
-  applyVrProfile();
-  setMsg('VR profile applied (not saved).');
+  applyVrProfile('balanced');
+  setMsg('Balanced VR profile applied (not saved).');
+});
+document.getElementById('btnApplyVrProfileUltra').addEventListener('click', () => {
+  applyVrProfile('ultra_low_latency');
+  setMsg('Ultra Low Latency VR profile applied (not saved).');
+});
+document.getElementById('btnApplyVrProfileHigh').addEventListener('click', () => {
+  applyVrProfile('high_throughput');
+  setMsg('High Throughput VR profile applied (not saved).');
+});
+document.getElementById('btnApplyVrProfileStable').addEventListener('click', () => {
+  applyVrProfile('stability');
+  setMsg('Stability VR profile applied (not saved).');
 });
 
 document.getElementById('btnSaveRestart').addEventListener('click', async () => {
@@ -2354,6 +2633,53 @@ class APIHandler(BaseHTTPRequestHandler):
                 duration_s=duration_s,
                 interval_ms=interval_ms,
                 timeout_s=timeout_s,
+            )
+            self._respond(200, self._envelope(correlation_id=cid, data=res))
+            return
+
+        if path == "/v1/diagnostics/udp_latency":
+            target_ip = (body.get("target_ip") or "").strip() if isinstance(body, dict) else ""
+            duration_s = body.get("duration_s") if isinstance(body, dict) else None
+            interval_ms = body.get("interval_ms") if isinstance(body, dict) else None
+            target_port = body.get("target_port") if isinstance(body, dict) else None
+            packet_size = body.get("packet_size") if isinstance(body, dict) else None
+
+            try:
+                ipaddress.IPv4Address(target_ip)
+            except Exception:
+                self._respond(
+                    400,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code="invalid_request",
+                        warnings=body_warnings + ["invalid_target_ip"],
+                    ),
+                )
+                return
+
+            try:
+                duration_s = int(duration_s) if duration_s is not None else 10
+            except Exception:
+                duration_s = 10
+            try:
+                interval_ms = int(interval_ms) if interval_ms is not None else 20
+            except Exception:
+                interval_ms = 20
+            try:
+                target_port = int(target_port) if target_port is not None else 12345
+            except Exception:
+                target_port = 12345
+            try:
+                packet_size = int(packet_size) if packet_size is not None else 64
+            except Exception:
+                packet_size = 64
+
+            res = run_udp_latency_test(
+                target_ip=target_ip,
+                target_port=target_port,
+                duration_s=duration_s,
+                interval_ms=interval_ms,
+                packet_size=packet_size,
             )
             self._respond(200, self._envelope(correlation_id=cid, data=res))
             return

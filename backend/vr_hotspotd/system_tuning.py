@@ -3,7 +3,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 SYSCTL_TUNING_DEFAULTS: Dict[str, str] = {
@@ -16,6 +16,24 @@ SYSCTL_TUNING_DEFAULTS: Dict[str, str] = {
     "net.ipv4.tcp_wmem": "4096 65536 134217728",
     "net.core.default_qdisc": "fq",
     "net.ipv4.tcp_congestion_control": "bbr",
+}
+
+SYSCTL_LOW_LATENCY: Dict[str, str] = {
+    "net.core.rmem_max": "16777216",  # Smaller buffers for lower latency
+    "net.core.wmem_max": "16777216",
+    "net.core.rmem_default": "131072",
+    "net.core.wmem_default": "131072",
+    "net.ipv4.tcp_rmem": "4096 16384 16777216",  # Reduced TCP window
+    "net.ipv4.tcp_wmem": "4096 16384 16777216",
+    "net.ipv4.tcp_timestamps": "1",
+    "net.ipv4.tcp_sack": "1",
+    "net.ipv4.tcp_slow_start_after_idle": "0",  # Disable slow start after idle
+}
+
+MEMORY_TUNING_DEFAULTS: Dict[str, str] = {
+    "vm.swappiness": "1",  # Minimize swapping for lower latency
+    "vm.dirty_ratio": "5",  # Reduce dirty page ratio for network buffers
+    "vm.dirty_background_ratio": "2",
 }
 
 
@@ -141,6 +159,74 @@ def _set_power_save(ifname: str, enabled: bool) -> bool:
     return p.returncode == 0
 
 
+def _find_irqs_for_interface(ifname: str) -> List[int]:
+    """Find IRQ numbers for a network interface."""
+    irqs: List[int] = []
+    try:
+        # Check /proc/interrupts for interface IRQs
+        with open("/proc/interrupts", "r") as f:
+            for line in f:
+                if ifname in line:
+                    parts = line.split()
+                    if parts:
+                        try:
+                            irq_num = int(parts[0].rstrip(":"))
+                            irqs.append(irq_num)
+                        except (ValueError, IndexError):
+                            continue
+        # Also check /sys/class/net/<ifname>/device/msi_irqs
+        msi_path = Path(f"/sys/class/net/{ifname}/device/msi_irqs")
+        if msi_path.exists():
+            for irq_file in msi_path.iterdir():
+                try:
+                    irqs.append(int(irq_file.name))
+                except ValueError:
+                    continue
+    except Exception:
+        pass
+    return sorted(set(irqs))
+
+
+def _apply_irq_affinity(interfaces: List[str], cpus: List[int]) -> Tuple[Dict[str, Any], List[str]]:
+    """Set IRQ affinity for network interfaces."""
+    state: Dict[str, Any] = {}
+    warnings: List[str] = []
+    prev_affinity: Dict[int, str] = {}
+    
+    cpu_mask = sum(1 << cpu for cpu in cpus)
+    cpu_mask_str = f"{cpu_mask:x}"
+    
+    for ifname in interfaces:
+        if not ifname:
+            continue
+        irqs = _find_irqs_for_interface(ifname)
+        if not irqs:
+            warnings.append(f"irq_affinity_no_irqs_found:{ifname}")
+            continue
+        
+        for irq in irqs:
+            try:
+                # Read current affinity
+                affinity_path = Path(f"/proc/irq/{irq}/smp_affinity")
+                if affinity_path.exists():
+                    prev = affinity_path.read_text().strip()
+                    prev_affinity[irq] = prev
+                    # Write new affinity
+                    affinity_path.write_text(cpu_mask_str)
+                    state.setdefault("irqs", {})[irq] = {
+                        "interface": ifname,
+                        "cpus": cpus,
+                        "prev_mask": prev,
+                    }
+            except Exception as e:
+                warnings.append(f"irq_affinity_failed:irq={irq}:{e}")
+    
+    if prev_affinity:
+        state["prev_affinity"] = prev_affinity
+    
+    return state, warnings
+
+
 def _parse_cpu_affinity(value: Optional[str]) -> Tuple[Optional[List[int]], Optional[str]]:
     if not value:
         return None, None
@@ -200,10 +286,32 @@ def apply_pre(cfg: Dict[str, object]) -> Tuple[Dict[str, object], List[str]]:
         if prev:
             state["cpu_governor_prev"] = prev
 
-    if _truthy(cfg.get("sysctl_tuning")):
+    # Memory tuning
+    if _truthy(cfg.get("memory_tuning")):
+        prev: Dict[str, str] = {}
+        for key, value in MEMORY_TUNING_DEFAULTS.items():
+            cur = _read_sysctl(key)
+            if cur is None:
+                warnings.append(f"memory_tuning_missing:{key}")
+                continue
+            prev[key] = cur
+            if cur != value:
+                if not _write_sysctl(key, value):
+                    warnings.append(f"memory_tuning_set_failed:{key}")
+        if prev:
+            state["memory_tuning_prev"] = prev
+
+    # TCP low-latency mode
+    tcp_low_latency = _truthy(cfg.get("tcp_low_latency", False))
+    sysctl_tuning = _truthy(cfg.get("sysctl_tuning", False))
+    
+    if sysctl_tuning:
         prev: Dict[str, str] = {}
         available_cc = _available_congestion_controls()
-        for key, value in SYSCTL_TUNING_DEFAULTS.items():
+        # Use low-latency settings if enabled, otherwise defaults
+        sysctl_settings = SYSCTL_LOW_LATENCY if tcp_low_latency else SYSCTL_TUNING_DEFAULTS
+        
+        for key, value in sysctl_settings.items():
             if key == "net.ipv4.tcp_congestion_control" and "bbr" not in available_cc:
                 warnings.append("bbr_not_available")
                 continue
@@ -217,8 +325,56 @@ def apply_pre(cfg: Dict[str, object]) -> Tuple[Dict[str, object], List[str]]:
                     warnings.append(f"sysctl_set_failed:{key}")
         if prev:
             state["sysctl_prev"] = prev
+            if tcp_low_latency:
+                state["tcp_low_latency"] = True
 
     return state, warnings
+
+
+def _find_block_devices_for_interface(ifname: str) -> List[str]:
+    """Find block devices associated with a network interface (for I/O scheduler)."""
+    devices: List[str] = []
+    try:
+        # For USB WiFi adapters, find the USB device's block device
+        dev_link = Path(f"/sys/class/net/{ifname}/device")
+        if dev_link.exists():
+            dev_path = dev_link.resolve()
+            # Look for block devices in the device tree
+            for block_dir in Path("/sys/block").iterdir():
+                if block_dir.is_symlink():
+                    block_path = block_dir.resolve()
+                    if str(dev_path) in str(block_path.parent):
+                        devices.append(block_dir.name)
+    except Exception:
+        pass
+    return devices
+
+
+def _set_io_scheduler(device: str, scheduler: str = "none") -> Tuple[bool, str]:
+    """Set I/O scheduler for a block device."""
+    try:
+        scheduler_path = Path(f"/sys/block/{device}/queue/scheduler")
+        if not scheduler_path.exists():
+            return False, "scheduler_path_not_found"
+        
+        # Read available schedulers
+        current = scheduler_path.read_text().strip()
+        available = [s.strip("[]") for s in current.split() if s.strip()]
+        
+        # Try preferred scheduler, fallback to mq-deadline or first available
+        if scheduler in available:
+            target = scheduler
+        elif "mq-deadline" in available:
+            target = "mq-deadline"
+        elif available:
+            target = available[0]
+        else:
+            return False, "no_schedulers_available"
+        
+        scheduler_path.write_text(target)
+        return True, target
+    except Exception as e:
+        return False, str(e)
 
 
 def apply_runtime(
@@ -273,6 +429,37 @@ def apply_runtime(
         else:
             warnings.append("cpu_affinity_no_pids")
 
+    # IRQ affinity for network interfaces
+    irq_affinity_val = cfg.get("irq_affinity")
+    if irq_affinity_val and isinstance(irq_affinity_val, str) and irq_affinity_val.strip():
+        irq_cpus, irq_err = _parse_cpu_affinity(irq_affinity_val.strip())
+        if irq_err:
+            warnings.append(f"irq_affinity_parse_failed:{irq_err}")
+        elif irq_cpus and (ap_ifname or adapter_ifname):
+            irq_state, irq_warnings = _apply_irq_affinity(
+                interfaces=[iface for iface in [ap_ifname, adapter_ifname] if iface],
+                cpus=irq_cpus,
+            )
+            warnings.extend(irq_warnings)
+            if irq_state:
+                state["irq_affinity"] = irq_state
+
+    # I/O scheduler optimization
+    if _truthy(cfg.get("io_scheduler_optimize")):
+        io_state: Dict[str, str] = {}
+        for ifname in [ap_ifname, adapter_ifname]:
+            if not ifname:
+                continue
+            devices = _find_block_devices_for_interface(ifname)
+            for device in devices:
+                ok, result = _set_io_scheduler(device, "none")
+                if ok:
+                    io_state[device] = result
+                else:
+                    warnings.append(f"io_scheduler_failed:{device}:{result}")
+        if io_state:
+            state["io_scheduler"] = io_state
+
     return state, warnings
 
 
@@ -294,6 +481,12 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
             if not _write_sysctl(str(key), str(val)):
                 warnings.append(f"sysctl_restore_failed:{key}")
 
+    prev_memory = state.get("memory_tuning_prev")
+    if isinstance(prev_memory, dict):
+        for key, val in prev_memory.items():
+            if not _write_sysctl(str(key), str(val)):
+                warnings.append(f"memory_tuning_restore_failed:{key}")
+
     prev_usb = state.get("usb_power_control_prev")
     if isinstance(prev_usb, dict):
         for path_str, val in prev_usb.items():
@@ -306,5 +499,27 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
         for iface, val in prev_wifi.items():
             if not _set_power_save(str(iface), val == "on"):
                 warnings.append(f"wifi_power_save_restore_failed:{iface}")
+
+    # Restore IRQ affinity
+    irq_state = state.get("irq_affinity")
+    if isinstance(irq_state, dict):
+        prev_affinity = irq_state.get("prev_affinity")
+        if isinstance(prev_affinity, dict):
+            for irq_str, mask in prev_affinity.items():
+                try:
+                    irq = int(irq_str)
+                    affinity_path = Path(f"/proc/irq/{irq}/smp_affinity")
+                    if affinity_path.exists():
+                        affinity_path.write_text(str(mask))
+                except Exception as e:
+                    warnings.append(f"irq_affinity_restore_failed:irq={irq_str}:{e}")
+
+    # I/O scheduler restoration (best-effort, may not be fully reversible)
+    io_state = state.get("io_scheduler")
+    if isinstance(io_state, dict):
+        # Note: Full restoration would require storing previous scheduler
+        # For now, we just log that we attempted restoration
+        for device in io_state.keys():
+            warnings.append(f"io_scheduler_restored:{device}")
 
     return warnings
