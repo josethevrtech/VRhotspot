@@ -1034,22 +1034,10 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     )
     if preflight_result.get("warnings"):
         start_warnings.extend([str(w) for w in preflight_result.get("warnings")])
+    preflight_errors = [str(e) for e in preflight_result.get("errors") or []]
+    if preflight_errors:
+        start_warnings.extend([f"preflight_error:{e}" for e in preflight_errors])
     update_state(preflight=preflight_result)
-    if preflight_result.get("errors"):
-        err = "preflight_failed:" + ",".join([str(e) for e in preflight_result.get("errors")])
-        state = update_state(
-            phase="error",
-            running=False,
-            ap_interface=None,
-            last_error=err,
-            last_correlation_id=correlation_id,
-            warnings=start_warnings,
-            preflight=preflight_result,
-            tuning={},
-            network_tuning={},
-            engine={"last_error": err, "ap_logs_tail": []},
-        )
-        return LifecycleResult("start_failed", state)
 
     try:
         tuning_state, tuning_warnings = system_tuning.apply_pre(cfg)
@@ -1142,21 +1130,15 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         },
     )
 
+    ap_info = None
+    start_failure_reason = None
     if not res.ok:
-        revert_warnings = _safe_revert_tuning(tuning_state)
-        state = update_state(
-            phase="error",
-            running=False,
-            ap_interface=None,
-            last_error=res.error or "engine_start_failed",
-            last_correlation_id=correlation_id,
-            warnings=start_warnings + revert_warnings,
-            tuning={},
-            network_tuning={},
-        )
-        return LifecycleResult("start_failed", state)
+        start_failure_reason = res.error or "engine_start_failed"
+    else:
+        ap_info = _wait_for_ap_ready(target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname)
+        if not ap_info:
+            start_failure_reason = "ap_ready_timeout"
 
-    ap_info = _wait_for_ap_ready(target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname)
     if ap_info:
         detected_band = _band_from_freq_mhz(ap_info.freq_mhz)
         affinity_pids = _collect_affinity_pids(
@@ -1219,17 +1201,23 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     _remove_conf_dirs(ap_ifname)
 
     warnings: List[str] = list(start_warnings)
-    warnings.append("optimized_ap_start_timed_out")
+    if start_failure_reason == "ap_ready_timeout":
+        warnings.append("optimized_ap_start_timed_out")
+    else:
+        warnings.append(f"optimized_start_failed:{start_failure_reason or 'engine_start_failed'}")
     fallback_chain: List[Tuple[str, Optional[int], bool, str]] = []
 
     if bridge_mode:
         revert_warnings = _safe_revert_tuning(tuning_state)
         warnings.extend(revert_warnings)
+        last_error = "ap_ready_timeout_bridge_mode"
+        if start_failure_reason and start_failure_reason != "ap_ready_timeout":
+            last_error = start_failure_reason
         state = update_state(
             phase="error",
             running=False,
             ap_interface=None,
-            last_error="ap_ready_timeout_bridge_mode",
+            last_error=last_error,
             last_correlation_id=correlation_id,
             fallback_reason=None,
             warnings=warnings,
@@ -1250,11 +1238,14 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     else:
         revert_warnings = _safe_revert_tuning(tuning_state)
         warnings.extend(revert_warnings)
+        last_error = "ap_ready_timeout"
+        if start_failure_reason and start_failure_reason != "ap_ready_timeout":
+            last_error = start_failure_reason
         state = update_state(
             phase="error",
             running=False,
             ap_interface=None,
-            last_error="ap_ready_timeout",
+            last_error=last_error,
             last_correlation_id=correlation_id,
             fallback_reason=None,
             warnings=warnings,
@@ -1296,24 +1287,15 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
 
         if not res_fallback.ok:
-            revert_warnings = _safe_revert_tuning(tuning_state)
-            warnings.extend(revert_warnings)
-            state = update_state(
-                phase="error",
-                running=False,
-                ap_interface=None,
-                last_error=res_fallback.error or "engine_start_failed_fallback",
-                last_correlation_id=correlation_id,
-                fallback_reason="ap_ready_timeout",
-                warnings=warnings,
-                tuning={},
-                network_tuning={},
+            warnings.append(
+                f"fallback_start_failed:{res_fallback.error or 'engine_start_failed_fallback'}"
             )
-            return LifecycleResult("start_failed", state)
+            ap_info_fallback = None
+        else:
+            ap_info_fallback = _wait_for_ap_ready(
+                target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname
+            )
 
-        ap_info_fallback = _wait_for_ap_ready(
-            target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname
-        )
         if ap_info_fallback:
             detected_band = _band_from_freq_mhz(ap_info_fallback.freq_mhz)
             affinity_pids = _collect_affinity_pids(
