@@ -73,6 +73,31 @@ When `firewalld` is running, the daemon applies policy via `firewall-cmd` (not r
 
 This avoids conflicts on platforms where firewalld is the authority on firewall state.
 
+---
+
+## Performance tuning (optional)
+
+These system-level tweaks can improve stability and latency for VR streaming. They are **off by default** and best-effort.
+Enable them in the UI or via `/v1/config`.
+
+System tuning options:
+- `wifi_power_save_disable`: turns off Wi-Fi power save on the AP interface (and physical adapter)
+- `usb_autosuspend_disable`: disables autosuspend on USB Wi-Fi adapters
+- `cpu_governor_performance`: sets CPU governor to `performance` while the hotspot runs
+- `cpu_affinity`: pins hostapd/dnsmasq/engine to specific CPUs (e.g., `"2"` or `"2-3"` or `"2,4"`)
+- `sysctl_tuning`: raises socket buffers and enables `bbr` + `fq` if supported
+
+Notes:
+- These changes are applied on start and reverted on stop/repair when possible.
+- Some systems may block governor or sysctl changes; VR Hotspot will warn but continue.
+
+## Hardware tips
+
+- Prefer a dedicated 5/6 GHz adapter for the AP.
+- PCIe/M.2 adapters are typically more stable than USB for sustained throughput.
+- Use high-gain antennas and avoid placing the host inside cabinets or near metal.
+- Keep the AP and headset within clear line-of-sight for best latency.
+
 ### Security and privacy
 
 #### API token enforcement to manage Hotspot via webportal!

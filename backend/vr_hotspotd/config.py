@@ -42,6 +42,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "dhcp_dns": "gateway",  # "gateway" | "no" | "8.8.8.8,1.1.1.1"
     "enable_internet": True,
 
+    # System tuning (optional)
+    "wifi_power_save_disable": False,
+    "usb_autosuspend_disable": False,
+    "cpu_governor_performance": False,
+    "cpu_affinity": "",
+    "sysctl_tuning": False,
+
     # Firewalld integration (SteamOS: firewalld owns nftables, so use firewall-cmd)
     "firewalld_enabled": True,
     "firewalld_zone": "trusted",
@@ -97,6 +104,16 @@ def _apply_migrations(cfg: Dict[str, Any]) -> Dict[str, Any]:
         out["dhcp_dns"] = DEFAULT_CONFIG["dhcp_dns"]
     if "enable_internet" not in out:
         out["enable_internet"] = DEFAULT_CONFIG["enable_internet"]
+    if "wifi_power_save_disable" not in out:
+        out["wifi_power_save_disable"] = DEFAULT_CONFIG["wifi_power_save_disable"]
+    if "usb_autosuspend_disable" not in out:
+        out["usb_autosuspend_disable"] = DEFAULT_CONFIG["usb_autosuspend_disable"]
+    if "cpu_governor_performance" not in out:
+        out["cpu_governor_performance"] = DEFAULT_CONFIG["cpu_governor_performance"]
+    if "cpu_affinity" not in out:
+        out["cpu_affinity"] = DEFAULT_CONFIG["cpu_affinity"]
+    if "sysctl_tuning" not in out:
+        out["sysctl_tuning"] = DEFAULT_CONFIG["sysctl_tuning"]
     return out
 
 
