@@ -121,6 +121,21 @@ def run_ping(
     rtt_min = min(rtt_sorted) if rtt_sorted else None
     rtt_avg = (sum(rtt_sorted) / len(rtt_sorted)) if rtt_sorted else None
 
+    # Calculate jitter (inter-packet delay variation)
+    jitter = None
+    jitter_avg = None
+    jitter_max = None
+    if len(samples) >= 2:
+        # Jitter is the mean deviation of consecutive packet delay differences
+        delays = []
+        for i in range(1, len(samples)):
+            delay_diff = abs(samples[i] - samples[i-1])
+            delays.append(delay_diff)
+        if delays:
+            jitter = sum(delays) / len(delays)  # Average jitter
+            jitter_avg = jitter
+            jitter_max = max(delays) if delays else None
+
     rtt = {
         "min": rtt_min,
         "avg": rtt_avg,
@@ -134,7 +149,7 @@ def run_ping(
     if sent and sent > 0:
         packet_loss_pct = max(0.0, min(100.0, 100.0 * (sent - received) / sent))
 
-    return {
+    result = {
         "target_ip": target_ip,
         "duration_s": int(duration_s),
         "interval_ms": int(interval_ms),
@@ -144,3 +159,12 @@ def run_ping(
         "rtt_ms": rtt,
         "samples_ms": samples,
     }
+    
+    # Add jitter metrics
+    if jitter is not None:
+        result["jitter_ms"] = {
+            "avg": float(jitter_avg) if jitter_avg is not None else None,
+            "max": float(jitter_max) if jitter_max is not None else None,
+        }
+
+    return result

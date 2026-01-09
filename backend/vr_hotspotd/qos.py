@@ -8,9 +8,11 @@ from vr_hotspotd.engine import firewalld
 
 
 QOS_PRESETS: Dict[str, Dict[str, Optional[str]]] = {
-    "off": {"dscp": None, "qdisc": None},
-    "vr": {"dscp": "CS5", "qdisc": "cake"},
-    "balanced": {"dscp": "AF41", "qdisc": "fq_codel"},
+    "off": {"dscp": None, "qdisc": None, "priority": None},
+    "vr": {"dscp": "CS5", "qdisc": "cake", "priority": "normal"},
+    "balanced": {"dscp": "AF41", "qdisc": "fq_codel", "priority": "normal"},
+    "ultra_low_latency": {"dscp": "CS6", "qdisc": "prio", "priority": "strict"},
+    "high_throughput": {"dscp": "AF42", "qdisc": "cake", "priority": "normal"},
 }
 
 _RULE_COMMENT = "vrhotspot-qos"
@@ -33,12 +35,29 @@ def _iptables_path() -> Optional[str]:
     return shutil.which("iptables")
 
 
-def _apply_qdisc(ap_ifname: str, kind: str) -> Tuple[Optional[Dict[str, str]], List[str]]:
+def _apply_qdisc(ap_ifname: str, kind: str, priority: Optional[str] = None) -> Tuple[Optional[Dict[str, str]], List[str]]:
     warnings: List[str] = []
     tc = _tc_path()
     if not tc:
         warnings.append("tc_not_found")
         return None, warnings
+
+    # Strict priority qdisc for ultra low latency
+    if kind == "prio" and priority == "strict":
+        # Create prio qdisc with 3 bands, then add filters for UDP prioritization
+        ok, out = _run([tc, "qdisc", "replace", "dev", ap_ifname, "root", "handle", "1:", "prio", "bands", "3"])
+        if ok:
+            # Add fq_codel to each band for fairness within priority
+            _run([tc, "qdisc", "add", "dev", ap_ifname, "parent", "1:1", "handle", "11:", "fq_codel"])
+            _run([tc, "qdisc", "add", "dev", ap_ifname, "parent", "1:2", "handle", "12:", "fq_codel"])
+            _run([tc, "qdisc", "add", "dev", ap_ifname, "parent", "1:3", "handle", "13:", "fq_codel"])
+            
+            # Prioritize UDP traffic (VR streaming) to band 1 (highest priority)
+            _run([tc, "filter", "add", "dev", ap_ifname, "protocol", "ip", "parent", "1:0", "prio", "1", "u32", "match", "ip", "protocol", "17", "0xff", "flowid", "1:1"])
+            
+            return {"dev": ap_ifname, "kind": "prio", "priority": "strict"}, warnings
+        warnings.append(f"prio_qdisc_failed:{out[:120]}")
+        kind = "fq_codel"
 
     if kind == "cake":
         ok, out = _run([tc, "qdisc", "replace", "dev", ap_ifname, "root", "cake", "diffserv4"])
@@ -120,8 +139,9 @@ def apply(
     state["preset"] = preset
 
     qdisc_kind = QOS_PRESETS[preset].get("qdisc")
+    priority = QOS_PRESETS[preset].get("priority")
     if qdisc_kind:
-        qdisc_state, qdisc_warn = _apply_qdisc(ap_ifname, qdisc_kind)
+        qdisc_state, qdisc_warn = _apply_qdisc(ap_ifname, qdisc_kind, priority)
         warnings.extend(qdisc_warn)
         if qdisc_state:
             state["qdisc"] = qdisc_state
@@ -156,6 +176,9 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
         dev = qdisc.get("dev")
         tc = _tc_path()
         if tc and dev:
+            # For prio qdisc, delete filters first, then qdisc
+            if qdisc.get("kind") == "prio":
+                _run([tc, "filter", "del", "dev", str(dev), "parent", "1:0"])
             ok, out = _run([tc, "qdisc", "del", "dev", str(dev), "root"])
             if not ok and out:
                 warnings.append(f"qdisc_delete_failed:{out[:120]}")

@@ -156,9 +156,14 @@ def _write_hostapd_6ghz_conf(
     passphrase: str,
     country: Optional[str],
     channel: int,
+    channel_width: str = "auto",
+    beacon_interval: int = 50,
+    dtim_period: int = 1,
+    short_guard_interval: bool = True,
+    tx_power: Optional[int] = None,
 ) -> None:
     """
-    Minimal 6 GHz + WPA3-SAE hostapd config.
+    Minimal 6 GHz + WPA3-SAE hostapd config with VR optimizations.
     Key points (6 GHz / WPA3):
       - wpa_key_mgmt=SAE
       - ieee80211w=2 (PMF required)
@@ -166,6 +171,11 @@ def _write_hostapd_6ghz_conf(
       - op_class=131 is commonly used for 6 GHz 20 MHz operation
     """
     cc = (country or "").strip().upper()
+    
+    # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
+    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3}
+    chwidth = chwidth_map.get(channel_width.lower(), 0)  # Default to 20MHz if auto/unknown
+    
     lines = [
         f"interface={ifname}",
         "driver=nl80211",
@@ -174,13 +184,36 @@ def _write_hostapd_6ghz_conf(
         f"ssid={ssid}",
         "hw_mode=a",
         f"channel={int(channel)}",
+        f"beacon_int={beacon_interval}",
+        f"dtim_period={dtim_period}",
         "op_class=131",
         "ieee80211ax=1",
         "wmm_enabled=1",
-        # 6 GHz HE operating params (20 MHz)
-        "he_oper_chwidth=0",
+        # 6 GHz HE operating params
+        f"he_oper_chwidth={chwidth}",
         f"he_oper_centr_freq_seg0_idx={int(channel)}",
-        # Security: WPA3-SAE only
+    ]
+    
+    if short_guard_interval:
+        # Short guard interval for improved throughput
+        # For HE (802.11ax), SGI is enabled by default, but we can specify it explicitly
+        lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
+    
+    # MIMO/Beamforming optimizations for WiFi 6
+    lines += [
+        "he_su_beamformee=1",
+        "he_su_beamformer=1",
+        "he_mu_beamformer=1",
+    ]
+    
+    # Frame aggregation for improved throughput
+    lines += [
+        "amsdu_frames=1",  # Enable A-MSDU aggregation
+        "ampdu_density=0",  # Aggressive A-MPDU density for low latency
+    ]
+    
+    # Security: WPA3-SAE only
+    lines += [
         "wpa=2",
         "wpa_key_mgmt=SAE",
         "rsn_pairwise=CCMP",
@@ -188,11 +221,15 @@ def _write_hostapd_6ghz_conf(
         "sae_pwe=2",
         f"sae_password={passphrase}",
     ]
+    
     if cc and len(cc) == 2:
         lines += [
             f"country_code={cc}",
             "ieee80211d=1",
         ]
+    
+    if tx_power is not None:
+        lines.append(f"tx_power={tx_power}")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -242,6 +279,11 @@ def main() -> int:
     ap.add_argument("--dhcp-end", default=None)
     ap.add_argument("--dhcp-dns", default=None)
     ap.add_argument("--no-internet", action="store_true")
+    ap.add_argument("--channel-width", default="auto")
+    ap.add_argument("--beacon-interval", type=int, default=50)
+    ap.add_argument("--dtim-period", type=int, default=1)
+    ap.add_argument("--short-guard-interval", action="store_true", default=True)
+    ap.add_argument("--tx-power", type=int, default=None)
     args = ap.parse_args()
 
     if len(args.passphrase) < 8:
@@ -323,6 +365,11 @@ def main() -> int:
         passphrase=args.passphrase,
         country=args.country,
         channel=int(args.channel),
+        channel_width=args.channel_width,
+        beacon_interval=args.beacon_interval,
+        dtim_period=args.dtim_period,
+        short_guard_interval=args.short_guard_interval,
+        tx_power=args.tx_power,
     )
     _write_dnsmasq_conf(dnsmasq_conf, ap_iface, gw_ip, dhcp_start, dhcp_end, dhcp_dns)
 

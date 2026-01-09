@@ -142,8 +142,18 @@ def _write_hostapd_conf(
     ap_security: str,
     wifi6: bool,
     bridge: str,
+    channel_width: str = "auto",
+    beacon_interval: int = 50,
+    dtim_period: int = 1,
+    short_guard_interval: bool = True,
+    tx_power: Optional[int] = None,
 ) -> None:
     cc = (country or "").strip().upper()
+    
+    # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
+    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3}
+    chwidth = chwidth_map.get(channel_width.lower(), 0)  # Default to 20MHz if auto/unknown
+    
     lines = [
         f"interface={ifname}",
         "driver=nl80211",
@@ -151,6 +161,8 @@ def _write_hostapd_conf(
         "ctrl_interface=/run/hostapd",
         "ctrl_interface_group=0",
         f"ssid={ssid}",
+        f"beacon_int={beacon_interval}",
+        f"dtim_period={dtim_period}",
         "wmm_enabled=1",
     ]
 
@@ -159,20 +171,50 @@ def _write_hostapd_conf(
 
     if band == "2.4ghz":
         lines += ["hw_mode=g", f"channel={int(channel)}", "ieee80211n=1"]
+        if short_guard_interval:
+            lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
     elif band == "5ghz":
         lines += ["hw_mode=a", f"channel={int(channel)}", "ieee80211n=1", "ieee80211ac=1"]
+        if short_guard_interval:
+            lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
+            lines.append("vht_capab=[SHORT-GI-80][SHORT-GI-160]")
+        # VHT channel width
+        if chwidth >= 2:
+            lines.append(f"vht_oper_chwidth={chwidth - 1}")  # 1=80MHz, 2=160MHz
+            lines.append(f"vht_oper_centr_freq_seg0_idx={int(channel)}")
     elif band == "6ghz":
         lines += [
             "hw_mode=a",
             f"channel={int(channel)}",
             "op_class=131",
             "ieee80211ax=1",
-            "he_oper_chwidth=0",
+            f"he_oper_chwidth={chwidth}",
             f"he_oper_centr_freq_seg0_idx={int(channel)}",
+        ]
+        # MIMO/Beamforming for WiFi 6
+        lines += [
+            "he_su_beamformee=1",
+            "he_su_beamformer=1",
+            "he_mu_beamformer=1",
         ]
 
     if wifi6 and band in ("2.4ghz", "5ghz"):
         lines.append("ieee80211ax=1")
+        # MIMO/Beamforming for WiFi 6
+        lines += [
+            "he_su_beamformee=1",
+            "he_su_beamformer=1",
+            "he_mu_beamformer=1",
+        ]
+        if band == "5ghz":
+            lines.append(f"he_oper_chwidth={chwidth}")
+            lines.append(f"he_oper_centr_freq_seg0_idx={int(channel)}")
+        
+        # Frame aggregation for improved throughput
+        lines += [
+            "amsdu_frames=1",  # Enable A-MSDU aggregation
+            "ampdu_density=0",  # Aggressive A-MPDU density for low latency
+        ]
 
     if ap_security == "wpa3_sae" or band == "6ghz":
         lines += [
@@ -190,6 +232,9 @@ def _write_hostapd_conf(
             "rsn_pairwise=CCMP",
             f"wpa_passphrase={passphrase}",
         ]
+    
+    if tx_power is not None:
+        lines.append(f"tx_power={tx_power}")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -210,6 +255,11 @@ def main() -> int:
     ap.add_argument("--wifi6", action="store_true")
     ap.add_argument("--bridge-name", default="vrbr0")
     ap.add_argument("--bridge-uplink", default=None)
+    ap.add_argument("--channel-width", default="auto")
+    ap.add_argument("--beacon-interval", type=int, default=50)
+    ap.add_argument("--dtim-period", type=int, default=1)
+    ap.add_argument("--short-guard-interval", action="store_true", default=True)
+    ap.add_argument("--tx-power", type=int, default=None)
     args = ap.parse_args()
 
     if len(args.passphrase) < 8:
@@ -283,6 +333,11 @@ def main() -> int:
             ap_security=str(args.ap_security).strip().lower(),
             wifi6=bool(args.wifi6),
             bridge=args.bridge_name,
+            channel_width=args.channel_width,
+            beacon_interval=args.beacon_interval,
+            dtim_period=args.dtim_period,
+            short_guard_interval=args.short_guard_interval,
+            tx_power=args.tx_power,
         )
 
         hostapd_cmd = [hostapd, hostapd_conf]

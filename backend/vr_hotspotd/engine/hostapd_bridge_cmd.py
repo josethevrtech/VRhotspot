@@ -16,6 +16,11 @@ def build_cmd_bridge(
     wifi6: bool,
     bridge_name: Optional[str],
     bridge_uplink: Optional[str],
+    channel_width: str = "auto",
+    beacon_interval: int = 50,
+    dtim_period: int = 1,
+    short_guard_interval: bool = True,
+    tx_power: Optional[int] = None,
 ) -> List[str]:
     cmd: List[str] = [
         sys.executable,
@@ -53,5 +58,13 @@ def build_cmd_bridge(
 
     if bridge_uplink:
         cmd += ["--bridge-uplink", bridge_uplink]
+    
+    cmd += ["--channel-width", str(channel_width)]
+    cmd += ["--beacon-interval", str(beacon_interval)]
+    cmd += ["--dtim-period", str(dtim_period)]
+    if short_guard_interval:
+        cmd += ["--short-guard-interval"]
+    if tx_power is not None:
+        cmd += ["--tx-power", str(tx_power)]
 
     return cmd

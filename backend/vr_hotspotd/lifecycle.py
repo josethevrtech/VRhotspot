@@ -13,12 +13,15 @@ from typing import Optional, Set, Dict, Any, List, Tuple
 
 from vr_hotspotd.state import load_state, update_state
 from vr_hotspotd.adapters.inventory import get_adapters
+from vr_hotspotd.adapters.profiles import apply_adapter_profile
 from vr_hotspotd.config import load_config, ensure_config_file
 from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
 from vr_hotspotd.engine import lnxrouter_conf
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
 from vr_hotspotd.engine.hostapd_bridge_cmd import build_cmd_bridge
 from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running
+from vr_hotspotd.engine.channel_scan import select_best_channel
+from vr_hotspotd.engine.tx_power import auto_adjust_tx_power, set_tx_power, get_tx_power
 from vr_hotspotd import system_tuning, preflight, network_tuning
 
 log = logging.getLogger("vr_hotspotd.lifecycle")
@@ -49,6 +52,12 @@ _START_OVERRIDE_KEYS = {
     "ap_security",   # "wpa2" (default) or "wpa3_sae"
     "channel_6g",    # int
     "wifi6",         # "auto" | true | false
+    "channel_width",  # "auto" | "20" | "40" | "80" | "160"
+    "beacon_interval",  # int
+    "dtim_period",  # int
+    "short_guard_interval",  # bool
+    "tx_power",  # int or None
+    "channel_auto_select",  # bool
     # Network
     "lan_gateway_ip",
     "dhcp_start_ip",
@@ -61,6 +70,11 @@ _START_OVERRIDE_KEYS = {
     "cpu_governor_performance",
     "cpu_affinity",
     "sysctl_tuning",
+    "irq_affinity",
+    "interrupt_coalescing",
+    "tcp_low_latency",
+    "memory_tuning",
+    "io_scheduler_optimize",
     # Watchdog / telemetry / QoS / NAT
     "watchdog_enable",
     "watchdog_interval_s",
@@ -68,6 +82,8 @@ _START_OVERRIDE_KEYS = {
     "telemetry_interval_s",
     "qos_preset",
     "nat_accel",
+    "connection_quality_monitoring",
+    "auto_channel_switch",
     # Bridge mode
     "bridge_mode",
     "bridge_name",
@@ -565,6 +581,11 @@ def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[
             return "hostapd_exited"
         if expect_dns and not _dnsmasq_pid_running(conf_dir):
             return "dnsmasq_exited"
+        # Check connection quality if monitoring is enabled
+        if bool(cfg.get("connection_quality_monitoring", True)):
+            quality_reason = _check_connection_quality(state, cfg)
+            if quality_reason:
+                return quality_reason
         return None
 
     if engine_pid and _pid_running(engine_pid):
@@ -575,6 +596,11 @@ def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[
             return "hostapd_missing"
         if expect_dns and not has_dnsmasq:
             return "dnsmasq_missing"
+        # Check connection quality
+        if bool(cfg.get("connection_quality_monitoring", True)):
+            quality_reason = _check_connection_quality(state, cfg)
+            if quality_reason:
+                return quality_reason
         return None
 
     if not _find_hostapd_pids(adapter_ifname):
@@ -584,8 +610,73 @@ def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[
     return None
 
 
+def _check_connection_quality(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[str]:
+    """Check connection quality and return reason if quality is degraded."""
+    try:
+        from vr_hotspotd import telemetry
+        
+        adapter_ifname = state.get("adapter")
+        telemetry_enabled = bool(cfg.get("telemetry_enable", True))
+        if not telemetry_enabled:
+            return None
+        
+        interval = float(cfg.get("telemetry_interval_s", 2.0))
+        telemetry_data = telemetry.get_snapshot(
+            adapter_ifname=adapter_ifname,
+            enabled=True,
+            interval_s=interval,
+        )
+        
+        if not telemetry_data.get("enabled"):
+            return None
+        
+        summary = telemetry_data.get("summary", {})
+        quality_score = summary.get("quality_score_avg")
+        
+        # If quality score is below threshold, trigger restart
+        if quality_score is not None and quality_score < 50.0:  # Threshold: 50/100
+            loss_pct = summary.get("loss_pct_avg")
+            rssi_min = summary.get("rssi_min_dbm")
+            
+            if loss_pct is not None and loss_pct > 5.0:
+                return f"connection_quality_degraded:loss={loss_pct:.1f}%"
+            if rssi_min is not None and rssi_min < -85:
+                return f"connection_quality_degraded:rssi={rssi_min}dBm"
+            return f"connection_quality_degraded:score={quality_score:.1f}"
+    except Exception:
+        pass  # Best-effort, don't fail watchdog on telemetry errors
+    
+    return None
+
+
 def _restart_from_watchdog(reason: str) -> None:
     cid = f"watchdog-{int(time.time())}"
+    
+    # Check if auto channel switch is enabled and reason is quality-related
+    cfg = load_config()
+    auto_switch = bool(cfg.get("auto_channel_switch", False))
+    
+    if auto_switch and "connection_quality" in reason:
+        # Try to switch to a better channel
+        st = load_state()
+        adapter_ifname = st.get("adapter")
+        band = st.get("band", "5ghz")
+        
+        if adapter_ifname:
+            try:
+                best_channel = select_best_channel(adapter_ifname, band)
+                if best_channel:
+                    # Update config with new channel
+                    if band == "6ghz":
+                        cfg["channel_6g"] = best_channel
+                    elif band == "2.4ghz":
+                        cfg["fallback_channel_2g"] = best_channel
+                    # Note: For 5GHz, channel selection is handled by lnxrouter
+                    from vr_hotspotd.config import write_config_file
+                    write_config_file({"channel_6g" if band == "6ghz" else "fallback_channel_2g": best_channel})
+            except Exception:
+                pass  # Best-effort
+    
     with _OP_LOCK:
         _stop_hotspot_impl(correlation_id=cid + ":stop")
         _start_hotspot_impl(correlation_id=cid + ":start")
@@ -625,6 +716,33 @@ def _watchdog_loop() -> None:
         if not reason:
             backoff_s = max(2.0, interval)
             next_restart = 0.0
+            
+            # Auto-adjust TX power based on telemetry (if enabled and tx_power is None/auto)
+            tx_power_cfg = cfg.get("tx_power")
+            if tx_power_cfg is None:  # Auto mode
+                try:
+                    from vr_hotspotd import telemetry
+                    adapter_ifname = st.get("adapter")
+                    if adapter_ifname:
+                        telemetry_data = telemetry.get_snapshot(
+                            adapter_ifname=adapter_ifname,
+                            enabled=True,
+                            interval_s=interval,
+                        )
+                        summary = telemetry_data.get("summary", {})
+                        rssi_avg = summary.get("rssi_avg_dbm")
+                        if rssi_avg is not None:
+                            current_power = get_tx_power(adapter_ifname)
+                            new_power = auto_adjust_tx_power(adapter_ifname, rssi_avg, current_power)
+                            if new_power is not None:
+                                ok, msg = set_tx_power(adapter_ifname, new_power)
+                                if ok:
+                                    # Update config
+                                    from vr_hotspotd.config import write_config_file
+                                    write_config_file({"tx_power": new_power})
+                except Exception:
+                    pass  # Best-effort
+            
             continue
 
         now = time.time()
@@ -956,6 +1074,12 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         if bp == "6ghz" and not a.get("supports_6ghz"):
             raise RuntimeError("selected_adapter_not_6ghz_capable")
 
+        # Apply adapter-specific profile optimizations
+        try:
+            cfg = apply_adapter_profile(cfg, a)
+        except Exception:
+            pass  # Best-effort, continue if profile application fails
+
         target_phy = _get_adapter_phy(inv, ap_ifname)
     except Exception as e:
         state = update_state(
@@ -1063,6 +1187,17 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             except Exception:
                 bridge_channel = 6
 
+        channel_width = str(cfg.get("channel_width", "auto")).lower()
+        beacon_interval = int(cfg.get("beacon_interval", 50))
+        dtim_period = int(cfg.get("dtim_period", 1))
+        short_guard_interval = bool(cfg.get("short_guard_interval", True))
+        tx_power = cfg.get("tx_power")
+        if tx_power is not None:
+            try:
+                tx_power = int(tx_power)
+            except Exception:
+                tx_power = None
+
         cmd1 = build_cmd_bridge(
             ap_ifname=ap_ifname,
             ssid=ssid,
@@ -1076,14 +1211,44 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             wifi6=effective_wifi6,
             bridge_name=str(bridge_name).strip() if isinstance(bridge_name, str) else None,
             bridge_uplink=str(bridge_uplink).strip() if isinstance(bridge_uplink, str) else None,
+            channel_width=channel_width,
+            beacon_interval=beacon_interval,
+            dtim_period=dtim_period,
+            short_guard_interval=short_guard_interval,
+            tx_power=tx_power,
         )
     elif bp == "6ghz":
         channel_6g = cfg.get("channel_6g", None)
+        
+        # Auto-select channel if enabled
+        channel_auto_select = bool(cfg.get("channel_auto_select", False))
+        if channel_auto_select and (channel_6g is None or channel_6g == 0):
+            try:
+                best_channel = select_best_channel(ap_ifname, "6ghz", channel_6g)
+                if best_channel:
+                    channel_6g = best_channel
+                    # Update config with selected channel
+                    from vr_hotspotd.config import write_config_file
+                    write_config_file({"channel_6g": best_channel})
+            except Exception:
+                pass  # Best-effort, continue with default
+        
         if channel_6g is not None:
             try:
                 channel_6g = int(channel_6g)
             except Exception:
                 channel_6g = None
+
+        channel_width = str(cfg.get("channel_width", "auto")).lower()
+        beacon_interval = int(cfg.get("beacon_interval", 50))
+        dtim_period = int(cfg.get("dtim_period", 1))
+        short_guard_interval = bool(cfg.get("short_guard_interval", True))
+        tx_power = cfg.get("tx_power")
+        if tx_power is not None:
+            try:
+                tx_power = int(tx_power)
+            except Exception:
+                tx_power = None
 
         cmd1 = build_cmd_6ghz(
             ap_ifname=ap_ifname,
@@ -1098,15 +1263,31 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             dhcp_end_ip=dhcp_end_ip,
             dhcp_dns=dhcp_dns,
             enable_internet=enable_internet,
+            channel_width=channel_width,
+            beacon_interval=beacon_interval,
+            dtim_period=dtim_period,
+            short_guard_interval=short_guard_interval,
+            tx_power=tx_power,
         )
     else:
+        # Auto-select channel for 5GHz/2.4GHz if enabled
+        selected_channel = None
+        channel_auto_select = bool(cfg.get("channel_auto_select", False))
+        if channel_auto_select:
+            try:
+                best_channel = select_best_channel(ap_ifname, bp, None)
+                if best_channel:
+                    selected_channel = best_channel
+            except Exception:
+                pass  # Best-effort
+        
         cmd1 = build_cmd(
             ap_ifname=ap_ifname,
             ssid=ssid,
             passphrase=passphrase,
             band_preference=bp,
             country=country if isinstance(country, str) else None,
-            channel=None,
+            channel=selected_channel,
             no_virt=optimized_no_virt,
             wifi6=effective_wifi6,
             gateway_ip=gateway_ip,

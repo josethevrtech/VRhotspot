@@ -16,6 +16,11 @@ def build_cmd_6ghz(
     dhcp_end_ip: Optional[str] = None,
     dhcp_dns: Optional[str] = None,
     enable_internet: bool = True,
+    channel_width: str = "auto",
+    beacon_interval: int = 50,
+    dtim_period: int = 1,
+    short_guard_interval: bool = True,
+    tx_power: Optional[int] = None,
 ) -> List[str]:
     cmd: List[str] = [
         sys.executable,
@@ -55,5 +60,13 @@ def build_cmd_6ghz(
 
     if enable_internet is False:
         cmd += ["--no-internet"]
+    
+    cmd += ["--channel-width", str(channel_width)]
+    cmd += ["--beacon-interval", str(beacon_interval)]
+    cmd += ["--dtim-period", str(dtim_period)]
+    if short_guard_interval:
+        cmd += ["--short-guard-interval"]
+    if tx_power is not None:
+        cmd += ["--tx-power", str(tx_power)]
 
     return cmd
