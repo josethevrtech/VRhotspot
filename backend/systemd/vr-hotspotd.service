@@ -20,6 +20,7 @@ EnvironmentFile=-/etc/vr-hotspot/env
 ExecStartPre=/usr/bin/python3 -m compileall -q /var/lib/vr-hotspot/app/backend/vr_hotspotd
 
 ExecStart=/usr/bin/python3 -m vr_hotspotd.main
+ExecStop=/bin/kill -TERM $MAINPID
 
 Restart=on-failure
 RestartSec=2

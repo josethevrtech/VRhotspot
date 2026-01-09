@@ -8,7 +8,7 @@ from vr_hotspotd.api import APIHandler
 log = logging.getLogger("vr_hotspotd.server")
 
 
-def run_server():
+def build_server() -> ThreadingHTTPServer:
     # Use the env vars that systemd sets for vr-hotspotd
     host = (os.environ.get("VR_HOTSPOTD_HOST") or "127.0.0.1").strip() or "127.0.0.1"
     port_raw = (os.environ.get("VR_HOTSPOTD_PORT") or "8732").strip() or "8732"
@@ -33,4 +33,9 @@ def run_server():
     server = ThreadingHTTPServer((host, port), APIHandler)
     server.daemon_threads = True
     log.info("listening", extra={"bind": f"http://{host}:{port}"})
+    return server
+
+
+def run_server():
+    server = build_server()
     server.serve_forever()

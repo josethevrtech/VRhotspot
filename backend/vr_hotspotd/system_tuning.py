@@ -350,29 +350,59 @@ def _find_block_devices_for_interface(ifname: str) -> List[str]:
     return devices
 
 
-def _set_io_scheduler(device: str, scheduler: str = "none") -> Tuple[bool, str]:
-    """Set I/O scheduler for a block device."""
+def _read_io_scheduler_state(device: str) -> Tuple[Optional[str], List[str]]:
+    scheduler_path = Path(f"/sys/block/{device}/queue/scheduler")
+    if not scheduler_path.exists():
+        return None, []
+    raw = scheduler_path.read_text().strip()
+    tokens = [s.strip() for s in raw.split() if s.strip()]
+    current = None
+    available: List[str] = []
+    for token in tokens:
+        if token.startswith("[") and token.endswith("]"):
+            cur = token.strip("[]")
+            current = cur
+            available.append(cur)
+        else:
+            available.append(token)
+    return current, available
+
+
+def _set_io_scheduler(device: str, scheduler: str = "none") -> Tuple[bool, str, Optional[str]]:
+    """Set I/O scheduler for a block device and return previous scheduler."""
     try:
         scheduler_path = Path(f"/sys/block/{device}/queue/scheduler")
         if not scheduler_path.exists():
-            return False, "scheduler_path_not_found"
-        
-        # Read available schedulers
-        current = scheduler_path.read_text().strip()
-        available = [s.strip("[]") for s in current.split() if s.strip()]
-        
+            return False, "scheduler_path_not_found", None
+
+        prev, available = _read_io_scheduler_state(device)
+        if not available:
+            return False, "no_schedulers_available", prev
+
         # Try preferred scheduler, fallback to mq-deadline or first available
         if scheduler in available:
             target = scheduler
         elif "mq-deadline" in available:
             target = "mq-deadline"
-        elif available:
-            target = available[0]
         else:
-            return False, "no_schedulers_available"
-        
+            target = available[0]
+
         scheduler_path.write_text(target)
-        return True, target
+        return True, target, prev
+    except Exception as e:
+        return False, str(e), None
+
+
+def _write_io_scheduler(device: str, scheduler: str) -> Tuple[bool, str]:
+    try:
+        scheduler_path = Path(f"/sys/block/{device}/queue/scheduler")
+        if not scheduler_path.exists():
+            return False, "scheduler_path_not_found"
+        _prev, available = _read_io_scheduler_state(device)
+        if scheduler not in available:
+            return False, "scheduler_not_available"
+        scheduler_path.write_text(scheduler)
+        return True, scheduler
     except Exception as e:
         return False, str(e)
 
@@ -446,15 +476,17 @@ def apply_runtime(
 
     # I/O scheduler optimization
     if _truthy(cfg.get("io_scheduler_optimize")):
-        io_state: Dict[str, str] = {}
+        io_state: Dict[str, Dict[str, str]] = {}
         for ifname in [ap_ifname, adapter_ifname]:
             if not ifname:
                 continue
             devices = _find_block_devices_for_interface(ifname)
             for device in devices:
-                ok, result = _set_io_scheduler(device, "none")
+                ok, result, prev = _set_io_scheduler(device, "none")
                 if ok:
-                    io_state[device] = result
+                    io_state.setdefault("current", {})[device] = result
+                    if prev:
+                        io_state.setdefault("prev", {})[device] = prev
                 else:
                     warnings.append(f"io_scheduler_failed:{device}:{result}")
         if io_state:
@@ -514,12 +546,16 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
                 except Exception as e:
                     warnings.append(f"irq_affinity_restore_failed:irq={irq_str}:{e}")
 
-    # I/O scheduler restoration (best-effort, may not be fully reversible)
+    # I/O scheduler restoration (best-effort)
     io_state = state.get("io_scheduler")
     if isinstance(io_state, dict):
-        # Note: Full restoration would require storing previous scheduler
-        # For now, we just log that we attempted restoration
-        for device in io_state.keys():
-            warnings.append(f"io_scheduler_restored:{device}")
+        prev = io_state.get("prev") if isinstance(io_state.get("prev"), dict) else {}
+        if isinstance(prev, dict):
+            for device, scheduler in prev.items():
+                if not scheduler:
+                    continue
+                ok, result = _write_io_scheduler(device, str(scheduler))
+                if not ok:
+                    warnings.append(f"io_scheduler_restore_failed:{device}:{result}")
 
     return warnings
