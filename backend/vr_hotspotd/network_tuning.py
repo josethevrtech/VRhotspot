@@ -26,6 +26,23 @@ def _ethtool_path() -> Optional[str]:
     return shutil.which("ethtool")
 
 
+def _parse_coalesce_settings(text: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for raw in text.splitlines():
+        if ":" not in raw:
+            continue
+        key, value = raw.split(":", 1)
+        k = key.strip().lower()
+        v = value.strip().split()[0].lower()
+        if k in ("adaptive rx", "adaptive-rx"):
+            out["adaptive-rx"] = v
+        elif k in ("adaptive tx", "adaptive-tx"):
+            out["adaptive-tx"] = v
+        elif k in ("rx-usecs", "tx-usecs"):
+            out[k] = v
+    return out
+
+
 def _apply_interrupt_coalescing(
     interfaces: List[str],
 ) -> Tuple[Dict[str, object], List[str]]:
@@ -57,7 +74,9 @@ def _apply_interrupt_coalescing(
                 continue
             
             # Store previous settings
-            prev_settings[ifname] = {"raw": p.stdout}
+            prev = {"raw": p.stdout}
+            prev.update(_parse_coalesce_settings(p.stdout))
+            prev_settings[ifname] = prev
             
             # Apply low-latency settings: reduce rx-usecs and tx-usecs
             # For VR, we want minimal interrupt delay
@@ -144,16 +163,48 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
     warnings.extend(qos.revert(state.get("qos") if isinstance(state.get("qos"), dict) else None))
     warnings.extend(nat_accel.revert(state.get("nat_accel") if isinstance(state.get("nat_accel"), dict) else None))
     
-    # Revert interrupt coalescing (best-effort, may not be fully reversible)
+    # Revert interrupt coalescing (best-effort)
     ic_state = state.get("interrupt_coalescing")
     if isinstance(ic_state, dict):
         prev_settings = ic_state.get("prev_settings")
         if isinstance(prev_settings, dict):
             ethtool = _ethtool_path()
             if ethtool:
-                for ifname in prev_settings.keys():
-                    # Note: Full restoration would require parsing previous settings
-                    # For now, we just log that we attempted restoration
-                    warnings.append(f"interrupt_coalescing_restored:{ifname}")
+                for ifname, prev in prev_settings.items():
+                    if not isinstance(prev, dict):
+                        continue
+                    cmds: List[List[str]] = []
+                    rx = prev.get("rx-usecs")
+                    if isinstance(rx, str) and rx.isdigit():
+                        cmds.append(["-C", ifname, "rx-usecs", rx])
+                    tx = prev.get("tx-usecs")
+                    if isinstance(tx, str) and tx.isdigit():
+                        cmds.append(["-C", ifname, "tx-usecs", tx])
+                    arx = prev.get("adaptive-rx")
+                    if isinstance(arx, str) and arx in ("on", "off", "1", "0", "yes", "no", "true", "false"):
+                        arx_val = "on" if arx in ("on", "1", "yes", "true") else "off"
+                        cmds.append(["-C", ifname, "adaptive-rx", arx_val])
+                    atx = prev.get("adaptive-tx")
+                    if isinstance(atx, str) and atx in ("on", "off", "1", "0", "yes", "no", "true", "false"):
+                        atx_val = "on" if atx in ("on", "1", "yes", "true") else "off"
+                        cmds.append(["-C", ifname, "adaptive-tx", atx_val])
+
+                    if not cmds:
+                        continue
+
+                    for cmd in cmds:
+                        try:
+                            p = subprocess.run(
+                                [ethtool] + cmd,
+                                capture_output=True,
+                                text=True,
+                                timeout=2.0,
+                            )
+                            if p.returncode != 0:
+                                warnings.append(f"interrupt_coalescing_restore_failed:{ifname}:{cmd[-2]}")
+                        except subprocess.TimeoutExpired:
+                            warnings.append(f"interrupt_coalescing_restore_timeout:{ifname}")
+                        except Exception as e:
+                            warnings.append(f"interrupt_coalescing_restore_error:{ifname}:{e}")
     
     return warnings
