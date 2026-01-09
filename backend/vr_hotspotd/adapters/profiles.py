@@ -55,7 +55,6 @@ def detect_adapter_profile(adapter_info: Dict) -> Optional[Dict[str, any]]:
     Returns:
         Profile dict with optimizations, or None if no match
     """
-    ifname = (adapter_info.get("ifname") or "").lower()
     vendor = (adapter_info.get("vendor") or "").lower()
     model = (adapter_info.get("model") or "").lower()
     

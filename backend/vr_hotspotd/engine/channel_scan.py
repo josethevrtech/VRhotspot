@@ -3,7 +3,7 @@ Channel scanning and interference detection for automatic channel selection.
 """
 import subprocess
 import shutil
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 def _iw_bin() -> Optional[str]:
