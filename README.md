@@ -262,15 +262,17 @@ curl -fsS http://127.0.0.1:8732/healthz && echo OK
 sudo journalctl -u vr-hotspotd.service -b --no-pager -n 200 -o cat
 ```
 
-### Uninstall (CachyOS and SteamOS)
+
+### uninstall 
+(CachyOS and SteamOS Supported) RECOMMENDED when updating. Will add to install/update script eventually.
 
 ```bash
 cd /var/lib/vr-hotspot/app/backend/scripts
 chmod +x uninstall.sh
 sudo ./uninstall.sh --purge
----
+```
 
-## Token setup (API protection)
+### Token setup (API protection)
 
 ### Obtain the token
 
