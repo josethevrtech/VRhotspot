@@ -5,7 +5,7 @@ VR streaming typically uses UDP, so this provides more relevant metrics than TCP
 import socket
 import time
 import struct
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
 
 def run_udp_latency_test(
