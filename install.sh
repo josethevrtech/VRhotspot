@@ -48,7 +48,7 @@ cleanup_previous_install() {
     print_step "Checking for existing installation..."
     if [ ! -d "$INSTALL_ROOT" ] && ! systemctl list-unit-files | grep -q "$SERVICE_NAME.service"; then
         print_success "No existing installation found."
-        return
+        return 0
     fi
 
     print_warning "Existing $APP_NAME installation detected."
@@ -260,7 +260,7 @@ main() {
     cleanup_previous_install
     
     if [ "$INTERACTIVE" -eq 1 ]; then
-        read -p "Continue with installation? (Y/n) " -n 1 -r; echo
+        read -p "Continue with installation? (Y/n) " -n 1 -r || true; echo
         if [[ "$REPLY" =~ ^[Nn]$ ]]; then
             print_info "Installation cancelled."
             exit 0
