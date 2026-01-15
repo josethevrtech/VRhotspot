@@ -7,6 +7,7 @@ import stat
 import subprocess
 import threading
 import time
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Set, Dict, Any, List, Tuple
@@ -25,6 +26,31 @@ from vr_hotspotd.engine.tx_power import auto_adjust_tx_power, set_tx_power, get_
 from vr_hotspotd import system_tuning, preflight, network_tuning
 
 log = logging.getLogger("vr_hotspotd.lifecycle")
+
+def _precreated_ap_ifname(parent_ifname: str, prefix: str = "vrhs_ap_") -> str:
+    """
+    Creates a valid network interface name for a pre-created AP interface.
+    Ensures the name is no longer than 15 characters, which is a common
+    kernel limit.
+    """
+    if not parent_ifname:
+        raise ValueError("parent_ifname must not be empty")
+
+    ifname = f"{prefix}{parent_ifname}"
+    if len(ifname) <= 15:
+        return ifname
+
+    # Name is too long, so we need to truncate and add a hash to keep it unique.
+    # The suffix is a 4-char hex representation of the SHA1 hash of the parent.
+    suffix = "_" + hashlib.sha1(parent_ifname.encode()).hexdigest()[:4]
+
+    # Calculate the maximum length of the parent_ifname part we can keep.
+    # 15 (max) - len(prefix) - len(suffix)
+    max_parent_len = 15 - len(prefix) - len(suffix)
+
+    # Truncate the parent ifname and assemble the new name.
+    truncated_parent = parent_ifname[:max_parent_len]
+    return f"{prefix}{truncated_parent}{suffix}"
 
 _OP_LOCK = threading.Lock()
 _WATCHDOG_THREAD: Optional[threading.Thread] = None
