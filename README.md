@@ -2,384 +2,378 @@
 
 **VR Hotspot** is an open-source connectivity suite for VR headsets, designed to deliver a seamless, low-latency PC ↔ headset network without relying on a router. It turns your PC into a dedicated Wi-Fi access point (AP) for a headset (or any client), creating a direct, reliable connection optimized for VR streaming and remote access.
 
-It’s ideal for users who travel with a MiniPC or “headless” computer puck and want confidence they can connect to and manage their PC’s hotspot, even without a monitor!, so they can connect a VR headset and stream to it.
+It's ideal for users who travel with a MiniPC or "headless" computer puck and want confidence they can connect to and manage their PC's hotspot, even without a monitor, so they can connect a VR headset and stream to it.
 
-Built around **lnxrouter + hostapd + dnsmasq**, it supports **bundled binaries** (consistent installs across distros) and integrates with **firewalld** on platforms like SteamOS where firewalld owns nftables.
-
-## Supported WIFI Adapters
--  (RECOMMENDED) BrosTrend AXE3000 Tri-Band Linux https://www.amazon.com/dp/B0F6MY7H62
--  EDUP EP-AX1672 https://www.amazon.com/EDUP-Wireless-802-11AX-Tri-Band-Compatible/dp/B0CVVWNSH2
--  Panda Wireless® PAU0F AXE3000 Tri Band https://www.amazon.com/Panda-Wireless%C2%AE-PAU0F-AXE3000-Adapter/dp/B0D972VY9B?th=1
-
-## Untested WIFI Adapters that *should* work
-- https://github.com/morrownr/USB-WiFi/blob/main/home/USB_WiFi_Adapters_that_are_supported_with_Linux_in-kernel_drivers.md#axe3000---usb30---24-ghz-5-ghz-and-6-ghz-wifi-6e
-  
----
-
-## What it does
-
-- Creates a Wi-Fi hotspot (AP) from a selected Wi-Fi adapter
-- Provides DHCP + DNS via **dnsmasq**
-- Enables NAT/forwarding so the headset can reach the internet
-- Exposes a local portal (web UI) for configuration and lifecycle management
-- Supports a **Repair** workflow to clean up and reapply state if the system gets stuck
+Built around **lnxrouter + hostapd + dnsmasq**, with **bundled binaries** (including libnl) for consistent installs across distros, and integrates with **firewalld** on platforms like SteamOS where firewalld owns nftables.
 
 ---
 
-## Key features
+## 🚀 Quick Installation
 
-### Lifecycle controls (API)
+**One-command install for beginners:**
 
-- Start / Stop / Repair:
-  - `POST /v1/start`
-  - `POST /v1/stop`
-  - `POST /v1/repair`
-- Status:
-  - `GET /v1/status`
-- Optional logs:
-  - `GET /v1/status?include_logs=1`
+```bash
+curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh | sudo bash
+```
 
-### Diagnostics (API)
+**Features:**
+- ✅ Auto-detects your OS (SteamOS, CachyOS, Arch, Ubuntu, Fedora)
+- ✅ Installs all dependencies automatically (iw, python, libnl, etc.)
+- ✅ Configures NetworkManager to prevent interference
+- ✅ Starts service and shows you the web UI URL and API token
+- ✅ Perfect for beginners - no Linux knowledge required
 
-- Clients on the AP interface:
-  - `GET /v1/diagnostics/clients`
-- ICMP ping sample and statistics:
-  - `POST /v1/diagnostics/ping`
-- Ping under load (curl default, iperf3 optional):
-  - `POST /v1/diagnostics/ping_under_load`
+**To uninstall:**
 
-### Adapter intelligence
-
-- Enumerates Wi-Fi adapters and recommends an AP adapter (when available)
-- Allows adapter selection in the portal and persists it in config
-
-### Band preference and safe fallback
-
-- Band preference (e.g., 6 GHz / 5 GHz / 2.4 GHz) with safe fallback behavior
-- Fallback chain: **6 → 5 → 2.4** (when a band fails to become “ready” within the configured timeout)
-- Timeout controls to determine when the AP is considered “ready”
-
-> Note: 6 GHz AP mode requires WPA3 SAE and compatible hardware/regulatory support. VR Hotspot will fall back when needed.
-
-Wi-Fi 6 (802.11ax) is auto-enabled only on adapters that report 802.11ax support. You can override it per start via `/v1/start` with `wifi6: "auto" | true | false`.
-
-### Firewalld integration (SteamOS-friendly)
-
-When `firewalld` is running, the daemon applies policy via `firewall-cmd` (not raw nftables/iptables):
-
-- Adds the AP interface to a configured zone (default: `trusted`)
-- Enables masquerade/forwarding when enabled by config
-- Optionally cleans up firewall state on stop
-
-This avoids conflicts on platforms where firewalld is the authority on firewall state.
-
----
-
-## Performance tuning (optional)
-
-These system-level tweaks can improve stability and latency for VR streaming. They are **off by default** and best-effort.
-Enable them in the UI or via `/v1/config`.
-
-System tuning options:
-- `wifi_power_save_disable`: turns off Wi-Fi power save on the AP interface (and physical adapter)
-- `usb_autosuspend_disable`: disables autosuspend on USB Wi-Fi adapters
-- `cpu_governor_performance`: sets CPU governor to `performance` while the hotspot runs
-- `cpu_affinity`: pins hostapd/dnsmasq/engine to specific CPUs (e.g., `"2"` or `"2-3"` or `"2,4"`)
-- `sysctl_tuning`: raises socket buffers and enables `bbr` + `fq` if supported
-- `watchdog_enable`: restarts hostapd/dnsmasq on unexpected exits (with backoff)
-- `watchdog_interval_s`: watchdog polling interval
-- `telemetry_enable`: continuous station telemetry (RSSI/bitrate/retries/loss)
-- `telemetry_interval_s`: telemetry sampling interval
-- `qos_preset`: apply DSCP marking + qdisc preset (`off` | `vr` | `balanced`)
-- `nat_accel`: best-effort nftables flowtable offload (skips when firewalld is active)
-- `bridge_mode`: bridge AP to uplink (bypass NAT/DHCP)
-- `bridge_name`: Linux bridge interface name (default: `vrbr0`)
-- `bridge_uplink`: explicit uplink interface (optional; defaults to system uplink)
-
-Notes:
-- These changes are applied on start and reverted on stop/repair when possible.
-- Some systems may block governor or sysctl changes; VR Hotspot will warn but continue.
-
-## Preflight checks
-
-Before start, the daemon performs best-effort preflight checks for:
-- rfkill (blocked Wi-Fi devices)
-- regulatory domain mismatches
-- missing hostapd features (SAE/11ax where required)
-- subnet conflicts (NAT mode)
-
-Preflight warnings are surfaced in `/v1/status` and the UI.
-
-## QoS presets and NAT acceleration (optional)
-
-- QoS presets apply DSCP marking and a qdisc (`cake` or `fq_codel`) on the AP interface.
-- NAT acceleration uses nftables flowtable offload when firewalld is not managing rules.
-
-## Bridge mode (optional)
-
-Bridge mode bypasses NAT and DHCP by bridging the AP to an uplink interface.
-It is useful when you want the headset on the same LAN as the host.
-
-Notes:
-- Uses a dedicated hostapd bridge engine (no dnsmasq).
-- Moves IPv4 addresses from the uplink to the bridge during runtime and restores on stop.
-- Requires a valid uplink interface (set `bridge_uplink` to override).
-
-## VR profile preset
-
-The UI includes a **VR profile** button that applies known-good defaults for streaming
-without saving immediately (you can review and Save/Restart).
-
-## Hardware tips
-
-- Prefer a dedicated 5/6 GHz adapter for the AP.
-- PCIe/M.2 adapters are typically more stable than USB for sustained throughput.
-- Use high-gain antennas and avoid placing the host inside cabinets or near metal.
-- Keep the AP and headset within clear line-of-sight for best latency.
-
-### Security and privacy
-
-#### API token enforcement to manage Hotspot via webportal!
-
- `VR_HOTSPOTD_API_TOKEN` is set, all `/v1/*` web or app based endpoints require authentication via token.
-
-Supported headers (either works):
-
-- `X-Api-Token: <token>`
-- `Authorization: Bearer <token>`
-
-#### Privacy mode
-
-- Masks SSID and passphrase
-- Redacts `-p/--passphrase` arguments in the engine command display
-
-### Bundled binaries for portability
-
-Designed to work whether the system has `hostapd` / `dnsmasq` installed or not:
-
-- Prefers system binaries when available
-- Otherwise uses bundled copies from `backend/vendor/bin`
-
----
-
-## Project layout
-
-```text
-.
-├── backend/
-│   ├── scripts/
-│   │   ├── install.sh                    # Installer logic (systemd/env/bin)
-│   │   ├── uninstall.sh                  # Uninstall/remove service + config (if supported)
-│   │   └── vr-hotspot-autostart.sh       # Autostart helper (installed to /var/lib/vr-hotspot/bin)
-│   ├── systemd/
-│   │   ├── vr-hotspot-autostart.service  # Optional: start hotspot automatically on boot
-│   │   └── vr-hotspotd.service           # Main daemon unit
-│   ├── vendor/
-│   │   └── bin/                          # Bundled binaries (dnsmasq/hostapd/hostapd_cli/lnxrouter)
-│   └── vr_hotspotd/
-│       ├── adapters/                     # Adapter enumeration + capability detection
-│       ├── engine/                       # lnxrouter, 6 GHz hostapd, and bridge engine
-│       ├── api.py                        # REST API endpoints (/v1/*, /healthz)
-│       ├── lifecycle.py                  # Start/stop/repair orchestration (serialized + reconciled)
-│       ├── server.py                     # HTTP server wiring (UI + API)
-│       └── main.py                       # Daemon entrypoint
-├── pyproject.toml
-└── vr-keygen/
-    └── keygen.py                         # Optional: key/token helper (NOT WORKING YET! Do it manually using token generate command)
+```bash
+curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/uninstall.sh | sudo bash
 ```
 
 ---
 
-## Quick start
+## Quick Start
 
-Once installed and running, open:
+Once installed, open the web UI:
 
-- Local Portal: `http://127.0.0.1:8732/ui`
-- Portal From Another Device: `http://hotspotdeviceip:8732/ui`
-- Health check: `http://127.0.0.1:8732/healthz`
+- **Local Portal:** `http://127.0.0.1:8732`
+- **From Another Device:** `http://<your-pc-ip>:8732`
+- **Health Check:** `http://127.0.0.1:8732/healthz`
 
-API token enforcement is enabled, use the token printed by the install script and paste it into the **API token** field in the portal.
-To access the portal from other devices, bind the daemon to a non-local address (see Remote portal access).
+Enter the **API token** shown during installation to access the interface.
+
+**Basic Usage:**
+1. Open the web UI
+2. Enter your API token
+3. Select your WiFi adapter (wlan1 recommended over wlan0)
+4. Click **Start** to create your hotspot
+5. Connect your VR headset to the new network
 
 ---
 
-## Installation
+## Supported WiFi Adapters
 
-### Expected layout on the target machine
+### ✅ Recommended (Tested & Working)
+- **BrosTrend AXE3000 Tri-Band** (Best Choice) - https://www.amazon.com/dp/B0F6MY7H62
+- **EDUP EP-AX1672** - https://www.amazon.com/EDUP-Wireless-802-11AX-Tri-Band-Compatible/dp/B0CVVWNSH2
+- **Panda Wireless PAU0F AXE3000** - https://www.amazon.com/Panda-Wireless%C2%AE-PAU0F-AXE3000-Adapter/dp/B0D972VY9B
 
-After copying the project, the backend must be present at:
+### ℹ️ Should Work (Untested)
+- See compatible adapters list: https://github.com/morrownr/USB-WiFi/blob/main/home/USB_WiFi_Adapters_that_are_supported_with_Linux_in-kernel_drivers.md#axe3000---usb30---24-ghz-5-ghz-and-6-ghz-wifi-6e
 
-- `/var/lib/vr-hotspot/app/backend`
+### ⚠️ Known Issues
+- **Intel AX200 (wlan0)**: Built-in adapters often have AP mode limitations. Use wlan1+ (USB adapters) for better reliability.
 
-Install scripts assume:
+---
 
-- Daemon entrypoint: `python3 -m vr_hotspotd.main`
-- Env file: `/etc/vr-hotspot/env`
-- systemd unit: `/etc/systemd/system/vr-hotspotd.service`
-- Autostart helper: `/var/lib/vr-hotspot/bin/vr-hotspot-autostart.sh`
+## What It Does
 
-### Copy the project to the target machine (all distros)
+- Creates a Wi-Fi hotspot (AP) from a selected Wi-Fi adapter
+- Provides DHCP + DNS via bundled **dnsmasq**
+- Enables NAT/forwarding so clients can reach the internet
+- Exposes a web UI for easy configuration and management
+- Includes **Repair** workflow to recover from stuck states
+- Automatically prioritizes wlan1+ over wlan0 for better compatibility
 
-From your repo root:
+---
+
+## Key Features
+
+### 🎮 VR-Optimized
+
+- **Low-latency optimized** for VR streaming
+- **QoS profiles**: Ultra Low Latency, High Throughput, Balanced, Stability (VR default)
+- **Band preference**: 6 GHz → 5 GHz → 2.4 GHz with automatic fallback
+- **Wi-Fi 6/6E support** with auto-detection
+- **System tuning options**: CPU governor, power management, interrupt coalescing
+
+### 🔧 Smart Adapter Management
+
+- Auto-detects WiFi adapters and recommends the best one
+- **Prioritizes wlan1+** over wlan0 (avoids Intel AX200 issues)
+- Hides problematic adapters in Basic Mode
+- Supports multiple bands: 2.4 GHz, 5 GHz, 6 GHz (Wi-Fi 6E)
+
+### 🌐 Web UI & API
+
+**Lifecycle Controls:**
+- Start / Stop / Repair / Restart
+- `POST /v1/start`, `POST /v1/stop`, `POST /v1/repair`, `POST /v1/restart`
+
+**Status & Monitoring:**
+- `GET /v1/status` - Current hotspot status
+- `GET /v1/status?include_logs=1` - Status with logs
+- `GET /v1/adapters` - List available WiFi adapters
+
+**Diagnostics:**
+- `GET /v1/diagnostics/clients` - Connected clients
+- `POST /v1/diagnostics/ping` - Ping test
+- `POST /v1/diagnostics/ping_under_load` - Performance under load
+
+### 🔥 Firewalld Integration (SteamOS-Friendly)
+
+When `firewalld` is running, the daemon uses `firewall-cmd` (not raw nftables/iptables):
+- Adds AP interface to trusted zone
+- Enables masquerade/forwarding
+- Optional cleanup on stop
+- No conflicts with firewalld-managed systems
+
+### 📦 Bundled Dependencies
+
+- **hostapd** (v2.11) - AP management
+- **dnsmasq** - DHCP/DNS server
+- **lnxrouter** - Wrapper script
+- **libnl** (v3.10) - Netlink library (no system packages needed!)
+
+All binaries are bundled for consistent, portable installations.
+
+---
+
+## Performance Tuning (Optional)
+
+Enable in the web UI under Advanced Mode:
+
+**System Tuning:**
+- `wifi_power_save_disable` - Disable power saving on WiFi
+- `cpu_governor_performance` - Set CPU to performance mode
+- `usb_autosuspend_disable` - Prevent USB adapter suspension
+- `sysctl_tuning` - Kernel network stack optimizations
+- `interrupt_coalescing` - Optimize network interrupts
+- `cpu_affinity` - Pin processes to specific CPU cores
+
+**QoS Presets:**
+- **Ultra Low Latency** - Strict priority + UDP optimization
+- **Stability (VR)** - DSCP CS5 + cake qdisc (recommended for VR)
+- **High Throughput** - DSCP AF42 + cake qdisc
+- **Balanced** - DSCP AF41 + fq_codel
+
+---
+
+## Advanced Installation (Manual)
+
+### For Developers or Custom Setups
+
+**1. Clone the repository:**
+
+```bash
+git clone https://github.com/josethevrtech/VRhotspot.git
+cd VRhotspot
+```
+
+**2. Copy to system location:**
 
 ```bash
 sudo mkdir -p /var/lib/vr-hotspot/app
 sudo rsync -a ./ /var/lib/vr-hotspot/app/
 ```
 
-### Install (CachyOS and SteamOS Supported)
+**3. Run the install script:**
 
 ```bash
 cd /var/lib/vr-hotspot/app/backend/scripts
-chmod +x install.sh
 sudo ./install.sh
 ```
 
-Optional: allow portal/API access from LAN or hotspot clients:
+**Optional flags:**
+- `--bind 0.0.0.0` - Allow access from other devices
+- `--enable-autostart` - Start hotspot automatically on boot
+- `--api-token <token>` - Use a specific API token
 
-```bash
-sudo ./install.sh --bind 0.0.0.0
-```
-
-Optional: enable autostart (recommended):
-
-```bash
-sudo ./install.sh --enable-autostart
-```
-
-What the installer does:
-
-- Generates `/etc/vr-hotspot/env` (including a new API token unless you provide `--api-token`)
-- Installs and enables `vr-hotspotd.service`
-- Installs autostart helper to `/var/lib/vr-hotspot/bin/` when autostart is enabled
-- Opens `8732/tcp` in firewalld if active, otherwise ufw if present
-- Creates a systemd drop-in if you install to a non-default directory (so paths remain correct)
-
-Verify:
+**4. Verify installation:**
 
 ```bash
 curl -fsS http://127.0.0.1:8732/healthz && echo OK
-sudo journalctl -u vr-hotspotd.service -b --no-pager -n 200 -o cat
+sudo systemctl status vr-hotspotd
 ```
 
+---
 
-### uninstall 
-(CachyOS and SteamOS Supported) RECOMMENDED when updating. Will add to install/update script eventually.
+## Configuration
 
-```bash
-cd /var/lib/vr-hotspot/app/backend/scripts
-chmod +x uninstall.sh
-sudo ./uninstall.sh --purge
-```
+### API Token
 
-### Token setup (API protection)
-
-### Obtain the token
-
-The install script generates a token by default (unless one already exists or you pass `--api-token`).
-It prints the token at the end and writes it to:
+The install script generates a secure API token. To retrieve it:
 
 ```bash
 sudo cat /etc/vr-hotspot/env
 ```
 
 Look for:
-
 ```bash
-VR_HOTSPOTD_API_TOKEN=...
+VR_HOTSPOTD_API_TOKEN=<your-token>
 ```
-## Firewall ports
 
-VR Hotspot’s portal/API listens on:
+### Firewall Ports
 
-- `TCP 8732`
+VR Hotspot listens on **TCP 8732**. The installer automatically opens this port in:
+- firewalld (if active)
+- ufw (if installed)
 
-Install scripts attempt to open this automatically:
-
-- firewalld active → open via `firewall-cmd`
-- otherwise ufw installed → allow via `ufw allow`
-
-### Manual: firewalld
+**Manual firewall configuration:**
 
 ```bash
-sudo firewall-cmd --add-port=8732/tcp
+# firewalld
 sudo firewall-cmd --permanent --add-port=8732/tcp
 sudo firewall-cmd --reload
+
+# ufw
+sudo ufw allow 8732/tcp
 ```
 
-### Manual: ufw
+### Autostart on Boot
+
+Enable autostart (if not done during installation):
 
 ```bash
-sudo ufw allow 8732/tcp comment "VR Hotspot portal/API"
-sudo ufw status verbose
+sudo systemctl enable --now vr-hotspot-autostart.service
 ```
 
----
-
-## Autostart on boot
-
-If enabled, VR Hotspot can automatically bring up the hotspot after boot.
-
-Components:
-
-- `backend/systemd/vr-hotspot-autostart.service`
-- Autostart helper installed to: `/var/lib/vr-hotspot/bin/vr-hotspot-autostart.sh`
-
-Check status:
+Disable autostart:
 
 ```bash
-sudo systemctl status vr-hotspot-autostart.service --no-pager -l
-sudo journalctl -u vr-hotspot-autostart.service -b --no-pager -n 200 -o cat
+sudo systemctl disable --now vr-hotspot-autostart.service
 ```
 
 ---
 
 ## Troubleshooting
 
-### Service status
+### Check Service Status
 
 ```bash
-sudo systemctl status vr-hotspotd.service --no-pager -l
+sudo systemctl status vr-hotspotd
 ```
 
-### Logs
+### View Logs
 
 ```bash
-sudo journalctl -u vr-hotspotd.service -b --no-pager -n 200 -o cat
+# Recent logs
+sudo journalctl -u vr-hotspotd -n 100
+
+# Follow logs in real-time
+sudo journalctl -u vr-hotspotd -f
 ```
 
-### API authorization checks
-
-token enforcement is enabled, you should see:
-
-- `401` without token
-- `200` with token
+### Check API Status
 
 ```bash
-curl -i http://127.0.0.1:8732/v1/status | head -n 5
+# Get API token
+TOKEN=$(sudo awk -F= '/VR_HOTSPOTD_API_TOKEN/{print $2}' /etc/vr-hotspot/env)
 
-TOKEN="$(sudo awk -F= '($1=="VR_HOTSPOTD_API_TOKEN"){gsub(/\r/,"",$2); print $2; exit}' /etc/vr-hotspot/env)"
-curl -i http://127.0.0.1:8732/v1/status -H "X-Api-Token: $TOKEN" | head -n 5
+# Check status
+curl -s "http://127.0.0.1:8732/v1/status?include_logs=1" -H "X-Api-Token: $TOKEN" | python3 -m json.tool
 ```
 
-### Include logs for debugging
+### Common Issues
+
+**1. No WiFi adapters found:**
+- Check: `iw dev`
+- Ensure adapter supports AP mode: `iw list | grep -A10 "Supported interface modes"`
+
+**2. Hotspot times out (ap_ready_timeout):**
+- Check if NetworkManager is interfering: `nmcli device status | grep wlan`
+- Try using wlan1 instead of wlan0
+- Check logs: `sudo journalctl -u vr-hotspotd -n 50`
+
+**3. Can't access web UI:**
+- Check firewall: `sudo firewall-cmd --list-ports` or `sudo ufw status`
+- Verify service is running: `curl http://127.0.0.1:8732/healthz`
+
+**4. Intel AX200 (wlan0) not working:**
+- This is a known hardware limitation
+- Use wlan1 (USB adapter) instead
+- See: `docs/troubleshooting/BUNDLED_LIBNL_SETUP.md`
+
+### Repair Function
+
+If the hotspot gets stuck, use the **Repair** button in the web UI or:
 
 ```bash
-TOKEN="$(sudo awk -F= '($1=="VR_HOTSPOTD_API_TOKEN"){gsub(/\r/,"",$2); print $2; exit}' /etc/vr-hotspot/env)"
-curl -fsS "http://127.0.0.1:8732/v1/status?include_logs=1" -H "X-Api-Token: $TOKEN" | python3 -m json.tool
+TOKEN=$(sudo awk -F= '/VR_HOTSPOTD_API_TOKEN/{print $2}' /etc/vr-hotspot/env)
+curl -X POST "http://127.0.0.1:8732/v1/repair" -H "X-Api-Token: $TOKEN"
 ```
-
-Diagnostics notes:
-- ICMP may be blocked by host or client firewalls; ping results can be incomplete.
-- `curl` load works without headset-side software; `iperf3` requires a reachable iperf3 server.
 
 ---
 
-## Security and privacy notes
+## Security & Privacy
 
-- **Token enforcement:** treat it like a password. Do not paste it into logs or screenshots.
-- **Local-only UI:** The portal is intended to be accessed locally (e.g., `127.0.0.1`). If you bind to non-local addresses, use a firewall and keep token enforcement enabled.
-- **Privacy mode:** Use privacy mode in the portal when screen sharing or collecting logs.
+### API Token Protection
+
+- **Treat the token like a password** - don't share it publicly
+- **Token enforcement** prevents unauthorized access
+- Regenerate token if compromised: Edit `/etc/vr-hotspot/env` and restart service
+
+### Privacy Mode
+
+- Enable **Privacy Mode** in the web UI when:
+  - Screen sharing
+  - Taking screenshots
+  - Collecting logs for support
+- Hides sensitive information (logs, client details, etc.)
+
+### Remote Access
+
+- By default, the web UI only listens on `127.0.0.1` (local only)
+- To allow remote access: `sudo ./install.sh --bind 0.0.0.0`
+- **Important**: Keep token enforcement enabled and use a strong token
+
+---
+
+## Project Layout
+
+```text
+.
+├── install.sh                          # One-command installer
+├── uninstall.sh                        # One-command uninstaller
+├── backend/
+│   ├── scripts/
+│   │   ├── install.sh                  # System installation script
+│   │   ├── uninstall.sh                # System uninstallation script
+│   │   └── vr-hotspot-autostart.sh     # Autostart helper
+│   ├── systemd/
+│   │   ├── vr-hotspotd.service         # Main daemon
+│   │   └── vr-hotspot-autostart.service # Autostart service
+│   ├── vendor/
+│   │   ├── bin/                        # Bundled binaries
+│   │   │   ├── hostapd
+│   │   │   ├── dnsmasq
+│   │   │   ├── hostapd_cli
+│   │   │   └── lnxrouter
+│   │   ├── lib/                        # Bundled libraries
+│   │   │   ├── libnl-3.so.200
+│   │   │   ├── libnl-genl-3.so.200
+│   │   │   ├── libnl-route-3.so.200
+│   │   │   └── libnl-cli-3.so.200
+│   │   └── licenses/                   # Third-party licenses
+│   └── vr_hotspotd/
+│       ├── adapters/                   # Adapter detection & scoring
+│       ├── engine/                     # AP engines (lnxrouter, hostapd6, bridge)
+│       ├── diagnostics/                # Network diagnostics
+│       ├── api.py                      # REST API
+│       ├── lifecycle.py                # Start/stop/repair logic
+│       ├── server.py                   # HTTP server
+│       └── main.py                     # Entry point
+├── assets/
+│   ├── ui.js                           # Web UI JavaScript
+│   ├── ui.css                          # Web UI styles
+│   └── field_visibility.js             # UI field management
+├── tests/                              # Test suite
+└── pyproject.toml                      # Python package config
+```
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome!
+
+**When filing a bug, please include:**
+- OS/distro + kernel version
+- WiFi adapter chipset/model
+- Output of: `sudo journalctl -u vr-hotspotd -n 200`
+- Output of: `curl http://127.0.0.1:8732/v1/status?include_logs=1`
+- Redact any API tokens or passwords
+
+See `CONTRIBUTING.md` for more details.
 
 ---
 
@@ -389,19 +383,26 @@ MIT License. See `LICENSE.md`.
 
 ---
 
-## Contributing
+## Third-Party Notices
 
-Issues and PRs are welcome.
+VR Hotspot bundles third-party binaries and libraries. See:
+- `THIRD_PARTY_NOTICES.md` - License attributions
+- `backend/vendor/README.md` - Version information
+- `backend/vendor/licenses/` - Full license texts
 
-When filing a bug, include:
-
-- OS/distro + kernel version
-- Wi-Fi adapter chipset/model
-- `journalctl -u vr-hotspotd.service -b --no-pager -n 200 -o cat`
-- `/v1/status?include_logs=1` output (redact secrets)
+Bundled components:
+- **hostapd** (BSD) - https://w1.fi/hostapd/
+- **dnsmasq** (GPL-2.0+) - https://thekelleys.org.uk/dnsmasq/
+- **lnxrouter** (LGPL-2.1+) - https://github.com/garywill/linux-router
+- **libnl** (LGPL-2.1) - https://github.com/thom311/libnl
 
 ---
 
-## Third-party notices
+## Acknowledgments
 
-VR Hotspot bundles third-party binaries under `backend/vendor/bin/`. See `THIRD_PARTY_NOTICES.md` and `backend/vendor/README.md` for details and source/license references.
+Built with ❤️ for the VR community.
+
+Special thanks to:
+- The hostapd, dnsmasq, and linux-router projects
+- All contributors and testers
+- The SteamOS and CachyOS communities

@@ -17,5 +17,6 @@ This directory contains prebuilt binaries used by VR Hotspot to ensure consisten
 
 ## Version record
 - dnsmasq: <record version/tag here>
-- hostapd: <record version/tag here>
-- linux-router (lnxrouter): <record version/tag here>
+- hostapd: v2.11 (hostap_2_11)
+- linux-router (lnxrouter): v0.8.1
+- libnl: 3.10 (libnl3_10_0) - bundled in vendor/lib/

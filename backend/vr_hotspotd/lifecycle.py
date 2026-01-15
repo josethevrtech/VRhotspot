@@ -100,6 +100,139 @@ _HOSTAPD_CTRL_CANDIDATES = (Path("/run/hostapd"), Path("/var/run/hostapd"))
 _IW_PHY_RE = re.compile(r"^phy#(\d+)$")
 _IW_CHANNEL_RE = re.compile(r"^channel\s+(\d+)(?:\s+\((\d+(?:\.\d+)?)\s+MHz\))?")
 _IW_FREQ_RE = re.compile(r"^(?:freq|frequency)(?:[:\s]+)(\d+(?:\.\d+)?)\b")
+_HOSTAPD_CTRL_DIR_RE = re.compile(r"DIR=(.+)")
+_COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
+
+
+def ensure_hostapd_ctrl_interface_dir(conf_path: str) -> None:
+    """
+    Parse ctrl_interface from hostapd.conf and ensure the directory exists with proper permissions.
+    Handles both plain path and DIR=/path formats.
+    """
+    try:
+        with open(conf_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception as e:
+        log.warning("hostapd_ctrl_interface_parse_failed", extra={"conf_path": conf_path, "error": str(e)})
+        return
+
+    ctrl_dir: Optional[str] = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("ctrl_interface="):
+            value = stripped.split("=", 1)[1].strip()
+            # Check for DIR=/path format
+            m = _HOSTAPD_CTRL_DIR_RE.match(value)
+            if m:
+                ctrl_dir = m.group(1)
+            else:
+                # Plain path or first token
+                ctrl_dir = value.split()[0] if value else None
+            break
+
+    if not ctrl_dir:
+        log.debug("hostapd_ctrl_interface_not_found", extra={"conf_path": conf_path})
+        return
+
+    try:
+        Path(ctrl_dir).mkdir(parents=True, exist_ok=True)
+        os.chmod(ctrl_dir, 0o755)
+        log.info("hostapd_ctrl_interface_dir_ensured", extra={"conf_path": conf_path, "ctrl_dir": ctrl_dir})
+    except Exception as e:
+        log.warning("hostapd_ctrl_interface_dir_failed", extra={"conf_path": conf_path, "ctrl_dir": ctrl_dir, "error": str(e)})
+
+
+def validate_hostapd_country(conf_path: str) -> Optional[str]:
+    """
+    Validate that if ieee80211d=1, country_code is properly set.
+    Returns error code string if invalid, None if valid.
+    """
+    try:
+        with open(conf_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception:
+        return None
+
+    ieee80211d: Optional[int] = None
+    country_code: Optional[str] = None
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        
+        if stripped.startswith("ieee80211d="):
+            val = stripped.split("=", 1)[1].strip()
+            try:
+                ieee80211d = int(val)
+            except Exception:
+                pass
+        
+        if stripped.startswith("country_code="):
+            val = stripped.split("=", 1)[1].strip()
+            country_code = val if val else None
+
+    if ieee80211d == 1:
+        if not country_code:
+            return "hostapd_invalid_country_code_for_80211d"
+        if country_code == "00":
+            return "hostapd_invalid_country_code_for_80211d"
+        if not _COUNTRY_CODE_RE.match(country_code):
+            return "hostapd_invalid_country_code_for_80211d"
+    
+    return None
+
+
+def enforce_hostapd_country(conf_path: str, resolved_country: str) -> bool:
+    """
+    Enforce country_code in hostapd.conf if resolved_country is valid.
+    Returns True if file was modified, False otherwise.
+    """
+    if not _COUNTRY_CODE_RE.match(resolved_country):
+        return False
+    if resolved_country == "00":
+        return False
+
+    try:
+        with open(conf_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except Exception as e:
+        log.warning("enforce_hostapd_country_read_failed", extra={"conf_path": conf_path, "error": str(e)})
+        return False
+
+    modified = False
+    country_line_idx: Optional[int] = None
+    
+    # Find existing country_code line
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("country_code="):
+            country_line_idx = i
+            current_val = stripped.split("=", 1)[1].strip()
+            if current_val != resolved_country:
+                lines[i] = f"country_code={resolved_country}\n"
+                modified = True
+            break
+
+    # If no country_code line exists, append it
+    if country_line_idx is None:
+        lines.append(f"country_code={resolved_country}\n")
+        modified = True
+
+    if modified:
+        try:
+            with open(conf_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+            log.info("enforce_hostapd_country_updated", extra={"conf_path": conf_path, "country": resolved_country})
+        except Exception as e:
+            log.error("enforce_hostapd_country_write_failed", extra={"conf_path": conf_path, "error": str(e)})
+            return False
+
+    return modified
 
 
 @dataclass(frozen=True)
@@ -1627,3 +1760,46 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
     )
 
     return LifecycleResult("stopped" if ok else "stop_failed", state)
+
+
+def collect_capture_logs(capture_dir: Optional[str], lnxrouter_config_dir: Optional[str]) -> List[str]:
+    """
+    Collect diagnostic logs from capture directory and lnxrouter config directory.
+    Returns a list of log lines (most recent lines from various log files).
+    """
+    lines = []
+    max_lines_per_file = 50
+    
+    # Collect from capture directory
+    if capture_dir and os.path.isdir(capture_dir):
+        try:
+            for filename in sorted(os.listdir(capture_dir)):
+                if filename.endswith('.log') or filename.endswith('.txt'):
+                    filepath = os.path.join(capture_dir, filename)
+                    try:
+                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                            file_lines = f.readlines()
+                            lines.append(f"=== {filename} ===")
+                            lines.extend([line.rstrip() for line in file_lines[-max_lines_per_file:]])
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    
+    # Collect from lnxrouter config directory
+    if lnxrouter_config_dir and os.path.isdir(lnxrouter_config_dir):
+        try:
+            for filename in ['hostapd.log', 'dnsmasq.log', 'hostapd.conf']:
+                filepath = os.path.join(lnxrouter_config_dir, filename)
+                if os.path.isfile(filepath):
+                    try:
+                        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                            file_lines = f.readlines()
+                            lines.append(f"=== {filename} ===")
+                            lines.extend([line.rstrip() for line in file_lines[-max_lines_per_file:]])
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    
+    return lines

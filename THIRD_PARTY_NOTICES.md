@@ -19,5 +19,11 @@ VR Hotspot bundles third-party binaries under `backend/vendor/bin` for consisten
 - Binary path: `backend/vendor/bin/lnxrouter`
 - Upstream: https://github.com/garywill/linux-router
 
+### libnl
+- License: LGPL v2.1 (LGPL-2.1)
+- Binary paths: `backend/vendor/lib/libnl-3.so.200`, `backend/vendor/lib/libnl-genl-3.so.200`, `backend/vendor/lib/libnl-route-3.so.200`, `backend/vendor/lib/libnl-cli-3.so.200`
+- Upstream: https://github.com/thom311/libnl
+- Usage: Netlink protocol library suite required by hostapd for wireless device configuration
+
 ## Corresponding source
 Source for the exact versions of bundled binaries is available from the upstream projects. When updating binaries, record the exact upstream tag/commit and update `backend/vendor/README.md` and the license files under `backend/vendor/licenses/`. If you need the precise source for a shipped version, use the recorded tag/commit to fetch it from the upstream URLs above.
