@@ -3,6 +3,12 @@ from typing import List, Optional
 
 
 def _vendor_bin() -> str:
+    # Prod install: VR_HOTSPOT_INSTALL_DIR is set by systemd.
+    install_dir = os.environ.get("VR_HOTSPOT_INSTALL_DIR")
+    if install_dir:
+        return os.path.join(install_dir, "backend", "vendor", "bin")
+
+    # Dev environment: find it relative to this file.
     return os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "bin")
     )

@@ -83,6 +83,8 @@ After=network.target
 [Service]
 Type=simple
 User=root
+Environment="LD_LIBRARY_PATH=${INSTALL_DIR}/backend/vendor/lib"
+Environment="VR_HOTSPOT_INSTALL_DIR=${INSTALL_DIR}"
 EnvironmentFile=/etc/vr-hotspot/env
 ExecStart=$VENV_DIR/bin/python -m vr_hotspotd.main
 Restart=on-failure
