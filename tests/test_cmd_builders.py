@@ -2,6 +2,7 @@ import sys
 
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
 from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
+from vr_hotspotd.lifecycle import _precreated_ap_ifname
 
 
 def test_lnxrouter_cmd_builds_5ghz():
@@ -58,3 +59,32 @@ def test_hostapd6_cmd_builds_flags():
     assert cmd[cmd.index("--channel") + 1] == "5"
     assert "--no-virt" in cmd
     assert "--debug" in cmd
+
+
+def test_lnxrouter_cmd_virt_mode_uses_precreated_ap_ifname():
+    ap_ifname = _precreated_ap_ifname("wlan0")
+    cmd = build_cmd(
+        ap_ifname=ap_ifname,
+        ssid="TestSSID",
+        passphrase="password123",
+        band_preference="5ghz",
+        country="US",
+        channel=36,
+        no_virt=False,
+    )
+    assert ap_ifname in cmd
+    assert "--no-virt" not in cmd
+
+
+def test_lnxrouter_cmd_no_virt_uses_adapter_ifname():
+    cmd = build_cmd(
+        ap_ifname="wlan0",
+        ssid="TestSSID",
+        passphrase="password123",
+        band_preference="5ghz",
+        country="US",
+        channel=36,
+        no_virt=True,
+    )
+    assert "wlan0" in cmd
+    assert "--no-virt" in cmd

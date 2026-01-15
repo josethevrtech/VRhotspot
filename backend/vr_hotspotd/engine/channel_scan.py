@@ -23,6 +23,16 @@ def scan_channels(ifname: str, band: str = "5ghz") -> List[Dict[str, any]]:
     
     channels: List[Dict[str, any]] = []
     
+    band_norm = str(band or "").lower().strip()
+    if band_norm in ("2", "2g", "2ghz", "2.4", "2.4ghz"):
+        band_norm = "2.4ghz"
+    elif band_norm in ("5", "5g", "5ghz"):
+        band_norm = "5ghz"
+    elif band_norm in ("6", "6g", "6ghz", "6e"):
+        band_norm = "6ghz"
+    else:
+        band_norm = ""
+
     try:
         # Use iw to scan for networks (shows interference)
         p = subprocess.run(
@@ -45,6 +55,15 @@ def scan_channels(ifname: str, band: str = "5ghz") -> List[Dict[str, any]]:
                 try:
                     freq_str = line.split(":")[1].strip().split()[0]
                     freq_mhz = int(float(freq_str))
+                    if band_norm == "2.4ghz" and not (2400 <= freq_mhz <= 2500):
+                        current_channel = None
+                        continue
+                    if band_norm == "5ghz" and not (4900 <= freq_mhz <= 5900):
+                        current_channel = None
+                        continue
+                    if band_norm == "6ghz" and not (5925 <= freq_mhz <= 7125):
+                        current_channel = None
+                        continue
                     # Convert frequency to channel
                     if 2400 <= freq_mhz <= 2500:
                         current_channel = int((freq_mhz - 2407) / 5)

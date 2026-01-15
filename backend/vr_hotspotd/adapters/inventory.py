@@ -239,6 +239,7 @@ def _parse_iw_reg_get() -> Dict:
 
 def _score_adapter(
     *,
+    ifname: str,
     supports_ap: bool,
     reg_country: str,
     reg_source: str,
@@ -282,6 +283,13 @@ def _score_adapter(
         breakdown.append({"points": 0, "reason": "regdom_global_or_unknown"})
         warnings.append("regdom_global_or_unknown_may_limit_ap_or_5ghz_or_6ghz")
 
+    # Deprioritize wlan0 - known issues with AP mode on some systems (Intel AX200, NetworkManager conflicts)
+    # Prefer wlan1+ which are typically USB adapters with better AP mode support
+    if ifname == "wlan0":
+        score -= 30
+        breakdown.append({"points": -30, "reason": "wlan0_deprioritized_known_ap_mode_issues"})
+        warnings.append("wlan0_has_known_ap_mode_issues_on_some_systems")
+
     return score, breakdown, warnings
 
 
@@ -322,6 +330,7 @@ def get_adapters():
         reg_source = phy_reg.get("source") or "global"
 
         score, breakdown, warnings = _score_adapter(
+            ifname=ifname,
             supports_ap=supports_ap,
             reg_country=reg_country,
             reg_source=reg_source,

@@ -37,6 +37,20 @@ DEFAULT_STATE: Dict[str, Any] = {
         "ap_logs_tail": [],
     },
 
+    "capture_dir": None,
+    "lnxrouter_config_dir": None,
+    "hostapd_conf_seen": False,
+    "hostapd_log_seen": False,
+    "dnsmasq_log_seen": False,
+    "virt_iface_mode": None,  # "virt" | "no-virt" | "precreated"
+    "virt_iface_attempted": False,
+    "virt_iface_fallback_reason": None,
+    "virt_iface_command": None,
+    "virt_iface_step": None,
+    "precreated_ap_iface": False,
+    "precreated_ap_ifname": None,
+    "precreated_ap_parent": None,
+
     "last_error": None,
     "last_op": None,
     "last_op_ts": None,

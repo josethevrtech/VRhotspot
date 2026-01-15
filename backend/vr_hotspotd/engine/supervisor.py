@@ -5,7 +5,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 from . import firewalld  # SteamOS: firewalld owns nftables
 
@@ -15,9 +15,14 @@ ENGINE_STDERR_MAX_LINES = 200
 _ln_proc: Optional[subprocess.Popen] = None
 _stdout_tail: Deque[str] = deque(maxlen=ENGINE_STDOUT_MAX_LINES)
 _stderr_tail: Deque[str] = deque(maxlen=ENGINE_STDERR_MAX_LINES)
+_stdout_head: List[str] = []
+_stderr_head: List[str] = []
+_stdout_line_count = 0
+_stderr_line_count = 0
 
 _last_ap_ifname: Optional[str] = None
 _last_firewalld_cfg: Dict[str, object] = {}
+_stdout_line_observer: Optional[Callable[[str], None]] = None
 
 
 def _note(msg: str) -> None:
@@ -26,11 +31,27 @@ def _note(msg: str) -> None:
 
 
 def _reader_thread(stream, tail: Deque[str], label: str) -> None:
+    global _stdout_line_count, _stderr_line_count
     try:
         for line in iter(stream.readline, ""):
             if not line:
                 break
-            tail.append(line.rstrip("\n"))
+            clean = line.rstrip("\n")
+            tail.append(clean)
+            if label == "stdout":
+                if len(_stdout_head) < ENGINE_STDOUT_MAX_LINES:
+                    _stdout_head.append(clean)
+                _stdout_line_count += 1
+                observer = _stdout_line_observer
+                if observer:
+                    try:
+                        observer(clean)
+                    except Exception as e:
+                        _note(f"stdout observer error: {e}")
+            else:
+                if len(_stderr_head) < ENGINE_STDERR_MAX_LINES:
+                    _stderr_head.append(clean)
+                _stderr_line_count += 1
     except Exception:
         tail.append(f"[{label}] reader error")
     finally:
@@ -38,6 +59,14 @@ def _reader_thread(stream, tail: Deque[str], label: str) -> None:
             stream.close()
         except Exception:
             pass
+
+
+def set_stdout_observer(observer: Optional[Callable[[str], None]]) -> None:
+    """
+    Register a line observer for engine stdout (used for capture/discovery).
+    """
+    global _stdout_line_observer
+    _stdout_line_observer = observer
 
 
 @dataclass
@@ -59,6 +88,33 @@ def is_running() -> bool:
 
 def get_tails() -> Tuple[List[str], List[str]]:
     return list(_stdout_tail), list(_stderr_tail)
+
+
+def _merge_head_tail(
+    head: List[str],
+    tail: Deque[str],
+    count: int,
+    max_lines: int,
+) -> List[str]:
+    if count <= 0:
+        return []
+    tail_list = list(tail)
+    if count <= max_lines:
+        return tail_list
+    head_list = list(head)
+    overlap = (max_lines * 2) - count
+    if overlap > 0:
+        tail_list = tail_list[overlap:] if overlap < len(tail_list) else []
+    if not tail_list:
+        return head_list
+    return head_list + ["..."] + tail_list
+
+
+def _collect_failure_output() -> Tuple[List[str], List[str]]:
+    return (
+        _merge_head_tail(_stdout_head, _stdout_tail, _stdout_line_count, ENGINE_STDOUT_MAX_LINES),
+        _merge_head_tail(_stderr_head, _stderr_tail, _stderr_line_count, ENGINE_STDERR_MAX_LINES),
+    )
 
 
 def _vendor_bin() -> str:
@@ -101,12 +157,11 @@ def _build_engine_env() -> Dict[str, str]:
     sys_hostapd = _which_in_path("hostapd", sys_path)
     sys_dnsmasq = _which_in_path("dnsmasq", sys_path)
 
+    env["PATH"] = f"{sys_path}:{vendor}"
     if sys_hostapd and sys_dnsmasq:
-        env["PATH"] = sys_path
         env.pop("HOSTAPD", None)
         env.pop("DNSMASQ", None)
     else:
-        env["PATH"] = f"{vendor}:{sys_path}"
         env["HOSTAPD"] = os.path.join(vendor, "hostapd")
         env["DNSMASQ"] = os.path.join(vendor, "dnsmasq")
 
@@ -240,6 +295,7 @@ def start_engine(
     firewalld_cfg: Optional[Dict[str, object]] = None,
 ) -> EngineStartResult:
     global _ln_proc, _stdout_tail, _stderr_tail, _last_ap_ifname, _last_firewalld_cfg
+    global _stdout_line_count, _stderr_line_count
 
     if firewalld_cfg is None:
         firewalld_cfg = {}
@@ -260,6 +316,10 @@ def start_engine(
 
     _stdout_tail.clear()
     _stderr_tail.clear()
+    _stdout_head.clear()
+    _stderr_head.clear()
+    _stdout_line_count = 0
+    _stderr_line_count = 0
 
     started_ts = int(time.time())
 
@@ -307,23 +367,27 @@ def start_engine(
     assert _ln_proc.stdout is not None
     assert _ln_proc.stderr is not None
 
-    threading.Thread(
+    stdout_thread = threading.Thread(
         target=_reader_thread,
         args=(_ln_proc.stdout, _stdout_tail, "stdout"),
         daemon=True,
-    ).start()
-    threading.Thread(
+    )
+    stderr_thread = threading.Thread(
         target=_reader_thread,
         args=(_ln_proc.stderr, _stderr_tail, "stderr"),
         daemon=True,
-    ).start()
+    )
+    stdout_thread.start()
+    stderr_thread.start()
 
     # Detect immediate exits (common when hostapd fails quickly)
     deadline = time.time() + early_fail_window_s
     while time.time() < deadline:
         rc = _ln_proc.poll()
         if rc is not None:
-            out, err = get_tails()
+            stdout_thread.join(timeout=0.5)
+            stderr_thread.join(timeout=0.5)
+            out, err = _collect_failure_output()
 
             # Cleanup: treat as a failed start, so revert firewalld if configured.
             if ap_ifname:

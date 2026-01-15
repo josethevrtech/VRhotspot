@@ -91,3 +91,75 @@ phy#1
     ap = lifecycle._select_ap_from_iw(iw_text, target_phy="phy1", ssid="TestNet")
     assert ap is not None
     assert ap.ifname == "wlan1"
+
+
+def test_select_ap_by_ifname():
+    iw_text = """
+phy#0
+    Interface vrhs_ap_wlan0
+        ifindex 7
+        wdev 0x5
+        addr 00:11:22:33:44:59
+        ssid TestNet
+        type AP
+        channel 1 (2412 MHz), width: 20 MHz
+    Interface x0wlan0
+        ifindex 5
+        wdev 0x3
+        addr 00:11:22:33:44:57
+        ssid TestNet
+        type AP
+        channel 36 (5180 MHz), width: 80 MHz
+"""
+    ap = lifecycle._select_ap_by_ifname(iw_text, "vrhs_ap_wlan0")
+    assert ap is not None
+    assert ap.ifname == "vrhs_ap_wlan0"
+
+
+def test_wait_for_ap_ready_prefers_ifname():
+    iw_text = """
+phy#0
+    Interface vrhs_ap_wlan0
+        ifindex 7
+        wdev 0x5
+        addr 00:11:22:33:44:59
+        ssid TestNet
+        type AP
+        channel 1 (2412 MHz), width: 20 MHz
+    Interface x0wlan0
+        ifindex 5
+        wdev 0x3
+        addr 00:11:22:33:44:57
+        ssid TestNet
+        type AP
+        channel 36 (5180 MHz), width: 80 MHz
+"""
+    calls = {"hostapd": []}
+
+    def fake_iw_dev_dump():
+        return iw_text
+
+    def fake_hostapd_ready(ap_interface, *, adapter_ifname):
+        calls["hostapd"].append((ap_interface, adapter_ifname))
+        return ap_interface == "vrhs_ap_wlan0"
+
+    orig_iw = lifecycle._iw_dev_dump
+    orig_ready = lifecycle._hostapd_ready
+    try:
+        lifecycle._iw_dev_dump = fake_iw_dev_dump
+        lifecycle._hostapd_ready = fake_hostapd_ready
+        ap = lifecycle._wait_for_ap_ready(
+            target_phy=None,
+            timeout_s=0.1,
+            poll_s=0.01,
+            ssid=None,
+            adapter_ifname="vrhs_ap_wlan0",
+            prefer_ifname="vrhs_ap_wlan0",
+            capture=None,
+        )
+        assert ap is not None
+        assert ap.ifname == "vrhs_ap_wlan0"
+        assert ("vrhs_ap_wlan0", "vrhs_ap_wlan0") in calls["hostapd"]
+    finally:
+        lifecycle._iw_dev_dump = orig_iw
+        lifecycle._hostapd_ready = orig_ready

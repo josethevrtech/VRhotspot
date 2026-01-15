@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -7,6 +8,8 @@ import sys
 import tempfile
 import time
 from typing import List, Optional, Tuple
+
+_CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
 
 
 def _run(cmd: List[str], check: bool = True) -> Tuple[int, str]:
@@ -25,6 +28,45 @@ def _resolve_binary(name: str, env_key: str) -> str:
     if not p:
         raise RuntimeError(f"{name}_not_found")
     return p
+
+
+def _parse_ctrl_interface_dir(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    m = _CTRL_DIR_RE.search(raw)
+    if m:
+        return m.group(1)
+    return raw.split()[0]
+
+
+def _ctrl_dir_from_conf(conf_path: str) -> Optional[str]:
+    try:
+        with open(conf_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if s.startswith("ctrl_interface="):
+                    value = s.split("=", 1)[1].strip()
+                    return _parse_ctrl_interface_dir(value)
+    except Exception:
+        return None
+    return None
+
+
+def _ensure_ctrl_interface_dir(conf_path: str) -> None:
+    ctrl_dir = _ctrl_dir_from_conf(conf_path)
+    if not ctrl_dir:
+        return
+    try:
+        os.makedirs(ctrl_dir, exist_ok=True)
+        os.chmod(ctrl_dir, 0o755)
+        print(f"hostapd_ctrl_dir_ready: {ctrl_dir}")
+    except Exception as exc:
+        print(f"hostapd_ctrl_dir_failed: {ctrl_dir} err={exc}")
 
 
 def _default_uplink_iface() -> Optional[str]:
@@ -321,7 +363,6 @@ def main() -> int:
         _iface_up(uplink)
         moved_addrs = _move_ipv4_addrs(uplink, args.bridge_name)
 
-        os.makedirs("/run/hostapd", exist_ok=True)
         _write_hostapd_conf(
             path=hostapd_conf,
             ifname=ap_iface,
@@ -339,6 +380,7 @@ def main() -> int:
             short_guard_interval=args.short_guard_interval,
             tx_power=args.tx_power,
         )
+        _ensure_ctrl_interface_dir(hostapd_conf)
 
         hostapd_cmd = [hostapd, hostapd_conf]
         if args.debug:
