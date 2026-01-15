@@ -36,6 +36,14 @@ print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 print_error() { echo -e "${RED}✗ $1${NC}"; }
 print_info() { echo -e "${CYAN}ℹ $1${NC}"; }
 
+interactive_read() {
+    if [ -c /dev/tty ]; then
+        read "$@" < /dev/tty
+    else
+        read "$@"
+    fi
+}
+
 # --- Pre-flight & Cleanup ---
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -53,7 +61,7 @@ cleanup_previous_install() {
 
     print_warning "Existing $APP_NAME installation detected."
     if [ "$INTERACTIVE" -eq 1 ]; then
-        read -p "Perform a full cleanup of the previous version? (Y/n) " -n 1 -r REPLY || true
+        interactive_read -p "Perform a full cleanup of the previous version? (Y/n) " -n 1 -r REPLY || true
         echo
         if [[ "$REPLY" =~ ^[Nn]$ ]]; then
             print_error "Cannot proceed with an existing installation. Aborting."
@@ -163,10 +171,10 @@ get_source_files() {
 configure_install() {
     print_step "Configuring installation..."
     if [ "$INTERACTIVE" -eq 1 ]; then
-        read -p "Enable autostart at boot? (y/N) " -n 1 -r || true; echo
+        interactive_read -p "Enable autostart at boot? (y/N) " -n 1 -r || true; echo
         [[ "$REPLY" =~ ^[Yy]$ ]] && ENABLE_AUTOSTART="y" || ENABLE_AUTOSTART="n"
 
-        read -p "Enable remote access? (NOT for public networks) (y/N) " -n 1 -r || true; echo
+        interactive_read -p "Enable remote access? (NOT for public networks) (y/N) " -n 1 -r || true; echo
         [[ "$REPLY" =~ ^[Yy]$ ]] && ENABLE_REMOTE="y" || ENABLE_REMOTE="n"
     else
         print_info "Using defaults: autostart disabled, remote access disabled."
@@ -260,7 +268,7 @@ main() {
     cleanup_previous_install
     
     if [ "$INTERACTIVE" -eq 1 ]; then
-        read -p "Continue with installation? (Y/n) " -n 1 -r || true; echo
+        interactive_read -p "Continue with installation? (Y/n) " -n 1 -r || true; echo
         if [[ "$REPLY" =~ ^[Nn]$ ]]; then
             print_info "Installation cancelled."
             exit 0
