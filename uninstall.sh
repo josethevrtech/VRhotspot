@@ -49,7 +49,15 @@ detect_os() {
 }
 
 main() {
-    [ -t 1 ] && INTERACTIVE=1 || INTERACTIVE=0
+    # Check for force flag
+    FORCE=0
+    for arg in "$@"; do
+        if [[ "$arg" == "-y" || "$arg" == "--yes" || "$arg" == "--force" ]]; then
+            FORCE=1
+        fi
+    done
+
+    [ -t 0 ] && INTERACTIVE=1 || INTERACTIVE=0
 
     clear
     print_header
@@ -58,8 +66,9 @@ main() {
     detect_os
 
     print_warning "This will completely remove $APP_NAME and all its configuration."
-    if [ "$INTERACTIVE" -eq 1 ]; then
-        read -p "Are you sure you want to continue? (y/N) " -n 1 -r || true
+    if [ "$INTERACTIVE" -eq 1 ] && [ "$FORCE" -eq 0 ]; then
+        echo -ne "Are you sure you want to continue? (y/N) "
+        read -n 1 -r REPLY || true
         echo
         if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
             print_info "Uninstallation cancelled."
