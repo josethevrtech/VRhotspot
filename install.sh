@@ -94,7 +94,8 @@ detect_os() {
     case "$OS_ID" in
         steamos|cachyos|arch) PKG_MANAGER="pacman" ;;
         ubuntu|debian) PKG_MANAGER="apt" ;;
-        fedora|bazzite) PKG_MANAGER="dnf" ;;
+        fedora) PKG_MANAGER="dnf" ;;
+        bazzite) PKG_MANAGER="rpm-ostree" ;;
         *)
             print_error "Unsupported OS: $OS_ID. Please install dependencies manually."
             exit 1
@@ -117,6 +118,26 @@ install_dependencies() {
             ;;
         dnf)
             dnf install -y python3 python3-pip python3-venv iw iproute2 iptables
+            ;;
+        rpm-ostree)
+            # Check for missing dependencies to avoid unnecessary layering
+            local deps=("python3" "python3-pip" "iw" "iproute" "iptables")
+            local needed=()
+            for pkg in "${deps[@]}"; do
+                if ! rpm -q --whatprovides "$pkg" &>/dev/null; then
+                    needed+=("$pkg")
+                fi
+            done
+            
+            if [ ${#needed[@]} -gt 0 ]; then
+                print_info "Installing missing dependencies: ${needed[*]}"
+                if ! rpm-ostree install --apply-live "${needed[@]}"; then
+                    print_warning "Live install failed. Trying standard install..."
+                    rpm-ostree install "${needed[@]}"
+                    print_warning "Dependencies installed. Please REBOOT your system and run this installer again."
+                    exit 0
+                fi
+            fi
             ;;
     esac
     print_success "Dependencies installed."
