@@ -24,7 +24,7 @@ print_header() {
     echo -e "${RED}${BOLD}"
     echo "╔══════════════════════════════════════════════════════════════════╗"
     echo "║                    $APP_NAME - Uninstaller                     ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "╚══════════════════════════════════════════════════════════════════╝${NC}"
 }
 
 print_step() { echo -e "${BLUE}${BOLD}▶ $1${NC}"; }
@@ -41,6 +41,13 @@ check_root() {
     fi
 }
 
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        print_info "Detected System: $NAME"
+    fi
+}
+
 main() {
     [ -t 1 ] && INTERACTIVE=1 || INTERACTIVE=0
 
@@ -48,10 +55,12 @@ main() {
     print_header
 
     check_root
+    detect_os
 
     print_warning "This will completely remove $APP_NAME and all its configuration."
     if [ "$INTERACTIVE" -eq 1 ]; then
-        read -p "Are you sure you want to continue? (y/N) " -n 1 -r; echo
+        read -p "Are you sure you want to continue? (y/N) " -n 1 -r || true
+        echo
         if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
             print_info "Uninstallation cancelled."
             exit 0
