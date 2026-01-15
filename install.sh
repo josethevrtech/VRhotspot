@@ -109,7 +109,7 @@ install_dependencies() {
     case "$PKG_MANAGER" in
         pacman)
             [[ "$OS_ID" == "steamos" ]] && steamos-readonly disable || true
-            pacman -Sy --noconfirm --needed python python-pip iw iproute2 iptables
+            pacman -Sy --noconfirm --needed python python-pip iw iproute2 iptables-nft
             [[ "$OS_ID" == "steamos" ]] && steamos-readonly enable || true
             ;;
         apt)
