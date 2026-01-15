@@ -61,7 +61,7 @@ Enter the **API token** shown during installation to access the interface.
 - See compatible adapters list: https://github.com/morrownr/USB-WiFi/blob/main/home/USB_WiFi_Adapters_that_are_supported_with_Linux_in-kernel_drivers.md#axe3000---usb30---24-ghz-5-ghz-and-6-ghz-wifi-6e
 
 ### ⚠️ Known Issues
-- **Intel AX200 (wlan0)**: Built-in adapters often have AP mode limitations. Use wlan1+ (USB adapters) for better reliability.
+- **(wlan0)**: Built-in adapters often have AP mode limitations. Use wlan1+ (USB adapters) for better reliability.
 
 ---
 
