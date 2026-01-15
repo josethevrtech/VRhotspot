@@ -17,7 +17,7 @@ curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install
 ```
 
 **Features:**
-- ✅ Auto-detects your OS (SteamOS, CachyOS, Arch, Ubuntu, Fedora)
+- ✅ Auto-detects your OS (SteamOS, Bazzite, CachyOS, Arch, Ubuntu, Fedora)
 - ✅ Installs all dependencies automatically (iw, python, libnl, etc.)
 - ✅ Configures NetworkManager to prevent interference
 - ✅ Starts service and shows you the web UI URL and API token
