@@ -14,6 +14,13 @@ if [[ -f "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
 fi
 
+# Self-healing: Ensure vendor binaries are linked into venv if missing
+VENV_SITE=$(find /var/lib/vr-hotspot/venv/lib -maxdepth 2 -name site-packages -type d 2>/dev/null | head -n 1)
+APP_VENDOR="/var/lib/vr-hotspot/app/backend/vendor"
+if [[ -n "$VENV_SITE" && -d "$APP_VENDOR" && ! -e "$VENV_SITE/vendor" ]]; then
+  ln -sf "$APP_VENDOR" "$VENV_SITE/vendor"
+fi
+
 PORT="${VR_HOTSPOTD_PORT:-8732}"
 BASE="http://127.0.0.1:${PORT}"
 CID="autostart-$(date +%s)"
