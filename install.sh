@@ -53,7 +53,7 @@ cleanup_previous_install() {
 
     print_warning "Existing $APP_NAME installation detected."
     if [ "$INTERACTIVE" -eq 1 ]; then
-        read -p "Perform a full cleanup of the previous version? (Y/n) " -n 1 -r REPLY
+        read -p "Perform a full cleanup of the previous version? (Y/n) " -n 1 -r REPLY || true
         echo
         if [[ "$REPLY" =~ ^[Nn]$ ]]; then
             print_error "Cannot proceed with an existing installation. Aborting."
@@ -163,10 +163,10 @@ get_source_files() {
 configure_install() {
     print_step "Configuring installation..."
     if [ "$INTERACTIVE" -eq 1 ]; then
-        read -p "Enable autostart at boot? (y/N) " -n 1 -r; echo
+        read -p "Enable autostart at boot? (y/N) " -n 1 -r || true; echo
         [[ "$REPLY" =~ ^[Yy]$ ]] && ENABLE_AUTOSTART="y" || ENABLE_AUTOSTART="n"
 
-        read -p "Enable remote access? (NOT for public networks) (y/N) " -n 1 -r; echo
+        read -p "Enable remote access? (NOT for public networks) (y/N) " -n 1 -r || true; echo
         [[ "$REPLY" =~ ^[Yy]$ ]] && ENABLE_REMOTE="y" || ENABLE_REMOTE="n"
     else
         print_info "Using defaults: autostart disabled, remote access disabled."
