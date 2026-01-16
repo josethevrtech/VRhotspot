@@ -279,6 +279,8 @@ UI_HTML = r"""<!doctype html>
 <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
 <meta name="theme-color" content="#000000" />
 <link rel="stylesheet" href="/assets/ui.css" />
+<script defer src="/assets/qrcode.js"></script>
+<script defer src="/assets/chart.js"></script>
 </head>
 <body data-ui-mode="basic">
 <div class="wrap">
@@ -293,6 +295,16 @@ UI_HTML = r"""<!doctype html>
         <input type="checkbox" id="uiModeToggle" />
         <span class="slider"></span>
       </label>
+    </div>
+  </div>
+
+  <!-- QR Modal -->
+  <div id="qrModal" class="modal-overlay" style="display:none">
+    <div class="modal-content">
+      <h3>Scan to Connect</h3>
+      <div id="qrPlaceholder"></div>
+      <div class="small mt-10" id="qrSsidRaw"></div>
+      <button class="mt-12" id="btnCloseQr">Close</button>
     </div>
   </div>
 
@@ -329,6 +341,10 @@ UI_HTML = r"""<!doctype html>
           <input type="checkbox" id="privacyModeBasic" checked />
           Privacy
         </label>
+        <label class="tog" title="Show Telemetry">
+          <input type="checkbox" id="showTelemetryBasic" />
+          Telemetry
+        </label>
         <div class="token-field">
           <label for="apiTokenBasic">API token</label>
           <input id="apiTokenBasic" placeholder="Enter API token" />
@@ -363,6 +379,7 @@ UI_HTML = r"""<!doctype html>
       <div class="row mt-8">
         <button id="btnCopySsid">Copy SSID</button>
         <button id="btnCopyPass">Copy passphrase</button>
+        <button id="btnShowQrBasic">Show QR</button>
         <button class="primary" id="btnSavePassBasic">Save passphrase</button>
       </div>
       <div class="small mt-6" id="copyHint"></div>
@@ -376,15 +393,15 @@ UI_HTML = r"""<!doctype html>
       
       <!-- Action Buttons -->
       <div class="row">
-        <button class="primary" id="btnStart">Start</button>
-        <button class="danger" id="btnStop">Stop</button>
-        <button id="btnRestart">Restart</button>
-        <button id="btnRepair">Repair</button>
+        <button class="primary" id="btnStart">Start Hotspot</button>
+        <button class="danger" id="btnStop">Stop Hotspot</button>
+        <button id="btnRestart">Restart Service</button>
+        <button id="btnRepair">Repair Network</button>
       </div>
       
       <!-- Refresh Controls -->
       <div class="row mt-12 row-wrap gap-8">
-        <button id="btnRefresh">Refresh</button>
+        <button id="btnRefresh">Refresh Status</button>
         <label class="tog" title="Auto refresh">
           <input type="checkbox" id="autoRefresh" />
           Auto
@@ -408,7 +425,7 @@ UI_HTML = r"""<!doctype html>
           <input id="apiToken" placeholder="Enter API token" />
           <div class="small mt-6">Saved locally in your browser.</div>
         </div>
-        <button class="primary" id="btnSaveToken">Save token</button>
+        <button class="primary" id="btnSaveToken">Save API Token</button>
       </div>
       
       <div id="msg" class="small mt-10"></div>
@@ -444,6 +461,7 @@ UI_HTML = r"""<!doctype html>
             <input id="wpa2_passphrase" type="password" placeholder="Saved" />
             <div class="row mt-8">
               <button id="btnRevealPass">Show passphrase</button>
+              <button id="btnShowQr">Show QR Code</button>
               <div class="small" id="passHint"></div>
             </div>
           </div>
@@ -467,6 +485,12 @@ UI_HTML = r"""<!doctype html>
             <div class="hint" id="secHint"></div>
           </div>
 
+          <div id="fivegBox" data-field="channel_5g">
+            <label for="channel_5g">5 GHz channel (optional)</label>
+            <input id="channel_5g" type="number" step="1" min="36" max="177" placeholder="Leave blank for auto" />
+            <div class="hint" id="ch5Hint"></div>
+          </div>
+
           <div id="sixgBox" data-field="channel_6g">
             <label for="channel_6g">6 GHz channel (optional)</label>
             <input id="channel_6g" type="number" step="1" min="1" max="233" placeholder="Leave blank for auto" />
@@ -483,10 +507,9 @@ UI_HTML = r"""<!doctype html>
               <option value="40">40 MHz</option>
               <option value="80">80 MHz (recommended for VR)</option>
               <option value="160">160 MHz (maximum throughput)</option>
-            </select>
-          </div>
-          <div class="small mt-6 grid-span">
-            Wider channels can improve throughput but are less stable in crowded 5 GHz; DFS channels can delay AP start.
+            <div class="small mt-6">
+              Wider channels can improve throughput but are less stable in crowded 5 GHz; DFS channels can delay AP start.
+            </div>
           </div>
 
           <div class="two" data-field="beacon_interval">
@@ -498,10 +521,10 @@ UI_HTML = r"""<!doctype html>
               <label for="dtim_period">DTIM period</label>
               <input id="dtim_period" type="number" step="1" min="1" max="255" placeholder="1" />
             </div>
-          </div>
-          <div class="small mt-6 grid-span" data-field="beacon_interval">
-            Lower beacon interval = faster association but more overhead. DTIM=1 ensures immediate frame delivery for VR.
-          </div>
+            </div>
+            <div class="small mt-6 grid-span" data-field="beacon_interval">
+              Lower beacon interval = faster association but more overhead. DTIM=1 ensures immediate frame delivery for VR.
+            </div>
 
           <div data-field="short_guard_interval">
             <label class="tog"><input type="checkbox" id="short_guard_interval" /> short_guard_interval (improves throughput)</label>
@@ -515,9 +538,9 @@ UI_HTML = r"""<!doctype html>
 
           <div data-field="channel_auto_select">
             <label class="tog"><input type="checkbox" id="channel_auto_select" /> channel_auto_select (scan for interference)</label>
-          </div>
-          <div class="small mt-6 grid-span">
-            Auto selection may choose DFS channels based on regulatory rules; DFS can add startup delay.
+            <div class="small mt-6">
+              Auto selection may choose DFS channels based on regulatory rules; DFS can add startup delay.
+            </div>
           </div>
 
           <div data-field="country">
@@ -562,8 +585,8 @@ UI_HTML = r"""<!doctype html>
             <label for="ap_adapter">AP adapter</label>
             <select id="ap_adapter"></select>
             <div class="row mt-8">
-              <button id="btnUseRecommended">Use recommended</button>
-              <button id="btnReloadAdapters">Reload adapters</button>
+              <button id="btnUseRecommended">Select Recommended</button>
+              <button id="btnReloadAdapters">Rescan Adapters</button>
             </div>
             <div class="small mt-6" id="adapterHint"></div>
           </div>
@@ -600,12 +623,13 @@ UI_HTML = r"""<!doctype html>
           </div>
 
           <div data-field="qos_preset" class="grid-span">
-            <label for="qos_preset">QoS profile</label>
+            <label for="qos_preset">VR Profiles</label>
             <div class="qos-basic">
               <div id="basicQosBanner" class="pillWarn info-banner">
                 QoS is currently Off in Advanced settings. Basic defaults to Stability. Click Save to apply.
               </div>
               <div class="segmented">
+                <label class="seg"><input type="radio" name="qos_basic" value="off" />Off</label>
                 <label class="seg"><input type="radio" name="qos_basic" value="ultra_low_latency" />Ultra low latency</label>
                 <label class="seg"><input type="radio" name="qos_basic" value="high_throughput" />High throughput</label>
                 <label class="seg"><input type="radio" name="qos_basic" value="balanced" />Balanced</label>
@@ -753,12 +777,31 @@ UI_HTML = r"""<!doctype html>
     </div>
   </div>
 
+
+
   <div class="card">
+    <h2>Engine logs</h2>
+    <div class="small">Logs are hidden while Privacy is ON.</div>
+    <div class="mono mt-10" id="stdout"></div>
+    <div class="mono mt-10" id="stderr"></div>
+  </div>
+  </div>
+</div>
+
+  <div class="card" id="cardTelemetry">
     <h2>Telemetry</h2>
     <div class="small">RSSI, bitrate, retries, loss (from station stats).</div>
     <div class="small mt-6" id="telemetrySummary"></div>
     <div class="small muted mt-6" id="telemetryWarnings"></div>
-    <table class="mt-10">
+    
+    <div class="chart-container mt-10" style="position: relative; height:200px; width:100%">
+      <canvas id="rssiChart"></canvas>
+    </div>
+    <div class="chart-container mt-10" style="position: relative; height:200px; width:100%">
+      <canvas id="rateChart"></canvas>
+    </div>
+
+    <table class="mt-10" id="telemetryTable" style="display:none">
       <thead>
         <tr>
           <th>Client</th>
@@ -772,21 +815,15 @@ UI_HTML = r"""<!doctype html>
       </thead>
       <tbody id="telemetryBody"></tbody>
     </table>
+    <div class="row row-flex-end mt-6">
+       <button class="small" id="btnToggleTable">Show/Hide Table</button>
+    </div>
   </div>
-
-  <div class="card">
-    <h2>Engine logs</h2>
-    <div class="small">Logs are hidden while Privacy is ON.</div>
-    <div class="mono mt-10" id="stdout"></div>
-    <div class="mono mt-10" id="stderr"></div>
-  </div>
-  </div>
-</div>
 
 <script defer src="/assets/field_visibility.js"></script>
 <script defer src="/assets/ui.js"></script>
 <footer style="position: fixed; bottom: 8px; left: 8px; font-size: 11px; color: rgba(255,255,255,0.4); z-index: 1000;">
-  v0.1.9
+  v1.0
 </footer>
 </body>
 </html>
@@ -798,6 +835,8 @@ _ASSET_CONTENT_TYPES = {
     "ui.css": "text/css; charset=utf-8",
     "field_visibility.js": "application/javascript; charset=utf-8",
     "ui.js": "application/javascript; charset=utf-8",
+    "qrcode.js": "application/javascript; charset=utf-8",
+    "chart.js": "application/javascript; charset=utf-8",
 }
 
 

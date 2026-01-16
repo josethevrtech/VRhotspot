@@ -293,6 +293,27 @@ def _score_adapter(
     return score, breakdown, warnings
 
 
+def _detect_bus_type(ifname: str) -> str:
+    """
+    Detect if adapter is 'usb', 'pci', or 'unknown' via sysfs.
+    """
+    try:
+        path = f"/sys/class/net/{ifname}/device"
+        if not os.path.exists(path):
+            return "unknown"
+        real = os.path.realpath(path)
+        if "/usb" in real:
+            return "usb"
+        if "/pci" in real:
+            return "pci"
+        if "/virtual" in real:
+            return "virtual"
+    except Exception:
+        pass
+    return "unknown"
+
+
+
 def get_adapters():
     """
     Returns:
@@ -324,6 +345,7 @@ def get_adapters():
         supports_ap = _phy_supports_ap(phy) if phy else False
         supports_wifi6 = _phy_supports_wifi6(phy) if phy else False
         band_caps = _phy_band_support(phy) if phy else {"supports_2ghz": False, "supports_5ghz": False, "supports_6ghz": False}
+        bus_type = _detect_bus_type(ifname) if ifname else "unknown"
 
         phy_reg = per_phy.get(phy, {})
         reg_country = phy_reg.get("country") or global_country or "unknown"
@@ -342,6 +364,7 @@ def get_adapters():
             "id": ifname,
             "ifname": ifname,
             "phy": phy,
+            "bus": bus_type,
             "supports_ap": supports_ap,
             "supports_wifi6": supports_wifi6,
             "supports_2ghz": bool(band_caps.get("supports_2ghz")),

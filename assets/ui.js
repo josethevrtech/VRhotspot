@@ -1,10 +1,11 @@
 const BASE = '';
-const STORE = (function(){
-  try{ localStorage.setItem('__t','1'); localStorage.removeItem('__t'); return localStorage; }catch{ return sessionStorage; }
+const STORE = (function () {
+  try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); return localStorage; } catch { return sessionStorage; }
 })();
 const LS = {
   token: 'vr_hotspot_api_token',
   privacy: 'vr_hotspot_privacy',
+  showTelemetry: 'vr_hotspot_show_telemetry',
   auto: 'vr_hotspot_auto',
   every: 'vr_hotspot_every'
 };
@@ -65,23 +66,23 @@ const BASIC_FIELD_KEYS_FALLBACK = BASIC_FIELD_KEYS.length ? BASIC_FIELD_KEYS : B
 const FIELD_HOMES = new Map();
 let bandOptionsCache = null;
 
-function readUiMode(){
+function readUiMode() {
   const raw = (STORE.getItem(UI_MODE_KEY) || '').trim().toLowerCase();
   return raw === 'advanced' ? 'advanced' : 'basic';
 }
 
-function loadUiMode(){
+function loadUiMode() {
   return readUiMode();
 }
 
-function writeUiMode(mode){
-  try{ STORE.setItem(UI_MODE_KEY, mode); }catch{}
+function writeUiMode(mode) {
+  try { STORE.setItem(UI_MODE_KEY, mode); } catch { }
 }
 
-function useUiMode(){
+function useUiMode() {
   /** @type {UiMode} */
   let mode = readUiMode();
-  function setMode(next){
+  function setMode(next) {
     mode = (next === 'advanced') ? 'advanced' : 'basic';
     writeUiMode(mode);
     applyUiMode(mode);
@@ -89,69 +90,69 @@ function useUiMode(){
   return { getMode: () => mode, setMode };
 }
 
-function getUiMode(){
+function getUiMode() {
   return uiModeState.getMode();
 }
 
 const uiModeState = useUiMode();
 
-function getFieldElement(key){
+function getFieldElement(key) {
   return document.querySelector(`[data-field="${key}"]`);
 }
 
-function rememberFieldHome(el){
+function rememberFieldHome(el) {
   if (!el || FIELD_HOMES.has(el)) return;
   FIELD_HOMES.set(el, { parent: el.parentNode, next: el.nextSibling });
 }
 
-function moveFieldToContainer(key, container){
+function moveFieldToContainer(key, container) {
   const el = getFieldElement(key);
   if (!el || !container) return;
   rememberFieldHome(el);
   container.appendChild(el);
 }
 
-function restoreFieldToHome(key){
+function restoreFieldToHome(key) {
   const el = getFieldElement(key);
   if (!el) return;
   const home = FIELD_HOMES.get(el);
   if (!home || !home.parent) return;
-  if (home.next && home.next.parentNode === home.parent){
+  if (home.next && home.next.parentNode === home.parent) {
     home.parent.insertBefore(el, home.next);
-  }else{
+  } else {
     home.parent.appendChild(el);
   }
 }
 
-function applyBasicLayout(mode){
+function applyBasicLayout(mode) {
   const quick = document.getElementById('basicQuickFields');
   const connect = document.getElementById('basicConnectFields');
   if (!quick || !connect) return;
-  if (mode === 'basic'){
+  if (mode === 'basic') {
     for (const key of BASIC_QUICK_FIELDS) moveFieldToContainer(key, quick);
     for (const key of BASIC_CONNECT_FIELDS) moveFieldToContainer(key, connect);
-  }else{
+  } else {
     const all = BASIC_QUICK_FIELDS.concat(BASIC_CONNECT_FIELDS);
     for (const key of all.slice().reverse()) restoreFieldToHome(key);
   }
 }
 
-function getAdapterByIfname(ifname){
+function getAdapterByIfname(ifname) {
   if (!lastAdapters || !Array.isArray(lastAdapters.adapters)) return null;
-  for (const a of lastAdapters.adapters){
+  for (const a of lastAdapters.adapters) {
     if (a.ifname === ifname) return a;
   }
   return null;
 }
 
-function getSelectedAdapter(){
+function getSelectedAdapter() {
   const sel = document.getElementById('ap_adapter');
   if (!sel) return null;
   return getAdapterByIfname(sel.value);
 }
 
-function getRecommendedBand(adapter){
-  if (adapter){
+function getRecommendedBand(adapter) {
+  if (adapter) {
     if (adapter.supports_5ghz) return '5ghz';
     if (adapter.supports_6ghz) return '6ghz';
     if (adapter.supports_2ghz) return '2.4ghz';
@@ -159,29 +160,29 @@ function getRecommendedBand(adapter){
   return '5ghz';
 }
 
-function formatBandLabel(band){
+function formatBandLabel(band) {
   if (band === '6ghz') return '6 GHz';
   if (band === '5ghz') return '5 GHz';
   if (band === '2.4ghz') return '2.4 GHz';
   return band;
 }
 
-function resolveBandPref(raw){
+function resolveBandPref(raw) {
   if (raw === 'recommended') return getRecommendedBand(getSelectedAdapter());
   return raw;
 }
 
-function cacheBandOptions(select){
+function cacheBandOptions(select) {
   if (bandOptionsCache) return;
   bandOptionsCache = [];
-  for (const opt of select.options){
+  for (const opt of select.options) {
     bandOptionsCache.push({ value: opt.value, label: opt.textContent });
   }
 }
 
-function setBandOptions(select, options, value){
+function setBandOptions(select, options, value) {
   select.innerHTML = '';
-  for (const optDef of options){
+  for (const optDef of options) {
     const opt = document.createElement('option');
     opt.value = optDef.value;
     opt.textContent = optDef.label;
@@ -190,12 +191,12 @@ function setBandOptions(select, options, value){
   if (value) select.value = value;
 }
 
-function updateBandOptions(){
+function updateBandOptions() {
   const sel = document.getElementById('band_preference');
   if (!sel) return;
 
   cacheBandOptions(sel);
-  if (getUiMode() !== 'basic'){
+  if (getUiMode() !== 'basic') {
     const current = sel.value === 'recommended' ? getRecommendedBand(getSelectedAdapter()) : sel.value;
     setBandOptions(sel, bandOptionsCache, current || '5ghz');
     return;
@@ -225,39 +226,39 @@ let lastCfg = null;
 let lastAdapters = null;
 
 const CFG_IDS = [
-  "ssid","wpa2_passphrase","band_preference","ap_security","channel_6g","country","country_sel",
-  "optimized_no_virt","ap_adapter","ap_ready_timeout_s","fallback_channel_2g",
-  "channel_width","beacon_interval","dtim_period","short_guard_interval","tx_power","channel_auto_select",
-  "lan_gateway_ip","dhcp_start_ip","dhcp_end_ip","dhcp_dns","enable_internet",
-  "wifi_power_save_disable","usb_autosuspend_disable","cpu_governor_performance","cpu_affinity","sysctl_tuning",
-  "irq_affinity","interrupt_coalescing","tcp_low_latency","memory_tuning","io_scheduler_optimize",
-  "telemetry_enable","telemetry_interval_s","watchdog_enable","watchdog_interval_s",
-  "connection_quality_monitoring","auto_channel_switch",
-  "qos_preset","nat_accel","bridge_mode","bridge_name","bridge_uplink",
-  "firewalld_enabled","firewalld_enable_masquerade","firewalld_enable_forward","firewalld_cleanup_on_stop",
+  "ssid", "wpa2_passphrase", "band_preference", "ap_security", "channel_6g", "country", "country_sel",
+  "optimized_no_virt", "ap_adapter", "ap_ready_timeout_s", "fallback_channel_2g",
+  "channel_width", "beacon_interval", "dtim_period", "short_guard_interval", "tx_power", "channel_auto_select",
+  "lan_gateway_ip", "dhcp_start_ip", "dhcp_end_ip", "dhcp_dns", "enable_internet",
+  "wifi_power_save_disable", "usb_autosuspend_disable", "cpu_governor_performance", "cpu_affinity", "sysctl_tuning",
+  "irq_affinity", "interrupt_coalescing", "tcp_low_latency", "memory_tuning", "io_scheduler_optimize",
+  "telemetry_enable", "telemetry_interval_s", "watchdog_enable", "watchdog_interval_s",
+  "connection_quality_monitoring", "auto_channel_switch",
+  "qos_preset", "nat_accel", "bridge_mode", "bridge_name", "bridge_uplink",
+  "firewalld_enabled", "firewalld_enable_masquerade", "firewalld_enable_forward", "firewalld_cleanup_on_stop",
   "debug"
 ];
 
-function setDirty(v){
+function setDirty(v) {
   cfgDirty = !!v;
   const text = cfgDirty ? 'Unsaved changes' : '';
   const dirtyEls = [document.getElementById('dirty'), document.getElementById('dirtyBasic')];
-  for (const el of dirtyEls){
+  for (const el of dirtyEls) {
     if (el) el.textContent = text;
   }
 }
 
-function markDirty(ev){
+function markDirty(ev) {
   if (ev && ev.isTrusted === false) return;
   if (!cfgDirty) setDirty(true);
 }
 
-function markPassphraseDirty(ev){
+function markPassphraseDirty(ev) {
   if (ev && ev.isTrusted === false) return;
   passphraseDirty = true;
 }
 
-function resetPassphraseUi(cfg){
+function resetPassphraseUi(cfg) {
   const passEl = document.getElementById('wpa2_passphrase');
   if (!passEl) return;
   const hasSaved = !!(cfg && cfg.wpa2_passphrase_set);
@@ -266,23 +267,23 @@ function resetPassphraseUi(cfg){
   passEl.placeholder = hasSaved ? 'Type new passphrase to change (currently saved)' : 'Type a new passphrase to set it';
   passEl.readOnly = false;
   const passHint = document.getElementById('passHint');
-  if (passHint){
-    if (hasSaved){
+  if (passHint) {
+    if (hasSaved) {
       let hint = 'Passphrase is saved';
-      if (Number.isInteger(cfg.wpa2_passphrase_len)){
+      if (Number.isInteger(cfg.wpa2_passphrase_len)) {
         hint = `Passphrase saved (${cfg.wpa2_passphrase_len} chars). Type to change.`;
       }
       passHint.textContent = hint;
-    }else{
+    } else {
       passHint.textContent = '';
     }
   }
   passphraseDirty = false;
 }
 
-function _coerceDefault(v, def){
+function _coerceDefault(v, def) {
   if (def === null) return (v === undefined || v === null || v === '') ? null : v;
-  if (typeof def === 'number'){
+  if (typeof def === 'number') {
     const n = Number(v);
     return Number.isNaN(n) ? v : n;
   }
@@ -291,13 +292,13 @@ function _coerceDefault(v, def){
   return v;
 }
 
-function hasAdvancedValues(cfg){
+function hasAdvancedValues(cfg) {
   if (!cfg) return false;
-  for (const key of ADVANCED_KEYS_FALLBACK){
+  for (const key of ADVANCED_KEYS_FALLBACK) {
     if (!(key in cfg)) continue;
     const hasDefault = Object.prototype.hasOwnProperty.call(ADVANCED_DEFAULTS, key);
     const def = hasDefault ? ADVANCED_DEFAULTS[key] : undefined;
-    if (!hasDefault){
+    if (!hasDefault) {
       const cur = cfg[key];
       if (cur !== undefined && cur !== null && cur !== '') return true;
       continue;
@@ -309,24 +310,24 @@ function hasAdvancedValues(cfg){
   return false;
 }
 
-function updateBasicInfoBanner(){
+function updateBasicInfoBanner() {
   const banner = document.getElementById('basicInfoBanner');
   if (!banner) return;
   const show = (getUiMode() === 'basic') && hasAdvancedValues(lastCfg);
   banner.style.display = show ? 'block' : 'none';
 }
 
-function parseIntMaybe(value){
+function parseIntMaybe(value) {
   if (value === undefined || value === null || value === '') return null;
   const n = parseInt(value, 10);
   return Number.isNaN(n) ? null : n;
 }
 
-function isValid2gChannel(channel){
+function isValid2gChannel(channel) {
   return Number.isInteger(channel) && channel >= 1 && channel <= 14;
 }
 
-function getBasicChannelFix(){
+function getBasicChannelFix() {
   if (getUiMode() !== 'basic') return null;
   if (!lastCfg) return null;
   const band = resolveBandPref(document.getElementById('band_preference').value);
@@ -344,11 +345,11 @@ function getBasicChannelFix(){
   };
 }
 
-function updateBasicChannelBanner(){
+function updateBasicChannelBanner() {
   const banner = document.getElementById('basicChannelBanner');
   if (!banner) return;
   const fix = getBasicChannelFix();
-  if (!fix){
+  if (!fix) {
     banner.style.display = 'none';
     banner.textContent = '';
     return;
@@ -360,10 +361,10 @@ function updateBasicChannelBanner(){
 }
 
 const QOS_ALLOWED = new Set(['off', 'vr', 'balanced', 'ultra_low_latency', 'high_throughput']);
-const QOS_BASIC_VALUES = new Set(['ultra_low_latency', 'high_throughput', 'balanced', 'vr']);
+const QOS_BASIC_VALUES = new Set(['off', 'ultra_low_latency', 'high_throughput', 'balanced', 'vr']);
 let currentQosPreset = 'vr';
 
-function setQoS(value, opts = {}){
+function setQoS(value, opts = {}) {
   const select = document.getElementById('qos_preset');
   const radios = document.querySelectorAll('input[name="qos_basic"]');
   if (!select && !radios.length) return;
@@ -375,20 +376,20 @@ function setQoS(value, opts = {}){
 
   if (select && select.value !== next) select.value = next;
 
-  if (radios.length){
+  if (radios.length) {
     let matched = false;
-    for (const radio of radios){
+    for (const radio of radios) {
       const shouldCheck = (radio.value === next);
       radio.checked = shouldCheck;
       if (shouldCheck) matched = true;
     }
-    if (!matched){
-      if (mode === 'basic' && QOS_BASIC_VALUES.has('vr')){
-        for (const radio of radios){
+    if (!matched) {
+      if (mode === 'basic' && QOS_BASIC_VALUES.has('vr')) {
+        for (const radio of radios) {
           radio.checked = (radio.value === 'vr');
         }
-      }else{
-        for (const radio of radios){
+      } else {
+        for (const radio of radios) {
           radio.checked = false;
         }
       }
@@ -396,10 +397,10 @@ function setQoS(value, opts = {}){
   }
 }
 
-function updateBasicQosBanner(opts = {}){
+function updateBasicQosBanner(opts = {}) {
   const banner = document.getElementById('basicQosBanner');
   if (!banner) return;
-  if (!lastCfg || !Object.prototype.hasOwnProperty.call(lastCfg, 'qos_preset')){
+  if (!lastCfg || !Object.prototype.hasOwnProperty.call(lastCfg, 'qos_preset')) {
     banner.classList.remove('show');
     return;
   }
@@ -408,37 +409,37 @@ function updateBasicQosBanner(opts = {}){
     banner.classList.remove('show');
     return;
   }
-  
+
   const raw = (lastCfg && lastCfg.qos_preset !== undefined && lastCfg.qos_preset !== null)
     ? String(lastCfg.qos_preset).trim().toLowerCase()
     : '';
-  
+
   // Check if the saved config value is in basic values
   const savedValue = QOS_ALLOWED.has(raw) ? raw : 'off';
-  
+
   // Check if user has selected a basic value in the UI (currentQosPreset is updated by setQoS)
   const uiValue = currentQosPreset || 'vr';
-  
+
   // Only show banner if:
   // 1. Saved value is not in basic values (i.e., it's "off")
   // 2. AND user hasn't selected a basic value in the UI yet
   const needs = !QOS_BASIC_VALUES.has(savedValue) && !QOS_BASIC_VALUES.has(uiValue);
-  
-  if (needs){
+
+  if (needs) {
     // Update banner text based on saved value
     const displayValue = savedValue === 'off' ? 'Off' : savedValue;
     banner.textContent = `QoS is currently ${displayValue} in Advanced settings. Basic defaults to Stability. Click Save to apply.`;
     banner.classList.add('show');
     if (opts.markDirty !== false) markDirty();
-  }else{
+  } else {
     banner.classList.remove('show');
   }
 }
 
-function wireQosBasic(){
+function wireQosBasic() {
   const radios = document.querySelectorAll('input[name="qos_basic"]');
-  if (radios.length){
-    for (const radio of radios){
+  if (radios.length) {
+    for (const radio of radios) {
       radio.addEventListener('change', () => {
         setQoS(radio.value);
         markDirty();
@@ -447,7 +448,7 @@ function wireQosBasic(){
     }
   }
   const select = document.getElementById('qos_preset');
-  if (select){
+  if (select) {
     select.addEventListener('change', () => {
       setQoS(select.value);
       updateBasicQosBanner();
@@ -455,35 +456,52 @@ function wireQosBasic(){
   }
 }
 
-function applyUiMode(mode){
+function applyUiMode(mode) {
   document.body.dataset.uiMode = mode;
   const toggle = document.getElementById('uiModeToggle');
   const label = document.getElementById('uiModeLabel');
   if (toggle) toggle.checked = (mode === 'advanced');
   if (label) label.textContent = (mode === 'advanced') ? 'Advanced' : 'Basic';
+
+  // Update Adapter Label
+  const adapterLbl = document.querySelector('label[for="ap_adapter"]');
+  if (adapterLbl) {
+    adapterLbl.textContent = (mode === 'basic') ? 'USB WiFi Adapter' : 'AP adapter';
+  }
+
+  // Reload adapters to apply filtering and renaming rules
+  loadAdapters();
+
   applyBasicLayout(mode);
   updateBandOptions();
   enforceBandRules();
   applyFieldVisibility(mode);
-  setQoS(currentQosPreset, {mode});
+  setQoS(currentQosPreset, { mode });
   updateBasicInfoBanner();
   updateBasicChannelBanner();
   updateBasicQosBanner();
+
+  // Telemetry Visibility
+  const telCard = document.getElementById('cardTelemetry');
+  if (telCard) {
+    const show = (mode === 'advanced') || showTelemetryState;
+    telCard.style.display = show ? '' : 'none';
+  }
 }
 
-function filterConfigForMode(out){
+function filterConfigForMode(out) {
   if (getUiMode() !== 'basic') return out;
   return pickBasicFields(out);
 }
 
-function pickBasicFields(cfg){
+function pickBasicFields(cfg) {
   const out = {};
   if (!cfg) return out;
   const keys = BASIC_FIELD_KEYS_FALLBACK.includes('qos_preset')
     ? BASIC_FIELD_KEYS_FALLBACK
     : BASIC_FIELD_KEYS_FALLBACK.concat('qos_preset');
-  for (const key of keys){
-    if (Object.prototype.hasOwnProperty.call(cfg, key)){
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(cfg, key)) {
       const value = cfg[key];
       if (value !== undefined) out[key] = value;
     }
@@ -491,14 +509,14 @@ function pickBasicFields(cfg){
   return out;
 }
 
-function getFieldMode(key){
+function getFieldMode(key) {
   const mode = FIELD_VISIBILITY[key];
   return (mode === 'basic' || mode === 'advanced') ? mode : 'advanced';
 }
 
-function applyFieldVisibility(mode){
+function applyFieldVisibility(mode) {
   const fields = document.querySelectorAll('[data-field]');
-  for (const el of fields){
+  for (const el of fields) {
     const key = el.getAttribute('data-field') || '';
     const fieldMode = getFieldMode(key);
     const show = (mode === 'advanced') || (fieldMode === 'basic');
@@ -508,8 +526,8 @@ function applyFieldVisibility(mode){
   }
 }
 
-function wireDirtyTracking(){
-  for (const id of CFG_IDS){
+function wireDirtyTracking() {
+  for (const id of CFG_IDS) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.addEventListener('pointerdown', markDirty);
@@ -520,7 +538,7 @@ function wireDirtyTracking(){
   }
 
   const passEl = document.getElementById('wpa2_passphrase');
-  if (passEl){
+  if (passEl) {
     passEl.addEventListener('input', markPassphraseDirty);
     passEl.addEventListener('change', markPassphraseDirty);
   }
@@ -528,8 +546,8 @@ function wireDirtyTracking(){
   // Normalize country input to uppercase and 2 chars (or 00).
   const c = document.getElementById('country');
   c.addEventListener('input', (e) => {
-    const raw = (e.target.value || '').toString().toUpperCase().replace(/[^A-Z0-9]/g,'');
-    e.target.value = raw.slice(0,2);
+    const raw = (e.target.value || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    e.target.value = raw.slice(0, 2);
     syncCountrySelectFromInput();
   });
 
@@ -563,56 +581,56 @@ function wireDirtyTracking(){
   });
 }
 
-function cid(){ return 'ui-' + Date.now() + '-' + Math.random().toString(16).slice(2); }
+function cid() { return 'ui-' + Date.now() + '-' + Math.random().toString(16).slice(2); }
 
-function getToken(){
+function getToken() {
   const advEl = document.getElementById('apiToken');
   const basicEl = document.getElementById('apiTokenBasic');
   const adv = advEl ? (advEl.value || '').trim() : '';
   const basic = basicEl ? (basicEl.value || '').trim() : '';
   return basic || adv || ((STORE.getItem(LS.token) || '').trim());
 }
-function setToken(v){
+function setToken(v) {
   const val = (v || '').trim();
-  try{ STORE.setItem(LS.token, val); }catch{}
+  try { STORE.setItem(LS.token, val); } catch { }
   const advEl = document.getElementById('apiToken');
   const basicEl = document.getElementById('apiTokenBasic');
   if (advEl && advEl.value !== val) advEl.value = val;
   if (basicEl && basicEl.value !== val) basicEl.value = val;
 }
 
-function fmtTs(epoch){
+function fmtTs(epoch) {
   if (!epoch) return '--';
-  try{ return new Date(epoch * 1000).toLocaleString(); }catch{ return String(epoch); }
+  try { return new Date(epoch * 1000).toLocaleString(); } catch { return String(epoch); }
 }
 
-function fmtNum(v, digits=1){
+function fmtNum(v, digits = 1) {
   if (v === null || v === undefined || Number.isNaN(v)) return '--';
   const n = Number(v);
   if (Number.isNaN(n)) return '--';
   return n.toFixed(digits);
 }
 
-function fmtPct(v){
+function fmtPct(v) {
   return (v === null || v === undefined) ? '--' : fmtNum(v, 1);
 }
 
-function fmtDbm(v){
+function fmtDbm(v) {
   return (v === null || v === undefined) ? '--' : `${v} dBm`;
 }
 
-function fmtMbps(v){
+function fmtMbps(v) {
   return (v === null || v === undefined) ? '--' : fmtNum(v, 1);
 }
 
-function renderTelemetry(t){
+function renderTelemetry(t) {
   const sumEl = document.getElementById('telemetrySummary');
   const warnEl = document.getElementById('telemetryWarnings');
   const body = document.getElementById('telemetryBody');
   if (!body || !sumEl || !warnEl) return;
 
   body.innerHTML = '';
-  if (!t || t.enabled === false){
+  if (!t || t.enabled === false) {
     sumEl.textContent = 'Telemetry disabled.';
     warnEl.textContent = '';
     return;
@@ -629,7 +647,7 @@ function renderTelemetry(t){
   warnEl.textContent = warns ? `warnings: ${warns}` : '';
 
   const clients = t.clients || [];
-  if (!clients.length){
+  if (!clients.length) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
     td.colSpan = 7;
@@ -640,7 +658,7 @@ function renderTelemetry(t){
     return;
   }
 
-  for (const c of clients){
+  for (const c of clients) {
     const tr = document.createElement('tr');
     const id = (c.mac || '--') + (c.ip ? ` (${c.ip})` : '');
     const qualityScore = (c.quality_score !== null && c.quality_score !== undefined) ? fmtNum(c.quality_score, 0) : '--';
@@ -653,63 +671,204 @@ function renderTelemetry(t){
       fmtPct(c.retry_pct),
       fmtPct(c.loss_pct),
     ];
-    for (const text of cols){
+    for (const text of cols) {
       const td = document.createElement('td');
       td.textContent = text;
       tr.appendChild(td);
     }
     body.appendChild(tr);
   }
+
+  updateCharts(t);
 }
 
-async function api(path, opts={}){
-  const headers = Object.assign({}, opts.headers || {}, {'X-Correlation-Id': cid()});
+// Chart Globals
+let rssiChartRef = null;
+let rateChartRef = null;
+const MAX_POINTS = 60; // 60 data points (assuming 1s poll ~ 1 min history)
+
+function initCharts() {
+  if (typeof Chart === 'undefined') return;
+
+  const rssiCtx = document.getElementById('rssiChart');
+  const rateCtx = document.getElementById('rateChart');
+  if (!rssiCtx || !rateCtx) return;
+
+  Chart.defaults.color = '#rgba(255,255,255,0.7)';
+  Chart.defaults.borderColor = 'rgba(255,255,255,0.1)';
+  Chart.defaults.font.family = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+
+  const commonOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: {
+      legend: { display: true, labels: { color: 'rgba(255,255,255,0.7)' } },
+    },
+    scales: {
+      x: { display: false }, // Hide Time Axis for cleaner look
+    }
+  };
+
+  if (!rssiChartRef) {
+    rssiChartRef = new Chart(rssiCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Signal Strength (RSSI dBm)',
+          data: [],
+          borderColor: '#00d9ff',
+          backgroundColor: 'rgba(0, 217, 255, 0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0
+        }]
+      },
+      options: {
+        ...commonOptions,
+        scales: {
+          ...commonOptions.scales,
+          y: { suggestedMin: -90, suggestedMax: -30, grid: { color: 'rgba(255,255,255,0.1)' } }
+        }
+      }
+    });
+  }
+
+  if (!rateChartRef) {
+    rateChartRef = new Chart(rateCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'TX Bitrate (Mbps)',
+            data: [],
+            borderColor: '#00ff88',
+            backgroundColor: 'rgba(0, 255, 136, 0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0
+          },
+          {
+            label: 'RX Bitrate (Mbps)',
+            data: [],
+            borderColor: '#ff4444',
+            backgroundColor: 'rgba(255, 68, 68, 0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0
+          }
+        ]
+      },
+      options: {
+        ...commonOptions,
+        scales: {
+          ...commonOptions.scales,
+          y: { min: 0, grid: { color: 'rgba(255,255,255,0.1)' } }
+        }
+      }
+    });
+  }
+
+  // Wire Table Toggle
+  const btnTog = document.getElementById('btnToggleTable');
+  const tbl = document.getElementById('telemetryTable');
+  if (btnTog && tbl) {
+    btnTog.onclick = () => {
+      const isHidden = tbl.style.display === 'none';
+      tbl.style.display = isHidden ? '' : 'none';
+    };
+  }
+}
+
+function updateCharts(t) {
+  if (!rssiChartRef || !rateChartRef) {
+    // Try init if not ready (script might have just loaded)
+    initCharts();
+    if (!rssiChartRef) return;
+  }
+
+  const clients = t.clients || [];
+  // For simplicity, visualize the *first* client (or average? usually 1 client in VR).
+  // Let's visualize the "Best" client (highest signal) or just the first one.
+  // VR setup usually implies 1 main headset.
+  if (clients.length === 0) return;
+
+  const c = clients[0]; // Primary client
+  const now = new Date().toLocaleTimeString();
+
+  // RSSI
+  const rssiData = rssiChartRef.data;
+  rssiData.labels.push(now);
+  rssiData.datasets[0].data.push(c.signal_dbm || -100);
+  if (rssiData.labels.length > MAX_POINTS) {
+    rssiData.labels.shift();
+    rssiData.datasets[0].data.shift();
+  }
+  rssiChartRef.update('none'); // 'none' for performance
+
+  // Rates
+  const rateData = rateChartRef.data;
+  rateData.labels.push(now);
+  rateData.datasets[0].data.push(c.tx_bitrate_mbps || 0);
+  rateData.datasets[1].data.push(c.rx_bitrate_mbps || 0);
+  if (rateData.labels.length > MAX_POINTS) {
+    rateData.labels.shift();
+    rateData.datasets[0].data.shift();
+    rateData.datasets[1].data.shift();
+  }
+  rateChartRef.update('none');
+}
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {}, { 'X-Correlation-Id': cid() });
   const tok = getToken();
   if (tok) headers['X-Api-Token'] = tok;
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(BASE + path, Object.assign({}, opts, {headers}));
+  const res = await fetch(BASE + path, Object.assign({}, opts, { headers }));
   const text = await res.text();
   let json = null;
-  try{ json = JSON.parse(text); }catch{}
-  return {ok: res.ok, status: res.status, json, raw: text};
+  try { json = JSON.parse(text); } catch { }
+  return { ok: res.ok, status: res.status, json, raw: text };
 }
 
-function setMsg(text, kind=''){
+function setMsg(text, kind = '') {
   const els = [document.getElementById('msg'), document.getElementById('msgBasic')];
-  for (const el of els){
+  for (const el of els) {
     if (!el) continue;
     el.textContent = text || '';
     el.className = 'small mt-10' + (kind ? (' ' + kind) : '');
   }
 }
 
-async function startHotspot(overrides, label){
+async function startHotspot(overrides, label) {
   const prefix = label ? `Starting (${label})...` : 'Starting...';
   setMsg(prefix);
-  const opts = {method:'POST'};
-  if (overrides) opts.body = JSON.stringify({overrides});
+  const opts = { method: 'POST' };
+  if (overrides) opts.body = JSON.stringify({ overrides });
   const r = await api('/v1/start', opts);
   setMsg(r.json ? ('Start: ' + r.json.result_code) : ('Start failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
   await refresh();
 }
 
-async function copyFieldValue(fieldId, label){
+async function copyFieldValue(fieldId, label) {
   const el = document.getElementById(fieldId);
   if (!el) return;
   const value = (el.value || '').toString().trim();
-  if (!value){
+  if (!value) {
     setMsg(`${label} is empty`, 'dangerText');
     return;
   }
-  if (navigator.clipboard && window.isSecureContext){
-    try{
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
       await navigator.clipboard.writeText(value);
       setMsg(`${label} copied`);
       return;
-    }catch{}
+    } catch { }
   }
-  try{
+  try {
     const temp = document.createElement('textarea');
     temp.value = value;
     temp.style.position = 'fixed';
@@ -720,12 +879,12 @@ async function copyFieldValue(fieldId, label){
     document.execCommand('copy');
     document.body.removeChild(temp);
     setMsg(`${label} copied`);
-  }catch{
+  } catch {
     setMsg(`Failed to copy ${label}`, 'dangerText');
   }
 }
 
-function setPill(state){
+function setPill(state) {
   const running = !!state.running;
   const phase = state.phase || '--';
   const adapter = state.adapter || '--';
@@ -734,7 +893,7 @@ function setPill(state){
 
   // Create clean, readable status text
   const statusParts = [];
-  
+
   if (running) {
     statusParts.push('Running');
   } else if (phase === 'error') {
@@ -742,19 +901,19 @@ function setPill(state){
   } else {
     statusParts.push('Stopped');
   }
-  
+
   if (phase && phase !== '--' && phase !== 'stopped' && phase !== 'error' && !(phase === 'stopped' && !running)) {
     statusParts.push(phase.charAt(0).toUpperCase() + phase.slice(1));
   }
-  
+
   if (adapter && adapter !== '--') {
     statusParts.push(adapter);
   }
-  
+
   if (band && band !== '--') {
     statusParts.push(band);
   }
-  
+
   if (mode && mode !== '--' && mode !== 'nat') {
     statusParts.push(mode);
   }
@@ -763,7 +922,7 @@ function setPill(state){
 
   const apply = (pill, txt) => {
     if (!pill || !txt) return;
-    pill.classList.remove('ok','err');
+    pill.classList.remove('ok', 'err');
     if (running) pill.classList.add('ok');
     else if (phase === 'error') pill.classList.add('err');
     pill.style.display = 'inline-flex';
@@ -773,13 +932,13 @@ function setPill(state){
   apply(document.getElementById('basicPill'), document.getElementById('basicPillTxt'));
 }
 
-function truncateText(text, maxLen){
+function truncateText(text, maxLen) {
   const raw = (text || '').toString();
   if (raw.length <= maxLen) return raw;
   return raw.slice(0, Math.max(0, maxLen - 3)) + '...';
 }
 
-function updateBasicStatusMeta(state){
+function updateBasicStatusMeta(state) {
   const adapter = state.adapter || '--';
   const band = state.band || '--';
   const metaEl = document.getElementById('basicStatusAdapterBand');
@@ -788,42 +947,48 @@ function updateBasicStatusMeta(state){
   const errEl = document.getElementById('basicLastError');
   if (!errEl) return;
   const err = state.last_error || (state.engine && state.engine.last_error) || '';
-  if (err){
+  if (err) {
     errEl.textContent = `Last error: ${truncateText(err, 140)}`;
     errEl.style.display = '';
-  }else{
+  } else {
     errEl.textContent = '';
     errEl.style.display = 'none';
   }
 }
 
-function syncCountrySelectFromInput(){
+function syncCountrySelectFromInput() {
   const c = (document.getElementById('country').value || '').toString().toUpperCase();
   const sel = document.getElementById('country_sel');
   let found = false;
-  for (const opt of sel.options){
-    if (opt.value === c){ sel.value = c; found = true; break; }
+  for (const opt of sel.options) {
+    if (opt.value === c) { sel.value = c; found = true; break; }
   }
   if (!found) sel.value = '__custom';
 }
 
-function enforceBandRules(){
-  const rawBand = document.getElementById('band_preference').value;
-  const band = resolveBandPref(rawBand);
+function enforceBandRules() {
+  const sel = document.getElementById('band_preference');
+  const g6Box = document.getElementById('sixgBox');
+  const g5Box = document.getElementById('fivegBox');
   const secEl = document.getElementById('ap_security');
   const secHint = document.getElementById('secHint');
   const bandHint = document.getElementById('bandHint');
-  const sixgBox = document.getElementById('sixgBox');
-  if (sixgBox) sixgBox.dataset.bandVisible = (band === '6ghz') ? '1' : '0';
 
-  if (band === '6ghz'){
-    // 6 GHz requires WPA3-SAE; lock it to prevent confusing start errors.
+  const band = resolveBandPref(sel.value);
+  const is6 = (band === '6ghz');
+  const is5 = (band === '5ghz');
+
+  if (g6Box) g6Box.style.display = is6 ? 'block' : 'none';
+  if (g5Box) g5Box.style.display = is5 ? 'block' : 'none';
+
+  // WPA3 is mandatory for 6 GHz (Wi-Fi 6E), but optional for others.
+  if (is6) {
     secEl.value = 'wpa3_sae';
     secEl.disabled = true;
     sixgBox.style.display = '';
     bandHint.innerHTML = "<strong>6 GHz:</strong> requires a 6 GHz-capable adapter and a correct Country. WPA3-SAE is enforced.";
     secHint.textContent = "Locked: 6 GHz requires WPA3 (SAE).";
-  }else{
+  } else {
     secEl.disabled = false;
     sixgBox.style.display = 'none';
     if (band === '5ghz') bandHint.innerHTML = "<strong>5 GHz:</strong> best default for VR streaming on most adapters.";
@@ -834,7 +999,7 @@ function enforceBandRules(){
   updateBasicChannelBanner();
 }
 
-function capsLabel(a){
+function capsLabel(a) {
   const parts = [];
   if (a.supports_6ghz) parts.push('6G');
   if (a.supports_5ghz) parts.push('5G');
@@ -842,7 +1007,7 @@ function capsLabel(a){
   return parts.length ? parts.join('/') : '--';
 }
 
-function adapterSupportsBand(a, band){
+function adapterSupportsBand(a, band) {
   if (!a) return false;
   if (band === '6ghz') return !!a.supports_6ghz;
   if (band === '5ghz') return !!a.supports_5ghz;
@@ -850,7 +1015,7 @@ function adapterSupportsBand(a, band){
   return true;
 }
 
-function maybeAutoPickAdapterForBand(){
+function maybeAutoPickAdapterForBand() {
   const rawBand = document.getElementById('band_preference').value;
   const band = resolveBandPref(rawBand);
   const sel = document.getElementById('ap_adapter');
@@ -863,14 +1028,14 @@ function maybeAutoPickAdapterForBand(){
   const cur = sel.value;
   const curA = byIf.get(cur);
 
-  if (band === '6ghz'){
+  if (band === '6ghz') {
     const any6 = lastAdapters.adapters.filter(a => a.supports_ap && a.supports_6ghz);
-    if (!any6.length){
+    if (!any6.length) {
       hint.innerHTML = "<span class='pillWarn'>No 6 GHz-capable AP adapter detected</span>";
       return;
     }
     hint.textContent = "6 GHz requires an adapter that supports 6 GHz in AP mode.";
-    if (!curA || !adapterSupportsBand(curA, '6ghz')){
+    if (!curA || !adapterSupportsBand(curA, '6ghz')) {
       // Prefer recommended if it also supports 6 GHz, else first 6G adapter.
       const rec = lastAdapters.recommended;
       const recA = byIf.get(rec);
@@ -878,12 +1043,12 @@ function maybeAutoPickAdapterForBand(){
       sel.value = pick;
       setDirty(true);
     }
-  }else{
+  } else {
     hint.textContent = "";
   }
 }
 
-function applyVrProfile(profileName = 'balanced'){
+function applyVrProfile(profileName = 'balanced') {
   const profiles = {
     'ultra_low_latency': {
       band_preference: '5ghz',
@@ -970,9 +1135,9 @@ function applyVrProfile(profileName = 'balanced'){
       short_guard_interval: false,
     }
   };
-  
+
   const profile = profiles[profileName] || profiles['balanced'];
-  
+
   document.getElementById('band_preference').value = profile.band_preference;
   document.getElementById('ap_security').value = profile.ap_security;
   document.getElementById('optimized_no_virt').checked = profile.optimized_no_virt;
@@ -1014,7 +1179,7 @@ function applyVrProfile(profileName = 'balanced'){
   setDirty(true);
 }
 
-function getForm(){
+function getForm() {
   const out = {
     ssid: document.getElementById('ssid').value,
     band_preference: resolveBandPref(document.getElementById('band_preference').value),
@@ -1055,16 +1220,23 @@ function getForm(){
     firewalld_zone: (lastCfg && lastCfg.firewalld_zone) ? lastCfg.firewalld_zone : 'trusted',
   };
 
+  // Optional 5 GHz channel
+  const ch5 = (document.getElementById('channel_5g').value || '').trim();
+  if (ch5) {
+    const n = parseInt(ch5, 10);
+    if (!Number.isNaN(n)) out.channel_5g = n;
+  }
+
   // Optional 6 GHz channel
   const ch6 = (document.getElementById('channel_6g').value || '').trim();
-  if (ch6){
+  if (ch6) {
     const n = parseInt(ch6, 10);
     if (!Number.isNaN(n)) out.channel_6g = n;
   }
 
   // Optional TX power
   const txPower = (document.getElementById('tx_power').value || '').trim();
-  if (txPower){
+  if (txPower) {
     const n = parseInt(txPower, 10);
     if (!Number.isNaN(n)) out.tx_power = n;
   }
@@ -1095,9 +1267,9 @@ function getForm(){
   return filterConfigForMode(out);
 }
 
-function applyConfig(cfg){
+function applyConfig(cfg) {
   lastCfg = cfg || {};
-  updateBasicQosBanner({markDirty: false});
+  updateBasicQosBanner({ markDirty: false });
 
   // Do not overwrite unsaved edits from polling.
   if (cfgDirty && !cfgJustSaved) return;
@@ -1180,8 +1352,9 @@ function applyConfig(cfg){
   document.getElementById('debug').checked = !!cfg.debug;
 
   document.getElementById('channel_6g').value = (cfg.channel_6g ?? '');
+  document.getElementById('channel_5g').value = (cfg.channel_5g ?? '');
 
-  if (cfg.ap_adapter){
+  if (cfg.ap_adapter) {
     document.getElementById('ap_adapter').value = cfg.ap_adapter;
   }
 
@@ -1197,7 +1370,7 @@ function applyConfig(cfg){
   updateBasicQosBanner();
 }
 
-async function loadAdapters(){
+async function loadAdapters() {
   const r = await api('/v1/adapters');
   const el = document.getElementById('ap_adapter');
   if (!r.ok || !r.json) return;
@@ -1213,29 +1386,43 @@ async function loadAdapters(){
 
   el.innerHTML = '';
   const mode = getUiMode();
-  for (const a of list){
-    // Hide wlan0 in Basic Mode (known AP mode issues, prefer wlan1+)
-    if (mode === 'basic' && a.ifname === 'wlan0') {
-      continue;
+  let basicUsbCount = 0;
+
+  for (const a of list) {
+    // Basic Mode: Only show USB adapters (hide internal/PCI)
+    // Advanced Mode: Show all (internal + USB)
+    if (mode === 'basic') {
+      // If we detected bus info, enforce USB-only.
+      // If bus detection failed (unknown), we might default to hiding it to be safe, 
+      // or showing it. Given the request "only surface USB", we hide unless confirmed USB.
+      if (a.bus !== 'usb') {
+        continue;
+      }
     }
 
     const opt = document.createElement('option');
     opt.value = a.ifname;
 
-    const ap = a.supports_ap ? 'AP' : 'no-AP';
-    const caps = capsLabel(a);
-    const reg = a.regdom && a.regdom.country ? a.regdom.country : '--';
-    const star = (a.ifname === rec) ? '* ' : '';
+    if (mode === 'basic') {
+      basicUsbCount++;
+      const recStr = (a.ifname === rec) ? ' (Recommended)' : '';
+      opt.textContent = `USB WiFi ${basicUsbCount}${recStr}`;
+    } else {
+      const ap = a.supports_ap ? 'AP' : 'no-AP';
+      const caps = capsLabel(a);
+      const reg = a.regdom && a.regdom.country ? a.regdom.country : '--';
+      const star = (a.ifname === rec) ? '* ' : '';
+      opt.textContent = `${star}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
+    }
 
-    opt.textContent = `${star}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
     el.appendChild(opt);
   }
   el.dataset.recommended = rec;
 
   const trySet = (v) => {
     if (!v) return false;
-    for (const opt of el.options){
-      if (opt.value === v){ el.value = v; return true; }
+    for (const opt of el.options) {
+      if (opt.value === v) { el.value = v; return true; }
     }
     return false;
   };
@@ -1250,20 +1437,20 @@ async function loadAdapters(){
   maybeAutoPickAdapterForBand();
 }
 
-async function refresh(){
+async function refresh() {
   const privacy = document.getElementById('privacyMode').checked;
   const stPath = privacy ? '/v1/status' : '/v1/status?include_logs=1';
 
   const [st, cfg] = await Promise.all([api(stPath), api('/v1/config')]);
 
-  if (cfg.ok && cfg.json){
+  if (cfg.ok && cfg.json) {
     applyConfig(cfg.json.data || {});
   }
 
-  if (!st.ok || !st.json){
-    if (st.status === 401){
+  if (!st.ok || !st.json) {
+    if (st.status === 401) {
       setMsg('Unauthorized: paste API token and try again.', 'dangerText');
-    }else{
+    } else {
       setMsg(st.json ? (st.json.result_code || 'error') : `Failed: HTTP ${st.status}`, 'dangerText');
     }
     return;
@@ -1288,7 +1475,7 @@ async function refresh(){
 }
 
 let refreshTimer = null;
-function applyAutoRefresh(){
+function applyAutoRefresh() {
   const enabled = document.getElementById('autoRefresh').checked;
   const every = parseInt(document.getElementById('refreshEvery').value || '2000', 10);
 
@@ -1306,7 +1493,7 @@ function applyAutoRefresh(){
   if (basicEvery) basicEvery.value = String(every);
 }
 
-function applyPrivacyMode(){
+function applyPrivacyMode() {
   const adv = document.getElementById('privacyMode');
   const basic = document.getElementById('privacyModeBasic');
   const v = adv ? adv.checked : (basic ? basic.checked : true);
@@ -1331,7 +1518,7 @@ document.getElementById('btnUseRecommended').addEventListener('click', async () 
   const sel = document.getElementById('ap_adapter');
   if (!sel.dataset.recommended) await loadAdapters();
   const rec = sel.dataset.recommended || '';
-  if (rec){
+  if (rec) {
     sel.value = rec;
     setDirty(true);
     updateBandOptions();
@@ -1345,13 +1532,13 @@ if (btnRevealPass) btnRevealPass.addEventListener('click', async () => {
   if (!passEl) return;
   btnRevealPass.disabled = true;
   setMsg('Revealing passphrase...');
-  const r = await api('/v1/config/reveal_passphrase', {method:'POST', body: JSON.stringify({confirm: true})});
-  if (r.ok && r.json && r.json.data && typeof r.json.data.wpa2_passphrase === 'string'){
+  const r = await api('/v1/config/reveal_passphrase', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+  if (r.ok && r.json && r.json.data && typeof r.json.data.wpa2_passphrase === 'string') {
     passEl.value = r.json.data.wpa2_passphrase;
     passEl.type = 'text';
     passphraseDirty = false;
     setMsg('Passphrase revealed');
-  }else{
+  } else {
     const code = (r.json && r.json.result_code) ? r.json.result_code : `HTTP ${r.status}`;
     setMsg(`Reveal failed: ${code}`, 'dangerText');
   }
@@ -1389,6 +1576,15 @@ if (privacyBasic) privacyBasic.addEventListener('change', () => {
   refresh();
 });
 
+let showTelemetryState = false;
+const showTelBasic = document.getElementById('showTelemetryBasic');
+if (showTelBasic) showTelBasic.addEventListener('change', () => {
+  showTelemetryState = showTelBasic.checked;
+  STORE.setItem(LS.showTelemetry, showTelemetryState ? '1' : '0');
+  const telCard = document.getElementById('cardTelemetry');
+  if (telCard) telCard.style.display = showTelemetryState ? '' : 'none';
+});
+
 document.getElementById('apiToken').addEventListener('input', (e) => {
   setToken(e.target.value.trim());
 });
@@ -1399,7 +1595,7 @@ document.getElementById('apiToken').addEventListener('blur', (e) => {
   setToken(e.target.value.trim());
 });
 const apiTokenBasic = document.getElementById('apiTokenBasic');
-if (apiTokenBasic){
+if (apiTokenBasic) {
   apiTokenBasic.addEventListener('input', (e) => {
     setToken(e.target.value.trim());
   });
@@ -1428,7 +1624,10 @@ if (btnSaveToken) btnSaveToken.addEventListener('click', () => {
   const tokenField = document.getElementById('apiToken');
   if (tokenField) {
     setToken(tokenField.value.trim());
-    setMsg('API token saved to browser storage');
+    setMsg('API token saved. Refreshing page...');
+    setTimeout(() => {
+      window.location.reload();
+    }, 500);
   }
 });
 
@@ -1445,13 +1644,16 @@ if (refreshEveryBasic) refreshEveryBasic.addEventListener('change', () => {
   applyAutoRefresh();
 });
 
-function init(){
+function init() {
   const tok = STORE.getItem(LS.token) || '';
   if (tok) setToken(tok);
 
   const privacy = (STORE.getItem(LS.privacy) || '1') === '1';
   document.getElementById('privacyMode').checked = privacy;
   applyPrivacyMode();
+
+  showTelemetryState = (STORE.getItem(LS.showTelemetry) || '0') === '1';
+  if (showTelBasic) showTelBasic.checked = showTelemetryState;
 
   const auto = (STORE.getItem(LS.auto) || '0') === '1';
   document.getElementById('autoRefresh').checked = auto;
@@ -1462,6 +1664,8 @@ function init(){
   const mode = loadUiMode();
   applyUiMode(mode);
 
+  initCharts();
+
   // Wire up button listeners
   document.getElementById('btnStart').addEventListener('click', async () => {
     await startHotspot();
@@ -1469,113 +1673,113 @@ function init(){
 
   document.getElementById('btnStop').addEventListener('click', async () => {
     setMsg('Stopping...');
-    const r = await api('/v1/stop', {method:'POST'});
+    const r = await api('/v1/stop', { method: 'POST' });
     setMsg(r.json ? ('Stop: ' + r.json.result_code) : ('Stop failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
     await refresh();
   });
 
   document.getElementById('btnRepair').addEventListener('click', async () => {
     setMsg('Repairing...');
-    const r = await api('/v1/repair', {method:'POST'});
+    const r = await api('/v1/repair', { method: 'POST' });
     setMsg(r.json ? ('Repair: ' + r.json.result_code) : ('Repair failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
     await refresh();
   });
 
   document.getElementById('btnRestart').addEventListener('click', async () => {
     setMsg('Restarting...');
-    const r = await api('/v1/restart', {method:'POST'});
+    const r = await api('/v1/restart', { method: 'POST' });
     setMsg(r.json ? ('Restart: ' + r.json.result_code) : ('Restart failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
     await refresh();
   });
   const btnStartBasic = document.getElementById('btnStartBasic');
   if (btnStartBasic) btnStartBasic.addEventListener('click', async () => {
-  const fix = getBasicChannelFix();
-  if (fix) {
-    await startHotspot(fix.overrides, 'auto-fix 2.4 GHz channel');
-  } else {
-    await startHotspot();
+    const fix = getBasicChannelFix();
+    if (fix) {
+      await startHotspot(fix.overrides, 'auto-fix 2.4 GHz channel');
+    } else {
+      await startHotspot();
+    }
+  });
+  const btnStopBasic = document.getElementById('btnStopBasic');
+  if (btnStopBasic) btnStopBasic.addEventListener('click', () => {
+    document.getElementById('btnStop').click();
+  });
+  const btnRepairBasic = document.getElementById('btnRepairBasic');
+  if (btnRepairBasic) btnRepairBasic.addEventListener('click', () => {
+    document.getElementById('btnRepair').click();
+  });
+
+  async function saveConfigOnly() {
+    const cfg = getForm();
+    setMsg('Saving config...');
+    const r = await api('/v1/config', { method: 'POST', body: JSON.stringify(cfg) });
+    setMsg(r.json ? ('Config: ' + r.json.result_code) : ('Config save failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
+
+    if (r.ok) {
+      setDirty(false);
+      cfgJustSaved = true;
+      const passEl = document.getElementById('wpa2_passphrase');
+      if (passEl) {
+        passEl.value = '';
+        passEl.type = 'password';
+      }
+      passphraseDirty = false;
+    }
+    await refresh();
+    return r;
   }
-});
-const btnStopBasic = document.getElementById('btnStopBasic');
-if (btnStopBasic) btnStopBasic.addEventListener('click', () => {
-  document.getElementById('btnStop').click();
-});
-const btnRepairBasic = document.getElementById('btnRepairBasic');
-if (btnRepairBasic) btnRepairBasic.addEventListener('click', () => {
-  document.getElementById('btnRepair').click();
-});
 
-async function saveConfigOnly() {
-  const cfg = getForm();
-  setMsg('Saving config...');
-  const r = await api('/v1/config', {method:'POST', body: JSON.stringify(cfg)});
-  setMsg(r.json ? ('Config: ' + r.json.result_code) : ('Config save failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
+  document.getElementById('btnSaveConfig').addEventListener('click', async () => {
+    await saveConfigOnly();
+  });
+  const btnSaveConfigBasic = document.getElementById('btnSaveConfigBasic');
+  if (btnSaveConfigBasic) btnSaveConfigBasic.addEventListener('click', () => {
+    document.getElementById('btnSaveConfig').click();
+  });
 
-  if (r.ok){
+  document.getElementById('btnApplyVrProfile').addEventListener('click', () => {
+    applyVrProfile('balanced');
+    setMsg('Balanced VR profile applied (not saved).');
+  });
+  document.getElementById('btnApplyVrProfileUltra').addEventListener('click', () => {
+    applyVrProfile('ultra_low_latency');
+    setMsg('Ultra Low Latency VR profile applied (not saved).');
+  });
+  document.getElementById('btnApplyVrProfileHigh').addEventListener('click', () => {
+    applyVrProfile('high_throughput');
+    setMsg('High Throughput VR profile applied (not saved).');
+  });
+  document.getElementById('btnApplyVrProfileStable').addEventListener('click', () => {
+    applyVrProfile('stability');
+    setMsg('Stability VR profile applied (not saved).');
+  });
+
+  document.getElementById('btnSaveRestart').addEventListener('click', async () => {
+    const cfg = getForm();
+    setMsg('Saving & restarting...');
+    const r1 = await api('/v1/config', { method: 'POST', body: JSON.stringify(cfg) });
+    if (!r1.ok) {
+      setMsg(r1.json ? ('Config: ' + r1.json.result_code) : ('Config save failed: HTTP ' + r1.status), 'dangerText');
+      return;
+    }
+
     setDirty(false);
     cfgJustSaved = true;
     const passEl = document.getElementById('wpa2_passphrase');
-    if (passEl){
+    if (passEl) {
       passEl.value = '';
       passEl.type = 'password';
     }
     passphraseDirty = false;
-  }
-  await refresh();
-  return r;
-}
 
-document.getElementById('btnSaveConfig').addEventListener('click', async () => {
-  await saveConfigOnly();
-});
-const btnSaveConfigBasic = document.getElementById('btnSaveConfigBasic');
-if (btnSaveConfigBasic) btnSaveConfigBasic.addEventListener('click', () => {
-  document.getElementById('btnSaveConfig').click();
-});
-
-document.getElementById('btnApplyVrProfile').addEventListener('click', () => {
-  applyVrProfile('balanced');
-  setMsg('Balanced VR profile applied (not saved).');
-});
-document.getElementById('btnApplyVrProfileUltra').addEventListener('click', () => {
-  applyVrProfile('ultra_low_latency');
-  setMsg('Ultra Low Latency VR profile applied (not saved).');
-});
-document.getElementById('btnApplyVrProfileHigh').addEventListener('click', () => {
-  applyVrProfile('high_throughput');
-  setMsg('High Throughput VR profile applied (not saved).');
-});
-document.getElementById('btnApplyVrProfileStable').addEventListener('click', () => {
-  applyVrProfile('stability');
-  setMsg('Stability VR profile applied (not saved).');
-});
-
-document.getElementById('btnSaveRestart').addEventListener('click', async () => {
-  const cfg = getForm();
-  setMsg('Saving & restarting...');
-  const r1 = await api('/v1/config', {method:'POST', body: JSON.stringify(cfg)});
-  if (!r1.ok){
-    setMsg(r1.json ? ('Config: ' + r1.json.result_code) : ('Config save failed: HTTP ' + r1.status), 'dangerText');
-    return;
-  }
-
-  setDirty(false);
-  cfgJustSaved = true;
-  const passEl = document.getElementById('wpa2_passphrase');
-  if (passEl){
-    passEl.value = '';
-    passEl.type = 'password';
-  }
-  passphraseDirty = false;
-
-  const r2 = await api('/v1/restart', {method:'POST'});
-  setMsg(r2.json ? ('Save & Restart: ' + r2.json.result_code) : ('Restart failed: HTTP ' + r2.status), r2.ok ? '' : 'dangerText');
-  await refresh();
-});
-const btnSaveRestartBasic = document.getElementById('btnSaveRestartBasic');
-if (btnSaveRestartBasic) btnSaveRestartBasic.addEventListener('click', () => {
-  document.getElementById('btnSaveRestart').click();
-});
+    const r2 = await api('/v1/restart', { method: 'POST' });
+    setMsg(r2.json ? ('Save & Restart: ' + r2.json.result_code) : ('Restart failed: HTTP ' + r2.status), r2.ok ? '' : 'dangerText');
+    await refresh();
+  });
+  const btnSaveRestartBasic = document.getElementById('btnSaveRestartBasic');
+  if (btnSaveRestartBasic) btnSaveRestartBasic.addEventListener('click', () => {
+    document.getElementById('btnSaveRestart').click();
+  });
   const modeToggle = document.getElementById('uiModeToggle');
   if (modeToggle) {
     modeToggle.addEventListener('change', () => {
@@ -1586,13 +1790,110 @@ if (btnSaveRestartBasic) btnSaveRestartBasic.addEventListener('click', () => {
   wireDirtyTracking();
   wireQosBasic();
   enforceBandRules();
+  wireQr();
 
   // Load adapters first so the adapter select is populated before applying config.
   loadAdapters().then(refresh).then(applyAutoRefresh);
 }
 
-if (document.readyState === 'loading'){
+function wireQr() {
+  const modal = document.getElementById('qrModal');
+  const place = document.getElementById('qrPlaceholder');
+  const rawDiv = document.getElementById('qrSsidRaw');
+  if (!modal || !place) return;
+
+  function showQr() {
+    // Gather SSID and Passphrase
+    let ssid = document.getElementById('ssid').value.trim();
+    let pass = document.getElementById('wpa2_passphrase').value;
+
+    // If empty in UI, try fallback to saved config
+    if (!ssid && lastCfg && lastCfg.ssid) ssid = lastCfg.ssid;
+
+    // If passphrase is empty/saved, we might not know it if it's redacted.
+    // However, if the user hasn't typed a new one, we can't show it unless we implement a "reveal" API (which we don't have for security).
+    // So we only support showing QR if the user has typed it OR we make an assumption.
+    // Actually, widespread practice is: we can't show QR for a saved password if we don't have it in cleartext.
+    // But `v1/config` returns `wpa2_passphrase_set=True` but not the value.
+    // Wait, `api.py` says `_SENSITIVE_CONFIG_KEYS = {"wpa2_passphrase"}` and `v1/config` filters it?
+    // Let's check api.py... `_config_view(..., include_secrets=False)`.
+    // So the UI usually doesn't have the password.
+    // This means QR only works if the user *just* typed the password or if they are setting it up.
+    // *OR* we can tell the user "Enter passphrase to generate QR".
+
+    // Correction: existing logic `btnCopyPass` implies we might have it?
+    // No, `btnCopyPass` copies the value from the input field. If it's empty/placeholder, it fails.
+
+    // So, logic:
+    // 1. Get SSID (UI or Saved)
+    // 2. Get Pass (UI)
+    // 3. If Pass is empty, check if we have it in `lastCfg`? No, we won't.
+    // 4. Alert user if missing.
+
+    if (!ssid) {
+      setMsg('SSID is missing', 'dangerText');
+      return;
+    }
+
+    // For WPA2/3, we need a password.
+    // If the input is empty, and we have a saved password, we are stuck. 
+    // We'll warn the user.
+    if (!pass) {
+      setMsg('Enter passphrase to generate QR code', 'dangerText');
+      document.getElementById('wpa2_passphrase').focus();
+      return;
+    }
+
+    // Auth Type: WPA (works for WPA2/3 usually) or WPA2-EAP etc.
+    // Schema: WIFI:S:MySSID;T:WPA;P:MyPass;;
+
+    // Escape special chars in SSID/Pass?
+    // Standard: 
+    // escape: \ -> \\, ; -> \;, , -> \,, : -> \:
+    const escape = (s) => s.replace(/([\\;,:])/g, '\\$1');
+    const wifiStr = `WIFI:S:${escape(ssid)};T:WPA;P:${escape(pass)};;`;
+
+    place.innerHTML = '';
+    rawDiv.textContent = `SSID: ${ssid}`;
+
+    try {
+      if (typeof QRCode === 'undefined') {
+        place.textContent = 'Error: QRCode library not loaded.';
+      } else {
+        new QRCode(place, {
+          text: wifiStr,
+          width: 256,
+          height: 256,
+          colorDark: "#000000",
+          colorLight: "#ffffff",
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      }
+      modal.style.display = 'flex';
+    } catch (e) {
+      place.textContent = 'Error generating QR code.';
+      console.error(e);
+      modal.style.display = 'flex';
+    }
+  }
+
+  const btns = [document.getElementById('btnShowQr'), document.getElementById('btnShowQrBasic')];
+  for (const b of btns) {
+    if (b) b.addEventListener('click', showQr);
+  }
+
+  document.getElementById('btnCloseQr').addEventListener('click', () => {
+    modal.style.display = 'none';
+  });
+
+  // Close on outside click
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.style.display = 'none';
+  });
+}
+
+if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
-}else{
+} else {
   init();
 }
