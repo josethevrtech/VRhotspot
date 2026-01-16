@@ -75,7 +75,11 @@
       gap: 12px;
     }
 
+<<<<<<< HEAD
+    .row.row-flex-end>* {
+=======
     .row.row-flex-end > * {
+>>>>>>> origin/main
       width: 100%;
     }
 
@@ -84,7 +88,11 @@
       width: 100%;
     }
 
+<<<<<<< HEAD
+    .row.row-flex-end>.token-field {
+=======
     .row.row-flex-end > .token-field {
+>>>>>>> origin/main
       min-width: 100% !important;
     }
 
@@ -99,7 +107,11 @@
       width: 100%;
     }
 
+<<<<<<< HEAD
+    .row.row-wrap>.token-field {
+=======
     .row.row-wrap > .token-field {
+>>>>>>> origin/main
       min-width: 100% !important;
       max-width: 100% !important;
     }
@@ -882,6 +894,10 @@
     word-break: break-word;
     max-width: 100%;
     box-sizing: border-box;
+  }
+
+  .hint:empty {
+    display: none;
   }
 
   .hint strong {
