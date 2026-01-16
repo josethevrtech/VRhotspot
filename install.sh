@@ -125,7 +125,7 @@ install_dependencies() {
             apt-get install -y python3 python3-pip python3-venv iw iproute2 iptables
             ;;
         dnf)
-            dnf install -y python3 python3-pip python3-venv iw iproute2 iptables
+            dnf install -y python3 python3-pip iw iproute iptables
             ;;
         rpm-ostree)
             # Check for missing dependencies to avoid unnecessary layering
@@ -186,6 +186,22 @@ configure_install() {
     if [ "$ENABLE_REMOTE" == "y" ]; then
         BIND_IP="0.0.0.0"
         print_info "Remote access enabled. Binding to $BIND_IP."
+        
+        if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+            print_info "Opening port 8732/tcp in firewall..."
+            # Open in default zone
+            firewall-cmd --permanent --add-port=8732/tcp &>/dev/null || true
+            # Explicitly try public and FedoraWorkstation zones which are common on Fedora
+            firewall-cmd --permanent --zone=public --add-port=8732/tcp &>/dev/null || true
+            firewall-cmd --permanent --zone=FedoraWorkstation --add-port=8732/tcp &>/dev/null || true
+            
+            firewall-cmd --reload &>/dev/null || print_warning "Failed to reload firewall."
+        elif command -v ufw &>/dev/null; then
+             print_info "Opening port 8732/tcp in UFW..."
+             ufw allow 8732/tcp &>/dev/null || print_warning "Failed to add UFW rule."
+        else
+            print_warning "No supported firewall manager found (firewalld/ufw). Please manually open TCP port 8732."
+        fi
     else
         print_info "Remote access disabled. Binding to $BIND_IP."
     fi
@@ -196,7 +212,7 @@ configure_install() {
     mkdir -p "$CONFIG_DIR"
     {
         echo "VR_HOTSPOTD_API_TOKEN=$API_TOKEN"
-        echo "VR_HOTSPOTD_BIND_IP=$BIND_IP"
+        echo "VR_HOTSPOTD_HOST=$BIND_IP"
         echo "VR_HOTSPOTD_PORT=8732"
     } > "$ENV_FILE"
     print_success "Configuration saved to $ENV_FILE."

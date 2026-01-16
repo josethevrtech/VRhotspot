@@ -87,6 +87,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     
     # VR Profile presets (applied via UI, not stored here)
     # "ultra_low_latency", "high_throughput", "balanced", "stability"
+
+    # Autostart behavior (persisted)
+    "autostart": False,
 }
 
 
@@ -187,6 +190,8 @@ def _apply_migrations(cfg: Dict[str, Any]) -> Dict[str, Any]:
         out["memory_tuning"] = DEFAULT_CONFIG["memory_tuning"]
     if "io_scheduler_optimize" not in out:
         out["io_scheduler_optimize"] = DEFAULT_CONFIG["io_scheduler_optimize"]
+    if "autostart" not in out:
+        out["autostart"] = DEFAULT_CONFIG["autostart"]
     return out
 
 

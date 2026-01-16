@@ -77,6 +77,7 @@ _START_OVERRIDE_KEYS = {
     # NEW:
     "ap_security",   # "wpa2" (default) or "wpa3_sae"
     "channel_6g",    # int
+    "channel_5g",    # int (NEW)
     "wifi6",         # "auto" | true | false
     "channel_width",  # "auto" | "20" | "40" | "80" | "160"
     "beacon_interval",  # int
@@ -1429,16 +1430,30 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             tx_power=tx_power,
         )
     else:
-        # Auto-select channel for 5GHz/2.4GHz if enabled
         selected_channel = None
+        if bp == "5ghz":
+            val = cfg.get("channel_5g")
+            if val is not None:
+                try:
+                    selected_channel = int(val)
+                except Exception:
+                    pass
+
         channel_auto_select = bool(cfg.get("channel_auto_select", False))
-        if channel_auto_select:
+        # If auto-select is ON and no manual channel is set (or set to 0), scan for best.
+        if channel_auto_select and (selected_channel is None or selected_channel == 0):
             try:
                 best_channel = select_best_channel(ap_ifname, bp, None)
                 if best_channel:
                     selected_channel = best_channel
+                    # If we auto-picked 5GHz, should we persist it? 
+                    # 6GHz logic persists it. Let's persist it for consistency if it was a 5GHz pick.
+                    if bp == "5ghz":
+                        from vr_hotspotd.config import write_config_file
+                        write_config_file({"channel_5g": best_channel})
             except Exception:
                 pass  # Best-effort
+
         
         cmd1 = build_cmd(
             ap_ifname=ap_ifname,

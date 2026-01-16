@@ -25,14 +25,14 @@ die() { echo "[backend-install] ERROR: $*" >&2; exit 1; }
 DEFAULT_INSTALL_DIR="/var/lib/vr-hotspot/app"
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 ENABLE_AUTOSTART="0"
-DISABLE_AUTOSTART="0"
+FIX_AUTOSTART_CONFIG="0"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
-    --enable-autostart) ENABLE_AUTOSTART="1"; shift ;;
-    --disable-autostart) DISABLE_AUTOSTART="1"; shift ;;
+    --enable-autostart) ENABLE_AUTOSTART="1"; FIX_AUTOSTART_CONFIG="1"; shift ;;
+    --disable-autostart) ENABLE_AUTOSTART="0"; FIX_AUTOSTART_CONFIG="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown argument: $1" ;;
   esac
@@ -72,13 +72,13 @@ log "Installing Python dependencies..."
 # Install systemd units
 SYSTEMD_DST="/etc/systemd/system"
 UNIT_DAEMON="${SYSTEMD_DST}/vr-hotspotd.service"
-UNIT_AUTOSTART="${SYSTEMD_DST}/vr-hotspot-autostart.service"
 log "Installing systemd units into $SYSTEMD_DST"
 
 cat > "$UNIT_DAEMON" <<EOF
 [Unit]
 Description=VR Hotspot Daemon
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -94,36 +94,29 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-if [[ "$ENABLE_AUTOSTART" == "1" ]]; then
-    cat > "$UNIT_AUTOSTART" <<EOF
-[Unit]
-Description=VR Hotspot Autostart Trigger
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/systemctl start vr-hotspotd.service
-
-[Install]
-WantedBy=multi-user.target
-EOF
-fi
-
-# Enable/disable autostart as requested
-if [[ "$DISABLE_AUTOSTART" == "1" ]]; then
-  log "Disabling autostart (if installed)"
-  systemctl disable --now vr-hotspot-autostart.service >/dev/null 2>&1 || true
-fi
-
 log "Reloading systemd"
 systemctl daemon-reload
 
-log "Enabling and starting vr-hotspotd.service"
-systemctl enable --now vr-hotspotd.service
-
 if [[ "$ENABLE_AUTOSTART" == "1" ]]; then
-  log "Enabling vr-hotspot-autostart.service"
-  systemctl enable --now vr-hotspot-autostart.service
+  log "Enabling vr-hotspotd.service (Autostart ENABLED)"
+  systemctl enable vr-hotspotd.service
+else
+  log "Disabling vr-hotspotd.service (Autostart DISABLED)"
+  systemctl disable vr-hotspotd.service 2>/dev/null || true
+fi
+
+log "Starting vr-hotspotd.service"
+systemctl restart vr-hotspotd.service
+
+if [[ "$FIX_AUTOSTART_CONFIG" == "1" ]]; then
+  log "Updating persistence config (autostart=$ENABLE_AUTOSTART)..."
+  # We use the python environment we just built to safely update the config
+  export PYTHONPATH="$INSTALL_DIR"
+  if [[ "$ENABLE_AUTOSTART" == "1" ]]; then
+      "$VENV_DIR/bin/python3" -c "from vr_hotspotd.config import write_config_file; write_config_file({'autostart': True})" || true
+  else
+      "$VENV_DIR/bin/python3" -c "from vr_hotspotd.config import write_config_file; write_config_file({'autostart': False})" || true
+  fi
 fi
 
 log "Backend install complete."
