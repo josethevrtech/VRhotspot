@@ -1,0 +1,6 @@
+def collect_capture_logs(
+    capture_dir: Optional[str],
+    lnxrouter_config_dir: Optional[str],
+    max_lines: int = 50,
+) -> List[str]:
+    """

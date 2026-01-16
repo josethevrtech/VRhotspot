@@ -1,0 +1,23 @@
+running="$(python3 - <<'PY' "${st}"
+import json
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    payload = json.loads(raw) if raw else {}
+    data = payload.get("data") or {}
+    print("true" if bool(data.get("running")) else "false")
+except Exception:
+    print("false")
+--
+ap_adapter="$(python3 - <<'PY' "${cfg}"
+import json
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    payload = json.loads(raw) if raw else {}
+    data = payload.get("data") or {}
+    print((data.get("ap_adapter") or "").strip())
+except Exception:
+    print("")
