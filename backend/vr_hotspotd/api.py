@@ -509,6 +509,7 @@ UI_HTML = r"""<!doctype html>
               <option value="40">40 MHz</option>
               <option value="80">80 MHz (recommended for VR)</option>
               <option value="160">160 MHz (maximum throughput)</option>
+            </select>
             <div class="small mt-6">
               Wider channels can improve throughput but are less stable in crowded 5 GHz; DFS channels can delay AP start.
             </div>
