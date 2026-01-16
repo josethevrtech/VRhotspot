@@ -261,6 +261,7 @@ function markPassphraseDirty(ev) {
 function resetPassphraseUi(cfg) {
   const passEl = document.getElementById('wpa2_passphrase');
   if (!passEl) return;
+  if (passphraseDirty) return; /* Do not overwrite user input */
   const hasSaved = !!(cfg && cfg.wpa2_passphrase_set);
   passEl.type = 'password';
   passEl.value = '';
