@@ -56,10 +56,56 @@
 
     h1 {
       font-size: 18px;
+      margin-bottom: 8px;
     }
 
     .row {
       gap: 8px;
+    }
+
+    .row.row-space-between {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .row.row-flex-end {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 12px;
+    }
+
+    .row.row-flex-end > * {
+      width: 100%;
+    }
+
+    .row.row-flex-end button,
+    .row.row-flex-end select {
+      width: 100%;
+    }
+
+    .row.row-flex-end > .token-field {
+      min-width: 100% !important;
+    }
+
+    .row.row-wrap {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .row.row-wrap button,
+    .row.row-wrap select,
+    .row.row-wrap label {
+      width: 100%;
+    }
+
+    .row.row-wrap > .token-field {
+      min-width: 100% !important;
+      max-width: 100% !important;
+    }
+
+    .card .row button {
+      width: 100%;
     }
 
     .card {
@@ -153,60 +199,6 @@
     display: none;
   }
 
-  @media (max-width: 480px) {
-    .row {
-      gap: 8px;
-    }
-
-    .row.row-space-between {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 16px;
-    }
-
-    .row.row-flex-end {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 12px;
-    }
-
-    .row.row-flex-end>* {
-      width: 100%;
-    }
-
-    .row.row-flex-end button,
-    .row.row-flex-end select {
-      width: 100%;
-    }
-
-    .row.row-flex-end>.token-field {
-      min-width: 100% !important;
-    }
-
-    .row.row-wrap {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .row.row-wrap button,
-    .row.row-wrap select,
-    .row.row-wrap label {
-      width: 100%;
-    }
-
-    .row.row-wrap>.token-field {
-      min-width: 100% !important;
-      max-width: 100% !important;
-    }
-
-    .card .row button {
-      width: 100%;
-    }
-
-    h1 {
-      margin-bottom: 8px;
-    }
-  }
 
   .card {
     border: 1px solid var(--border);
