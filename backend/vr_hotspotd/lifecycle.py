@@ -373,6 +373,41 @@ def _parse_iw_dev_ap_info(iw_text: str) -> List[APReadyInfo]:
 def _parse_iw_dev_ap_ifaces(iw_text: str) -> Set[str]:
     return {ap.ifname for ap in _parse_iw_dev_ap_info(iw_text) if ap.ifname}
 
+def _parse_supported_interface_modes(text: str) -> Optional[bool]:
+    if not text or "Supported interface modes" not in text:
+        return None
+    
+    in_modes = False
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("Supported interface modes"):
+            in_modes = True
+            continue
+        if in_modes:
+            if line.startswith("*"):
+                mode = line.lstrip("*").strip()
+                if mode in ("AP", "AP/VLAN"):
+                    return True
+            elif line and not line.startswith("*"):
+                # End of section
+                break
+    return False
+
+
+def _parse_ap_managed_concurrency(text: str) -> Optional[bool]:
+    if not text or "valid interface combinations" not in text:
+        return None
+        
+    for line in text.splitlines():
+        if "valid interface combinations" in line:
+            continue
+        # Rough heuristic: look for managed <= X and AP <= Y where total >= 2
+        # Example: * #{ managed } <= 1, #{ AP, P2P-client, P2P-GO } <= 1, total <= 2, #channels <= 1
+        if "#{ managed }" in line and "AP" in line and "total <=" in line:
+            return True
+            
+    return False
+
 
 def _band_from_freq_mhz(freq_mhz: Optional[int]) -> Optional[str]:
     if freq_mhz is None:
@@ -439,6 +474,35 @@ def _select_ap_from_iw(
         return None
     candidates.sort(key=lambda ap: ap.ifname)
     return candidates[0]
+
+def _select_ap_by_ifname(iw_text: str, ifname: str) -> Optional[APReadyInfo]:
+    aps = _parse_iw_dev_ap_info(iw_text)
+    for ap in aps:
+        if ap.ifname == ifname:
+            return ap
+    return None
+
+
+def _validate_channel_for_band(band: str, channel: int, country: Optional[str] = None) -> Tuple[int, Optional[str]]:
+    """
+    Validates a channel for a given band.
+    Returns (channel, warning_id) or (channel, None) if valid.
+    """
+    b = band.strip().lower()
+    if b in ("2.4ghz", "2.4"):
+        if 1 <= channel <= 14:
+            return channel, None
+        return channel, "invalid_channel_2g"
+    elif b in ("5ghz", "5"):
+        # Very rough check, just ensuring it's in 5GHz range
+        if 36 <= channel <= 177:
+            return channel, None
+        return channel, "invalid_channel_5g"
+    elif b in ("6ghz", "6"):
+        if 1 <= channel <= 233:  # PSC or non-PSC
+            return channel, None
+        return channel, "invalid_channel_6g"
+    return channel, "unknown_band"
 
 
 def _iface_phy(ifname: str) -> Optional[str]:
@@ -1803,13 +1867,16 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
     return LifecycleResult("stopped" if ok else "stop_failed", state)
 
 
-def collect_capture_logs(capture_dir: Optional[str], lnxrouter_config_dir: Optional[str]) -> List[str]:
+def collect_capture_logs(
+    capture_dir: Optional[str],
+    lnxrouter_config_dir: Optional[str],
+    max_lines: int = 50,
+) -> List[str]:
     """
     Collect diagnostic logs from capture directory and lnxrouter config directory.
     Returns a list of log lines (most recent lines from various log files).
     """
     lines = []
-    max_lines_per_file = 50
     
     # Collect from capture directory
     if capture_dir and os.path.isdir(capture_dir):
@@ -1821,7 +1888,7 @@ def collect_capture_logs(capture_dir: Optional[str], lnxrouter_config_dir: Optio
                         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                             file_lines = f.readlines()
                             lines.append(f"=== {filename} ===")
-                            lines.extend([line.rstrip() for line in file_lines[-max_lines_per_file:]])
+                            lines.extend([line.rstrip() for line in file_lines[-max_lines:]])
                     except Exception:
                         pass
         except Exception:
@@ -1837,7 +1904,7 @@ def collect_capture_logs(capture_dir: Optional[str], lnxrouter_config_dir: Optio
                         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                             file_lines = f.readlines()
                             lines.append(f"=== {filename} ===")
-                            lines.extend([line.rstrip() for line in file_lines[-max_lines_per_file:]])
+                            lines.extend([line.rstrip() for line in file_lines[-max_lines:]])
                     except Exception:
                         pass
         except Exception:
