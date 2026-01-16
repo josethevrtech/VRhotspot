@@ -1549,17 +1549,7 @@ const btnCopySsid = document.getElementById('btnCopySsid');
 if (btnCopySsid) btnCopySsid.addEventListener('click', () => copyFieldValue('ssid', 'SSID'));
 const btnCopyPass = document.getElementById('btnCopyPass');
 if (btnCopyPass) btnCopyPass.addEventListener('click', () => copyFieldValue('wpa2_passphrase', 'Passphrase'));
-const btnSavePassBasic = document.getElementById('btnSavePassBasic');
-if (btnSavePassBasic) btnSavePassBasic.addEventListener('click', async () => {
-  const passField = document.getElementById('wpa2_passphrase');
-  if (!passField || !passField.value.trim()) {
-    showMessage('Enter a passphrase (8-63 characters)', 'copyHint');
-    return;
-  }
-  passphraseDirty = true; // Force passphrase to be included in config
-  await saveConfigOnly();
-  showMessage('Passphrase saved to config', 'copyHint');
-});
+
 
 document.getElementById('privacyMode').addEventListener('change', () => {
   const v = document.getElementById('privacyMode').checked;
@@ -1728,6 +1718,25 @@ function init() {
     await refresh();
     return r;
   }
+
+  const btnSavePassBasic = document.getElementById('btnSavePassBasic');
+  if (btnSavePassBasic) btnSavePassBasic.addEventListener('click', async () => {
+    const passField = document.getElementById('wpa2_passphrase');
+    const hint = document.getElementById('copyHint');
+    if (!passField || !passField.value.trim()) {
+      if (hint) {
+        hint.textContent = 'Enter a passphrase (8-63 characters)';
+        hint.style.color = 'var(--bad)';
+      }
+      return;
+    }
+    passphraseDirty = true;
+    await saveConfigOnly();
+    if (hint) {
+      hint.textContent = 'Passphrase saved to config';
+      hint.style.color = 'var(--good)';
+    }
+  });
 
   document.getElementById('btnSaveConfig').addEventListener('click', async () => {
     await saveConfigOnly();
