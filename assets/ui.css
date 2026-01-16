@@ -75,7 +75,7 @@
       gap: 12px;
     }
 
-    .row.row-flex-end > * {
+    .row.row-flex-end>* {
       width: 100%;
     }
 
@@ -84,7 +84,7 @@
       width: 100%;
     }
 
-    .row.row-flex-end > .token-field {
+    .row.row-flex-end>.token-field {
       min-width: 100% !important;
     }
 
@@ -99,7 +99,7 @@
       width: 100%;
     }
 
-    .row.row-wrap > .token-field {
+    .row.row-wrap>.token-field {
       min-width: 100% !important;
       max-width: 100% !important;
     }
@@ -882,6 +882,10 @@
     word-break: break-word;
     max-width: 100%;
     box-sizing: border-box;
+  }
+
+  .hint:empty {
+    display: none;
   }
 
   .hint strong {
