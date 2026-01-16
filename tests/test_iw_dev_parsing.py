@@ -154,7 +154,6 @@ phy#0
             poll_s=0.01,
             ssid=None,
             adapter_ifname="vrhs_ap_wlan0",
-            prefer_ifname="vrhs_ap_wlan0",
             capture=None,
         )
         assert ap is not None

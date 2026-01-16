@@ -43,6 +43,7 @@ _CONFIG_MUTABLE_KEYS = {
     # NEW:
     "ap_security",   # "wpa2" | "wpa3_sae"
     "channel_6g",    # int (optional)
+    "channel_5g",    # int (optional)
     "channel_width",  # "auto" | "20" | "40" | "80" | "160"
     "beacon_interval",  # int (TU, default 50)
     "dtim_period",  # int (1-255, default 1)
@@ -101,6 +102,7 @@ _START_OVERRIDE_KEYS = {
     # NEW:
     "ap_security",
     "channel_6g",
+    "channel_5g",
     "channel_width",
     "beacon_interval",
     "dtim_period",
@@ -172,7 +174,7 @@ _BOOL_KEYS = {
     "memory_tuning",
     "io_scheduler_optimize",
 }
-_INT_KEYS = {"fallback_channel_2g", "channel_6g", "beacon_interval", "dtim_period", "tx_power"}
+_INT_KEYS = {"fallback_channel_2g", "channel_6g", "channel_5g", "beacon_interval", "dtim_period", "tx_power"}
 _FLOAT_KEYS = {"ap_ready_timeout_s", "watchdog_interval_s", "telemetry_interval_s"}
 _IP_KEYS = {"lan_gateway_ip", "dhcp_start_ip", "dhcp_end_ip"}
 
@@ -507,6 +509,7 @@ UI_HTML = r"""<!doctype html>
               <option value="40">40 MHz</option>
               <option value="80">80 MHz (recommended for VR)</option>
               <option value="160">160 MHz (maximum throughput)</option>
+            </select>
             <div class="small mt-6">
               Wider channels can improve throughput but are less stable in crowded 5 GHz; DFS channels can delay AP start.
             </div>

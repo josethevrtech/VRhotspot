@@ -1,0 +1,6 @@
+726:def _read_log_tail(path: Path, max_lines: int = 200) -> List[str]:
+749:    return lines[-max_lines:]
+762:        for line in _read_log_tail(path, max_lines=200):
+1905:    max_lines: int = 50,
+1923:                            lines.extend([f"[{filename}] {line.rstrip()}" for line in file_lines[-max_lines:]])
+1974:                            lines.extend([f"[{filename}] {line.rstrip()}" for line in file_lines[-max_lines:]])
