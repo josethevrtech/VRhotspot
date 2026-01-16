@@ -397,13 +397,44 @@ def _parse_supported_interface_modes(text: str) -> Optional[bool]:
 def _parse_ap_managed_concurrency(text: str) -> Optional[bool]:
     if not text or "valid interface combinations" not in text:
         return None
-        
+    
+    # Simple multi-line check: flatten the text or check presence in the relevant section.
+    # We look for a combination that supports AP and Managed handling.
+    # Example snippet:
+    #  * #{ managed } <= 1, #{ AP, P2P-client, P2P-GO } <= 1,
+    #    total <= 2, #channels <= 1
+    
+    found_managed = False
+    found_ap = False
+    found_total = False
+    
+    in_section = False
     for line in text.splitlines():
+        line = line.strip()
         if "valid interface combinations" in line:
+            in_section = True
             continue
-        # Rough heuristic: look for managed <= X and AP <= Y where total >= 2
-        # Example: * #{ managed } <= 1, #{ AP, P2P-client, P2P-GO } <= 1, total <= 2, #channels <= 1
-        if "#{ managed }" in line and "AP" in line and "total <=" in line:
+        if not in_section:
+            continue
+            
+        # Stop at next section if any (usually starting with non-indented text or Specific Keywords)
+        # But 'iw phy' output indentation varies. We assume valid combinations block continues until
+        # another header or end of file.
+        
+        if line.startswith("*"):
+            # New combination
+            found_managed = False
+            found_ap = False
+            found_total = False
+        
+        if "#{ managed }" in line:
+            found_managed = True
+        if "AP" in line:
+            found_ap = True
+        if "total <=" in line:
+            found_total = True
+            
+        if found_managed and found_ap and found_total:
             return True
             
     return False
@@ -492,16 +523,16 @@ def _validate_channel_for_band(band: str, channel: int, country: Optional[str] =
     if b in ("2.4ghz", "2.4"):
         if 1 <= channel <= 14:
             return channel, None
-        return channel, "invalid_channel_2g"
+        return 6, "channel_invalid_for_band_overridden"
     elif b in ("5ghz", "5"):
         # Very rough check, just ensuring it's in 5GHz range
         if 36 <= channel <= 177:
             return channel, None
-        return channel, "invalid_channel_5g"
+        return 36, "channel_invalid_for_band_overridden"
     elif b in ("6ghz", "6"):
         if 1 <= channel <= 233:  # PSC or non-PSC
             return channel, None
-        return channel, "invalid_channel_6g"
+        return 37, "channel_invalid_for_band_overridden"
     return channel, "unknown_band"
 
 
@@ -526,6 +557,7 @@ def _wait_for_ap_ready(
     poll_s: float = 0.25,
     ssid: Optional[str] = None,
     adapter_ifname: Optional[str] = None,
+    capture: Optional[Any] = None,
 ) -> Optional[APReadyInfo]:
     deadline = time.time() + timeout_s
 
@@ -1888,23 +1920,58 @@ def collect_capture_logs(
                         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                             file_lines = f.readlines()
                             lines.append(f"=== {filename} ===")
-                            lines.extend([line.rstrip() for line in file_lines[-max_lines:]])
+                            lines.extend([f"[{filename}] {line.rstrip()}" for line in file_lines[-max_lines:]])
                     except Exception:
                         pass
         except Exception:
             pass
     
-    # Collect from lnxrouter config directory
-    if lnxrouter_config_dir and os.path.isdir(lnxrouter_config_dir):
+    # Strategy for finding lnxrouter logs:
+    # 1. If lnxrouter_config_dir provided, check it.
+    # 2. If provided but not found, check if it exists inside capture_dir/lnxrouter_tmp (mapping).
+    # 3. If NOT provided, find the newest in capture_dir/lnxrouter_tmp.
+    
+    target_dirs = []
+    
+    if lnxrouter_config_dir:
+        # 1. Direct path
+        if os.path.isdir(lnxrouter_config_dir):
+            target_dirs.append(lnxrouter_config_dir)
+        elif capture_dir and os.path.isdir(capture_dir):
+            # 2. Mapped path
+            name = os.path.basename(lnxrouter_config_dir.rstrip('/'))
+            mapped = os.path.join(capture_dir, "lnxrouter_tmp", name)
+            if os.path.isdir(mapped):
+                target_dirs.append(mapped)
+
+    if not target_dirs and capture_dir and os.path.isdir(capture_dir):
+        # 3. Automatic newest
+        captured_conf_root = os.path.join(capture_dir, "lnxrouter_tmp")
+        if os.path.isdir(captured_conf_root):
+            try:
+                conf_dirs = []
+                for d in os.listdir(captured_conf_root):
+                    path = os.path.join(captured_conf_root, d)
+                    if os.path.isdir(path):
+                        conf_dirs.append(path)
+                
+                if conf_dirs:
+                    conf_dirs.sort(key=lambda p: os.path.getmtime(p))
+                    target_dirs.append(conf_dirs[-1])
+            except Exception:
+                pass
+
+    # Collect from all identified targets (usually just one)
+    for conf_dir in target_dirs:
         try:
             for filename in ['hostapd.log', 'dnsmasq.log', 'hostapd.conf']:
-                filepath = os.path.join(lnxrouter_config_dir, filename)
+                filepath = os.path.join(conf_dir, filename)
                 if os.path.isfile(filepath):
                     try:
                         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                             file_lines = f.readlines()
                             lines.append(f"=== {filename} ===")
-                            lines.extend([line.rstrip() for line in file_lines[-max_lines:]])
+                            lines.extend([f"[{filename}] {line.rstrip()}" for line in file_lines[-max_lines:]])
                     except Exception:
                         pass
         except Exception:
