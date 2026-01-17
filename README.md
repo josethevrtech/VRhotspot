@@ -1,6 +1,6 @@
 # VR Hotspot
 
-VR Hotspot is an open-source connectivity suite for VR headsets that turns a PC into a dedicated Wi-Fi access point using a USB Wi-Fi adapter. It enables a direct, low-latency PC ↔ headset connection optimized for VR streaming and remote access—no router required.
+VR Hotspot is an open-source connectivity suite for VR headsets that turns a PC into a dedicated Wi-Fi access point using a USB Wi-Fi adapter. It enables a direct, low-latency PC ↔ headset connection optimized for VR streaming and remote access, no router required.
 
 It's ideal for users who travel with a MiniPC or "headless" computer puck and want confidence they can connect to and manage their PC's hotspot, even without a monitor, so they can connect a VR headset and stream to it.
 
