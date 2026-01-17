@@ -2131,10 +2131,16 @@ write_hostapd_conf() {
 
 write_dnsmasq_conf() {
     local i
-    if grep "^nobody:" /etc/group >/dev/null 2>&1 ; then
-        NOBODY_GROUP="nobody"
-    else
+    local group_line=""
+    if getent group nogroup >/dev/null 2>&1; then
         NOBODY_GROUP="nogroup"
+        group_line="group=$NOBODY_GROUP"
+    elif getent group nobody >/dev/null 2>&1; then
+        NOBODY_GROUP="nobody"
+        group_line="group=$NOBODY_GROUP"
+    elif id -gn nobody >/dev/null 2>&1; then
+        NOBODY_GROUP="$(id -gn nobody)"
+        group_line="group=$NOBODY_GROUP"
     fi
 
     mkfifo "$CONFDIR/dnsmasq.log" || die "Failed creating pipe file for dnsmasq"
@@ -2143,7 +2149,7 @@ write_dnsmasq_conf() {
 
     cat <<- EOF > "$CONFDIR/dnsmasq.conf"
 		user=nobody
-		group=$NOBODY_GROUP
+		$group_line
 		bind-dynamic
 		listen-address=${GATEWAY4}
 		interface=$SUBNET_IFACE

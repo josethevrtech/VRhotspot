@@ -271,6 +271,25 @@ def _resolve_asset_path(asset_name: str) -> Optional[str]:
     return None
 
 
+def _inline_ui_css() -> str:
+    asset_path = _resolve_asset_path("ui.css")
+    if not asset_path:
+        return ""
+    try:
+        with open(asset_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _build_ui_html() -> str:
+    css = _inline_ui_css()
+    if not css:
+        return UI_HTML.replace("<!-- INLINE_CSS -->", "")
+    style_tag = f"<style id=\"ui-inline-css\">\n{css}\n</style>"
+    return UI_HTML.replace("<!-- INLINE_CSS -->", style_tag)
+
+
 # A compact UI focused on correctness and “sticky” edits.
 UI_HTML = r"""<!doctype html>
 <html lang="en">
@@ -281,6 +300,7 @@ UI_HTML = r"""<!doctype html>
 <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
 <meta name="theme-color" content="#000000" />
 <link rel="stylesheet" href="/assets/ui.css" />
+<!-- INLINE_CSS -->
 <script defer src="/assets/qrcode.js"></script>
 <script defer src="/assets/chart.js"></script>
 </head>
@@ -906,8 +926,9 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; "
-            "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+            "default-src 'self'; img-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "style-src-attr 'unsafe-inline'; script-src 'self'; connect-src 'self'; "
+            "base-uri 'none'; frame-ancestors 'none'",
         )
 
     def _respond_raw(self, code: int, raw: bytes, content_type: str = "application/octet-stream"):
@@ -1531,7 +1552,8 @@ class APIHandler(BaseHTTPRequestHandler):
             if path == "/":
                 self._redirect("/ui")
                 return
-            self._respond_raw(200, UI_HTML.encode("utf-8"), "text/html; charset=utf-8")
+            html = _build_ui_html().encode("utf-8")
+            self._respond_raw(200, html, "text/html; charset=utf-8")
             return
 
         if path == "/favicon.ico":
@@ -1599,6 +1621,49 @@ class APIHandler(BaseHTTPRequestHandler):
                 warnings=["unknown_endpoint"],
             ),
         )
+
+    def do_HEAD(self):
+        path, _qs = self._parse_url()
+
+        if path in ("/", "/ui"):
+            raw = _build_ui_html().encode("utf-8")
+            self.send_response(200)
+            self._send_common_headers("text/html; charset=utf-8", len(raw))
+            self.end_headers()
+            return
+
+        if path == "/favicon.ico":
+            self.send_response(204)
+            self._send_common_headers("text/plain; charset=utf-8", 0)
+            self.end_headers()
+            return
+
+        if path.startswith("/assets/"):
+            name = path[len("/assets/"):]
+            content_type = _ASSET_CONTENT_TYPES.get(name)
+            if not content_type:
+                self._respond_raw(404, b"Not Found", "text/plain")
+                return
+            asset_path = _resolve_asset_path(name)
+            if asset_path and os.path.isfile(asset_path):
+                length = os.path.getsize(asset_path)
+                self.send_response(200)
+                self._send_common_headers(content_type, length)
+                self.send_header("Cache-Control", "public, max-age=3600")
+                self.end_headers()
+                return
+            self._respond_raw(404, b"Not Found", "text/plain")
+            return
+
+        if path == "/healthz":
+            self.send_response(200)
+            self._send_common_headers("text/plain; charset=utf-8", 3)
+            self.end_headers()
+            return
+
+        self.send_response(404)
+        self._send_common_headers("application/json; charset=utf-8", 0)
+        self.end_headers()
 
     def do_POST(self):
         cid = self._cid()

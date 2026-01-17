@@ -19,11 +19,12 @@ from vr_hotspotd.config import load_config, ensure_config_file
 from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
 from vr_hotspotd.engine import lnxrouter_conf
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
+from vr_hotspotd.engine.hostapd_nat_cmd import build_cmd_nat
 from vr_hotspotd.engine.hostapd_bridge_cmd import build_cmd_bridge
-from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running
+from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running, get_tails
 from vr_hotspotd.engine.channel_scan import select_best_channel
 from vr_hotspotd.engine.tx_power import auto_adjust_tx_power, set_tx_power, get_tx_power
-from vr_hotspotd import system_tuning, preflight, network_tuning
+from vr_hotspotd import system_tuning, preflight, network_tuning, os_release
 
 log = logging.getLogger("vr_hotspotd.lifecycle")
 
@@ -56,6 +57,11 @@ _OP_LOCK = threading.Lock()
 _WATCHDOG_THREAD: Optional[threading.Thread] = None
 _WATCHDOG_STOP = threading.Event()
 _WATCHDOG_BACKOFF_MAX_S = 30.0
+
+
+def _virt_ap_ifname(base: str) -> str:
+    cand = f"x0{base}"
+    return cand[:15]
 
 
 class LifecycleResult:
@@ -557,6 +563,7 @@ def _wait_for_ap_ready(
     poll_s: float = 0.25,
     ssid: Optional[str] = None,
     adapter_ifname: Optional[str] = None,
+    expected_ap_ifname: Optional[str] = None,
     capture: Optional[Any] = None,
 ) -> Optional[APReadyInfo]:
     deadline = time.time() + timeout_s
@@ -566,6 +573,30 @@ def _wait_for_ap_ready(
         ap = _select_ap_from_iw(dump, target_phy=target_phy, ssid=ssid)
         if ap and _hostapd_ready(ap.ifname, adapter_ifname=adapter_ifname):
             return ap
+        if expected_ap_ifname:
+            try:
+                stdout_tail, _stderr_tail = get_tails()
+            except Exception:
+                stdout_tail = []
+            if _stdout_has_ap_enabled(stdout_tail, expected_ap_ifname):
+                return APReadyInfo(
+                    ifname=expected_ap_ifname,
+                    phy=target_phy,
+                    ssid=ssid,
+                    freq_mhz=None,
+                    channel=None,
+                )
+            ap_expected = _select_ap_by_ifname(dump, expected_ap_ifname)
+            if ap_expected and _hostapd_ready(expected_ap_ifname, adapter_ifname=adapter_ifname):
+                return ap_expected
+            if _hostapd_ready(expected_ap_ifname, adapter_ifname=adapter_ifname):
+                return APReadyInfo(
+                    ifname=expected_ap_ifname,
+                    phy=target_phy,
+                    ssid=ssid,
+                    freq_mhz=None,
+                    channel=None,
+                )
 
         time.sleep(poll_s)
 
@@ -721,6 +752,32 @@ def _hostapd_ready(ap_interface: str, *, adapter_ifname: Optional[str]) -> bool:
     if ctrl_dir and _hostapd_cli_ping(ctrl_dir, ap_interface):
         return True
     return False
+
+
+_HOSTAPD_DRIVER_ERROR_PATTERNS = (
+    "Could not set channel for kernel driver",
+    "Failed to set beacon parameters",
+    "Could not connect to kernel driver",
+    "Interface initialization failed",
+    "Unable to setup interface",
+    "nl80211: Failed to set beacon",
+    "nl80211: Failed to set interface",
+)
+
+
+def _stdout_has_hostapd_driver_error(lines: List[str]) -> bool:
+    for line in lines:
+        for pattern in _HOSTAPD_DRIVER_ERROR_PATTERNS:
+            if pattern in line:
+                return True
+    return False
+
+
+def _stdout_has_ap_enabled(lines: List[str], ifname: str) -> bool:
+    if not ifname:
+        return False
+    needle = f"{ifname}: AP-ENABLED"
+    return any(needle in line for line in lines)
 
 
 def _read_log_tail(path: Path, max_lines: int = 200) -> List[str]:
@@ -1263,6 +1320,15 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
     cfg = load_config()
     cfg = _apply_start_overrides(cfg, overrides)
+    platform_info = os_release.read_os_release()
+    platform_warnings: List[str] = []
+    try:
+        cfg, platform_warnings = os_release.apply_platform_overrides(cfg, platform_info)
+    except Exception as e:
+        platform_warnings = [f"platform_overrides_failed:{e}"]
+    use_hostapd_nat = os_release.is_bazzite(platform_info)
+    if use_hostapd_nat:
+        platform_warnings.append("platform_bazzite_use_hostapd_nat")
     fw_cfg = _build_firewalld_cfg(cfg)
 
     ssid = cfg.get("ssid", "VR-Hotspot")
@@ -1372,6 +1438,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     supports_wifi6 = bool(a.get("supports_wifi6"))
     effective_wifi6 = False
     start_warnings: List[str] = []
+    if platform_warnings:
+        start_warnings.extend(platform_warnings)
 
     if wifi6_setting == "auto":
         effective_wifi6 = supports_wifi6
@@ -1418,6 +1486,14 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     if preflight_errors:
         start_warnings.extend([f"preflight_error:{e}" for e in preflight_errors])
     update_state(preflight=preflight_result)
+    try:
+        hostapd_caps = (preflight_result.get("details") or {}).get("hostapd") or {}
+        hostapd_he = hostapd_caps.get("he")
+    except Exception:
+        hostapd_he = None
+    if effective_wifi6 and hostapd_he is False:
+        effective_wifi6 = False
+        start_warnings.append("wifi6_disabled_hostapd_missing_11ax")
 
     try:
         tuning_state, tuning_warnings = system_tuning.apply_pre(cfg)
@@ -1542,7 +1618,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 best_channel = select_best_channel(ap_ifname, bp, None)
                 if best_channel:
                     selected_channel = best_channel
-                    # If we auto-picked 5GHz, should we persist it? 
+                    # If we auto-picked 5GHz, should we persist it?
                     # 6GHz logic persists it. Let's persist it for consistency if it was a 5GHz pick.
                     if bp == "5ghz":
                         from vr_hotspotd.config import write_config_file
@@ -1550,20 +1626,54 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             except Exception:
                 pass  # Best-effort
 
-        
-        cmd1 = build_cmd(
-            ap_ifname=ap_ifname,
-            ssid=ssid,
-            passphrase=passphrase,
-            band_preference=bp,
-            country=country if isinstance(country, str) else None,
-            channel=selected_channel,
-            no_virt=optimized_no_virt,
-            wifi6=effective_wifi6,
-            gateway_ip=gateway_ip,
-            dhcp_dns=dhcp_dns,
-            enable_internet=enable_internet,
-        )
+        channel_width = str(cfg.get("channel_width", "auto")).lower()
+        beacon_interval = int(cfg.get("beacon_interval", 50))
+        dtim_period = int(cfg.get("dtim_period", 1))
+        short_guard_interval = bool(cfg.get("short_guard_interval", True))
+        tx_power = cfg.get("tx_power")
+        if tx_power is not None:
+            try:
+                tx_power = int(tx_power)
+            except Exception:
+                tx_power = None
+
+        if use_hostapd_nat:
+            cmd1 = build_cmd_nat(
+                ap_ifname=ap_ifname,
+                ssid=ssid,
+                passphrase=passphrase,
+                band=bp,
+                ap_security=ap_security,
+                country=country if isinstance(country, str) else None,
+                channel=selected_channel,
+                no_virt=optimized_no_virt,
+                debug=debug,
+                wifi6=effective_wifi6,
+                gateway_ip=gateway_ip,
+                dhcp_start_ip=dhcp_start_ip,
+                dhcp_end_ip=dhcp_end_ip,
+                dhcp_dns=dhcp_dns,
+                enable_internet=enable_internet,
+                channel_width=channel_width,
+                beacon_interval=beacon_interval,
+                dtim_period=dtim_period,
+                short_guard_interval=short_guard_interval,
+                tx_power=tx_power,
+            )
+        else:
+            cmd1 = build_cmd(
+                ap_ifname=ap_ifname,
+                ssid=ssid,
+                passphrase=passphrase,
+                band_preference=bp,
+                country=country if isinstance(country, str) else None,
+                channel=selected_channel,
+                no_virt=optimized_no_virt,
+                wifi6=effective_wifi6,
+                gateway_ip=gateway_ip,
+                dhcp_dns=dhcp_dns,
+                enable_internet=enable_internet,
+            )
 
     res = start_engine(cmd1, firewalld_cfg=fw_cfg)
 
@@ -1581,14 +1691,33 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         },
     )
 
+    expected_ap_ifname = None
+    if use_hostapd_nat:
+        expected_ap_ifname = ap_ifname if optimized_no_virt else _virt_ap_ifname(ap_ifname)
+
     ap_info = None
     start_failure_reason = None
+    latest_stdout = res.stdout_tail
+    latest_stderr = res.stderr_tail
     if not res.ok:
         start_failure_reason = res.error or "engine_start_failed"
     else:
-        ap_info = _wait_for_ap_ready(target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname)
+        ap_info = _wait_for_ap_ready(
+            target_phy,
+            ap_ready_timeout_s,
+            ssid=ssid,
+            adapter_ifname=ap_ifname,
+            expected_ap_ifname=expected_ap_ifname,
+        )
         if not ap_info:
             start_failure_reason = "ap_ready_timeout"
+            try:
+                latest_stdout, latest_stderr = get_tails()
+            except Exception:
+                latest_stdout = res.stdout_tail
+                latest_stderr = res.stderr_tail
+            if latest_stdout or latest_stderr:
+                update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
 
     if ap_info:
         detected_band = _band_from_freq_mhz(ap_info.freq_mhz)
@@ -1656,6 +1785,149 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         warnings.append("optimized_ap_start_timed_out")
     else:
         warnings.append(f"optimized_start_failed:{start_failure_reason or 'engine_start_failed'}")
+
+    driver_error = _stdout_has_hostapd_driver_error(latest_stdout or [])
+    if optimized_no_virt and driver_error and (not bridge_mode) and bp in ("2.4ghz", "5ghz"):
+        warnings.append("optimized_no_virt_retry_with_virt")
+        retry_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        retry_beacon_interval = int(cfg.get("beacon_interval", 50))
+        retry_dtim_period = int(cfg.get("dtim_period", 1))
+        retry_short_guard_interval = bool(cfg.get("short_guard_interval", True))
+        retry_tx_power = cfg.get("tx_power")
+        if retry_tx_power is not None:
+            try:
+                retry_tx_power = int(retry_tx_power)
+            except Exception:
+                retry_tx_power = None
+
+        if use_hostapd_nat:
+            cmd_retry = build_cmd_nat(
+                ap_ifname=ap_ifname,
+                ssid=ssid,
+                passphrase=passphrase,
+                band=bp,
+                ap_security=ap_security,
+                country=country if isinstance(country, str) else None,
+                channel=selected_channel,
+                no_virt=False,
+                debug=debug,
+                wifi6=effective_wifi6,
+                gateway_ip=gateway_ip,
+                dhcp_start_ip=dhcp_start_ip,
+                dhcp_end_ip=dhcp_end_ip,
+                dhcp_dns=dhcp_dns,
+                enable_internet=enable_internet,
+                channel_width=retry_channel_width,
+                beacon_interval=retry_beacon_interval,
+                dtim_period=retry_dtim_period,
+                short_guard_interval=retry_short_guard_interval,
+                tx_power=retry_tx_power,
+            )
+        else:
+            cmd_retry = build_cmd(
+                ap_ifname=ap_ifname,
+                ssid=ssid,
+                passphrase=passphrase,
+                band_preference=bp,
+                country=country if isinstance(country, str) else None,
+                channel=selected_channel,
+                no_virt=False,
+                wifi6=effective_wifi6,
+                gateway_ip=gateway_ip,
+                dhcp_dns=dhcp_dns,
+                enable_internet=enable_internet,
+            )
+
+        res_retry = start_engine(cmd_retry, firewalld_cfg=fw_cfg)
+        update_state(
+            adapter=ap_ifname,
+            engine={
+                "pid": res_retry.pid,
+                "cmd": res_retry.cmd,
+                "started_ts": res_retry.started_ts,
+                "last_exit_code": res_retry.exit_code,
+                "last_error": res_retry.error,
+                "stdout_tail": res_retry.stdout_tail,
+                "stderr_tail": res_retry.stderr_tail,
+                "ap_logs_tail": [],
+            },
+        )
+
+        ap_info_retry = None
+        if res_retry.ok:
+            retry_expected_ifname = _virt_ap_ifname(ap_ifname) if use_hostapd_nat else None
+            ap_info_retry = _wait_for_ap_ready(
+                target_phy,
+                ap_ready_timeout_s,
+                ssid=ssid,
+                adapter_ifname=ap_ifname,
+                expected_ap_ifname=retry_expected_ifname,
+            )
+
+        if ap_info_retry:
+            detected_band = _band_from_freq_mhz(ap_info_retry.freq_mhz)
+            affinity_pids = _collect_affinity_pids(
+                adapter_ifname=ap_ifname,
+                ap_interface=ap_info_retry.ifname,
+                engine_pid=res_retry.pid,
+            )
+            try:
+                tuning_state, runtime_warnings = system_tuning.apply_runtime(
+                    tuning_state,
+                    cfg,
+                    ap_ifname=ap_info_retry.ifname,
+                    adapter_ifname=ap_ifname,
+                    cpu_affinity_pids=affinity_pids,
+                )
+            except Exception as e:
+                runtime_warnings = [f"system_tuning_runtime_failed:{e}"]
+            if runtime_warnings:
+                warnings.extend(runtime_warnings)
+            try:
+                net_state, net_warnings = network_tuning.apply(
+                    cfg,
+                    ap_ifname=ap_info_retry.ifname,
+                    enable_internet=enable_internet,
+                    firewalld_cfg=fw_cfg,
+                )
+            except Exception as e:
+                net_state = {}
+                net_warnings = [f"network_tuning_apply_failed:{e}"]
+            if net_warnings:
+                warnings.extend(net_warnings)
+            state = update_state(
+                phase="running",
+                running=True,
+                ap_interface=ap_info_retry.ifname,
+                band=detected_band,
+                mode="fallback",
+                fallback_reason="no_virt_retry",
+                warnings=warnings,
+                last_error=None,
+                last_correlation_id=correlation_id,
+                tuning=tuning_state,
+                network_tuning=net_state,
+                engine={"last_error": None, "last_exit_code": None, "ap_logs_tail": []},
+            )
+            if _watchdog_enabled(cfg) and is_running():
+                _ensure_watchdog_started()
+            return LifecycleResult("started_with_fallback", state)
+
+        warnings.append("optimized_no_virt_retry_failed")
+        try:
+            ap_candidate = _select_ap_from_iw(_iw_dev_dump(), target_phy=target_phy, ssid=ssid)
+        except Exception:
+            ap_candidate = None
+        ap_logs = _collect_ap_logs(ap_ifname, ap_candidate.ifname if ap_candidate else None)
+        if ap_logs:
+            update_state(engine={"ap_logs_tail": ap_logs})
+        _kill_runtime_processes(ap_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
+        _remove_conf_dirs(ap_ifname)
+    fallback_no_virt = optimized_no_virt
+    if optimized_no_virt and driver_error:
+        fallback_no_virt = False
+        warnings.append("optimized_no_virt_disabled_on_driver_error")
+
     fallback_chain: List[Tuple[str, Optional[int], bool, str]] = []
 
     if bridge_mode:
@@ -1679,12 +1951,12 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
     if bp == "6ghz":
         fallback_chain = [
-            ("5ghz", None, optimized_no_virt, "fallback_to_5ghz"),
-            ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), optimized_no_virt, "fallback_to_2_4ghz"),
+            ("5ghz", None, fallback_no_virt, "fallback_to_5ghz"),
+            ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), fallback_no_virt, "fallback_to_2_4ghz"),
         ]
     elif bp == "5ghz":
         fallback_chain = [
-            ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), optimized_no_virt, "fallback_to_2_4ghz"),
+            ("2.4ghz", int(cfg.get("fallback_channel_2g", 6)), fallback_no_virt, "fallback_to_2_4ghz"),
         ]
     else:
         revert_warnings = _safe_revert_tuning(tuning_state)
@@ -1705,22 +1977,57 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
         return LifecycleResult("start_failed", state)
 
+    fallback_channel_width = str(cfg.get("channel_width", "auto")).lower()
+    fallback_beacon_interval = int(cfg.get("beacon_interval", 50))
+    fallback_dtim_period = int(cfg.get("dtim_period", 1))
+    fallback_short_guard_interval = bool(cfg.get("short_guard_interval", True))
+    fallback_tx_power = cfg.get("tx_power")
+    if fallback_tx_power is not None:
+        try:
+            fallback_tx_power = int(fallback_tx_power)
+        except Exception:
+            fallback_tx_power = None
+
     for band, channel, no_virt, warning_tag in fallback_chain:
         warnings.append(warning_tag)
 
-        cmd_fallback = build_cmd(
-            ap_ifname=ap_ifname,
-            ssid=ssid,
-            passphrase=passphrase,
-            band_preference=band,
-            country=country if isinstance(country, str) else None,
-            channel=channel,
-            no_virt=no_virt,
-            wifi6=effective_wifi6,
-            gateway_ip=gateway_ip,
-            dhcp_dns=dhcp_dns,
-            enable_internet=enable_internet,
-        )
+        if use_hostapd_nat:
+            cmd_fallback = build_cmd_nat(
+                ap_ifname=ap_ifname,
+                ssid=ssid,
+                passphrase=passphrase,
+                band=band,
+                ap_security=ap_security,
+                country=country if isinstance(country, str) else None,
+                channel=channel,
+                no_virt=no_virt,
+                debug=debug,
+                wifi6=effective_wifi6,
+                gateway_ip=gateway_ip,
+                dhcp_start_ip=dhcp_start_ip,
+                dhcp_end_ip=dhcp_end_ip,
+                dhcp_dns=dhcp_dns,
+                enable_internet=enable_internet,
+                channel_width=fallback_channel_width,
+                beacon_interval=fallback_beacon_interval,
+                dtim_period=fallback_dtim_period,
+                short_guard_interval=fallback_short_guard_interval,
+                tx_power=fallback_tx_power,
+            )
+        else:
+            cmd_fallback = build_cmd(
+                ap_ifname=ap_ifname,
+                ssid=ssid,
+                passphrase=passphrase,
+                band_preference=band,
+                country=country if isinstance(country, str) else None,
+                channel=channel,
+                no_virt=no_virt,
+                wifi6=effective_wifi6,
+                gateway_ip=gateway_ip,
+                dhcp_dns=dhcp_dns,
+                enable_internet=enable_internet,
+            )
 
         res_fallback = start_engine(cmd_fallback, firewalld_cfg=fw_cfg)
         state = update_state(
@@ -1743,8 +2050,15 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             )
             ap_info_fallback = None
         else:
+            fallback_expected_ifname = None
+            if use_hostapd_nat:
+                fallback_expected_ifname = ap_ifname if no_virt else _virt_ap_ifname(ap_ifname)
             ap_info_fallback = _wait_for_ap_ready(
-                target_phy, ap_ready_timeout_s, ssid=ssid, adapter_ifname=ap_ifname
+                target_phy,
+                ap_ready_timeout_s,
+                ssid=ssid,
+                adapter_ifname=ap_ifname,
+                expected_ap_ifname=fallback_expected_ifname,
             )
 
         if ap_info_fallback:
