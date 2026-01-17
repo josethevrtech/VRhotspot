@@ -337,6 +337,7 @@ UI_HTML = r"""<!doctype html>
         <div id="basicPill" class="pill"><span class="dot"></span><span id="basicPillTxt">Loading…</span></div>
       </div>
       <div class="small" id="basicStatusAdapterBand">Adapter: -- | Band: --</div>
+      <div class="small mt-6" id="basicStatusDetails"></div>
       <div class="small mt-6" id="basicLastError"></div>
       <div class="row mt-12">
         <button class="primary" id="btnStartBasic">Start</button>
@@ -463,6 +464,7 @@ UI_HTML = r"""<!doctype html>
         <div id="pill" class="pill"><span class="dot"></span><span id="pillTxt">Loading…</span></div>
       </div>
       <div class="small" id="statusMeta">—</div>
+      <div class="small mt-6" id="statusEffective"></div>
       <div class="mono mt-10" id="rawStatus"></div>
     </div>
   </div>

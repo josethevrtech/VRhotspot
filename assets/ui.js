@@ -167,6 +167,80 @@ function formatBandLabel(band) {
   return band;
 }
 
+function normalizeBandValue(raw) {
+  if (!raw) return null;
+  const s = raw.toString().trim().toLowerCase();
+  if (s === '2.4' || s === '2.4ghz' || s === '2ghz') return '2.4ghz';
+  if (s === '5' || s === '5ghz' || s === '5g') return '5ghz';
+  if (s === '6' || s === '6ghz' || s === '6g' || s === '6e') return '6ghz';
+  return s;
+}
+
+function parseEngineCmd(cmd) {
+  if (!Array.isArray(cmd)) return {};
+  const joined = cmd.join(' ');
+  const out = {};
+  if (joined.includes('hostapd_nat_engine')) out.engine = 'hostapd_nat';
+  else if (joined.includes('hostapd6_engine')) out.engine = 'hostapd6';
+  else if (joined.includes('lnxrouter')) out.engine = 'lnxrouter';
+
+  for (let i = 0; i < cmd.length; i++) {
+    const arg = cmd[i];
+    if (arg === '--ap-ifname') {
+      out.apIfname = cmd[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--ap') {
+      out.apIfname = cmd[i + 1];
+      i += 2; // skip iface + SSID
+      continue;
+    }
+    if (arg === '--band' || arg === '--freq-band') {
+      out.band = normalizeBandValue(cmd[i + 1]);
+      i += 1;
+      continue;
+    }
+    if (arg === '--channel' || arg === '-c') {
+      out.channel = cmd[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--country') {
+      out.country = cmd[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === '--no-virt') {
+      out.noVirt = true;
+      continue;
+    }
+    if (arg === '--no-internet' || arg === '-n') {
+      out.internet = false;
+      continue;
+    }
+  }
+
+  if (out.engine && out.noVirt === undefined) out.noVirt = false;
+  if (out.engine && out.internet === undefined) out.internet = true;
+  return out;
+}
+
+function formatEffectiveSummary(state) {
+  const info = parseEngineCmd(state && state.engine ? state.engine.cmd : null);
+  const parts = [];
+  if (info.engine) parts.push(`engine=${info.engine}`);
+  const ap = info.apIfname || state.ap_interface || state.adapter || '';
+  if (ap) parts.push(`ap=${ap}`);
+  const band = info.band || state.band || '';
+  if (band) parts.push(`band=${formatBandLabel(band)}`);
+  if (info.channel) parts.push(`ch=${info.channel}`);
+  if (info.noVirt !== undefined) parts.push(`virt=${info.noVirt ? 'off' : 'on'}`);
+  if (info.internet !== undefined) parts.push(`internet=${info.internet ? 'on' : 'off'}`);
+  if (info.country) parts.push(`cc=${info.country}`);
+  return parts.join(' | ');
+}
+
 function resolveBandPref(raw) {
   if (raw === 'recommended') return getRecommendedBand(getSelectedAdapter());
   return raw;
@@ -903,7 +977,7 @@ function setPill(state) {
     statusParts.push('Stopped');
   }
 
-  if (phase && phase !== '--' && phase !== 'stopped' && phase !== 'error' && !(phase === 'stopped' && !running)) {
+  if (phase && phase !== '--' && phase !== 'stopped' && phase !== 'error' && phase !== 'running' && !(phase === 'stopped' && !running)) {
     statusParts.push(phase.charAt(0).toUpperCase() + phase.slice(1));
   }
 
@@ -940,10 +1014,23 @@ function truncateText(text, maxLen) {
 }
 
 function updateBasicStatusMeta(state) {
+  const cmdInfo = parseEngineCmd(state && state.engine ? state.engine.cmd : null);
   const adapter = state.adapter || '--';
-  const band = state.band || '--';
+  const band = state.band || cmdInfo.band || '--';
   const metaEl = document.getElementById('basicStatusAdapterBand');
   if (metaEl) metaEl.textContent = `Adapter: ${adapter} | Band: ${band}`;
+
+  const detailsEl = document.getElementById('basicStatusDetails');
+  if (detailsEl) {
+    const parts = [];
+    if (state.mode) parts.push(`Mode: ${state.mode}`);
+    if (state.fallback_reason) parts.push(`Fallback: ${state.fallback_reason}`);
+    const apIf = state.ap_interface || cmdInfo.apIfname;
+    if (apIf) parts.push(`AP: ${apIf}`);
+    const text = parts.join(' | ');
+    detailsEl.textContent = text;
+    detailsEl.style.display = text ? '' : 'none';
+  }
 
   const errEl = document.getElementById('basicLastError');
   if (!errEl) return;
@@ -1461,8 +1548,21 @@ async function refresh() {
   setPill(s);
   updateBasicStatusMeta(s);
 
-  document.getElementById('statusMeta').textContent =
-    `last_op=${s.last_op || '--'} | ${fmtTs(s.last_op_ts)} | cid=${s.last_correlation_id || '--'}`;
+  const metaParts = [
+    `last_op=${s.last_op || '--'}`,
+    fmtTs(s.last_op_ts),
+    `cid=${s.last_correlation_id || '--'}`
+  ];
+  if (s.mode) metaParts.push(`mode=${s.mode}`);
+  if (s.fallback_reason) metaParts.push(`fallback=${s.fallback_reason}`);
+  document.getElementById('statusMeta').textContent = metaParts.join(' | ');
+
+  const eff = formatEffectiveSummary(s);
+  const effEl = document.getElementById('statusEffective');
+  if (effEl) {
+    effEl.textContent = eff ? `Effective: ${eff}` : '';
+    effEl.style.display = eff ? '' : 'none';
+  }
 
   document.getElementById('rawStatus').textContent = JSON.stringify(st.json, null, 2);
 
