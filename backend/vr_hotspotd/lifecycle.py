@@ -1039,6 +1039,7 @@ def _watchdog_loop() -> None:
                     if adapter_ifname:
                         telemetry_data = telemetry.get_snapshot(
                             adapter_ifname=adapter_ifname,
+                            ap_interface_hint=st.get("ap_interface"),
                             enabled=True,
                             interval_s=interval,
                         )

@@ -1356,6 +1356,7 @@ class APIHandler(BaseHTTPRequestHandler):
             if out.get("running"):
                 out["telemetry"] = telemetry.get_snapshot(
                     adapter_ifname=out.get("adapter"),
+                    ap_interface_hint=out.get("ap_interface"),
                     enabled=True,
                     interval_s=float(interval) if interval is not None else 2.0,
                 )
@@ -1611,7 +1612,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
             st = load_state()
             ap_ifname = st.get("adapter")
-            snapshot = get_clients_snapshot(ap_ifname if ap_ifname else None)
+            snapshot = get_clients_snapshot(
+                ap_ifname if ap_ifname else None,
+                ap_interface_hint=st.get("ap_interface"),
+            )
             self._respond(200, self._envelope(correlation_id=cid, data=snapshot))
             return
 

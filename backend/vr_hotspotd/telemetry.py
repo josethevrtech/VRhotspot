@@ -27,6 +27,7 @@ def _ratio(num: Optional[int], denom: Optional[int]) -> Optional[float]:
 def get_snapshot(
     *,
     adapter_ifname: Optional[str],
+    ap_interface_hint: Optional[str] = None,
     enabled: bool = True,
     interval_s: float = 2.0,
 ) -> Dict[str, Any]:
@@ -39,7 +40,7 @@ def get_snapshot(
         if interval_s > 0 and (now - _LAST_TS) < interval_s:
             return _LAST_RESULT
 
-    snap = get_clients_snapshot(adapter_ifname)
+    snap = get_clients_snapshot(adapter_ifname, ap_interface_hint=ap_interface_hint)
     ts = now
     dt = (ts - _LAST_TS) if _LAST_TS else None
 

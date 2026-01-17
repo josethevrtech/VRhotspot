@@ -895,7 +895,7 @@
 
   .two {
     display: grid;
-    grid-template-columns: 1fr 220px;
+    grid-template-columns: minmax(140px, 2fr) minmax(120px, 1fr);
     gap: 10px;
   }
 

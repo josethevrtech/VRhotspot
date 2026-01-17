@@ -108,7 +108,7 @@ def _get_config_ssid() -> Optional[str]:
     return None
 
 
-def _iw_dev_ap_ifaces() -> Tuple[List[Dict[str, Optional[str]]], str]:
+def _iw_dev_ifaces() -> Tuple[List[Dict[str, Optional[str]]], str]:
     rc, stdout, stderr = _run(["iw", "dev"], timeout_s=0.8)
     if rc != 0:
         return [], f"iw_dev_failed(rc={rc}):{stderr[:120]}"
@@ -135,6 +135,13 @@ def _iw_dev_ap_ifaces() -> Tuple[List[Dict[str, Optional[str]]], str]:
     if cur:
         interfaces.append(cur)
 
+    return interfaces, ""
+
+
+def _iw_dev_ap_ifaces() -> Tuple[List[Dict[str, Optional[str]]], str]:
+    interfaces, warn = _iw_dev_ifaces()
+    if warn:
+        return [], warn
     ap_ifaces = [
         i for i in interfaces if (i.get("type") or "").upper().startswith("AP") and i.get("ifname")
     ]
@@ -149,12 +156,26 @@ def _matches_ap_adapter(ifname: str, ap_adapter: Optional[str]) -> bool:
 
 def _select_ap_interface(
     adapter_ifname: Optional[str],
+    ap_interface_hint: Optional[str] = None,
 ) -> Tuple[Optional[str], List[str], List[str]]:
     warnings: List[str] = []
-    ap_ifaces, warn = _iw_dev_ap_ifaces()
+    interfaces, warn = _iw_dev_ifaces()
     if warn:
         warnings.append(warn)
+    ap_ifaces = [
+        i for i in interfaces if (i.get("type") or "").upper().startswith("AP") and i.get("ifname")
+    ]
     ap_ifnames = [i.get("ifname") for i in ap_ifaces if i.get("ifname")]
+
+    if ap_interface_hint:
+        hint = ap_interface_hint.strip()
+        if hint:
+            for iface in interfaces:
+                if iface.get("ifname") == hint:
+                    if iface.get("type") and not str(iface.get("type")).upper().startswith("AP"):
+                        warnings.append("ap_interface_hint_not_ap")
+                    return hint, ap_ifnames, warnings
+            warnings.append("ap_interface_hint_missing")
 
     if not ap_ifaces:
         return None, ap_ifnames, warnings
@@ -562,7 +583,10 @@ def _warn_hostapd_cli_unreliable(warnings: List[str]) -> None:
         warnings.append("hostapd_cli_unreliable")
 
 
-def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]:
+def get_clients_snapshot(
+    adapter_ifname: Optional[str] = None,
+    ap_interface_hint: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Returns a dict:
       {
@@ -575,7 +599,7 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
     Never raises.
     """
     warnings: List[str] = []
-    ap_if, iw_ap_ifaces, iw_warns = _select_ap_interface(adapter_ifname)
+    ap_if, iw_ap_ifaces, iw_warns = _select_ap_interface(adapter_ifname, ap_interface_hint=ap_interface_hint)
     warnings.extend(iw_warns)
 
     if not ap_if:
@@ -607,7 +631,10 @@ def get_clients_snapshot(adapter_ifname: Optional[str] = None) -> Dict[str, Any]
 
     iw_clients, warn = _iw_station_dump(ap_if)
     if warn and "no such device" in warn.lower():
-        retry_ap_if, retry_ap_ifaces, retry_warns = _select_ap_interface(adapter_ifname)
+        retry_ap_if, retry_ap_ifaces, retry_warns = _select_ap_interface(
+            adapter_ifname,
+            ap_interface_hint=ap_interface_hint,
+        )
         warnings.extend(retry_warns)
         if not retry_ap_if:
             warnings.append("no_active_ap_interface")
