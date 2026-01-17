@@ -10,7 +10,7 @@ Built around **lnxrouter + hostapd + dnsmasq**, with **bundled binaries** (inclu
 
 ## 🚀 Quick Installation
 
-**One-command install for beginners:**
+**One-command install**
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh | sudo bash
