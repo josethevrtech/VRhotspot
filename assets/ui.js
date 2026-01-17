@@ -229,15 +229,14 @@ function parseEngineCmd(cmd) {
 function formatEffectiveSummary(state) {
   const info = parseEngineCmd(state && state.engine ? state.engine.cmd : null);
   const parts = [];
-  if (info.engine) parts.push(`engine=${info.engine}`);
-  const ap = info.apIfname || state.ap_interface || state.adapter || '';
-  if (ap) parts.push(`ap=${ap}`);
-  const band = info.band || state.band || '';
-  if (band) parts.push(`band=${formatBandLabel(band)}`);
-  if (info.channel) parts.push(`ch=${info.channel}`);
-  if (info.noVirt !== undefined) parts.push(`virt=${info.noVirt ? 'off' : 'on'}`);
-  if (info.internet !== undefined) parts.push(`internet=${info.internet ? 'on' : 'off'}`);
-  if (info.country) parts.push(`cc=${info.country}`);
+  const adapter = state.adapter || '';
+  if (adapter) parts.push(`Adapter: ${adapter}`);
+  const band = state.band || info.band || '';
+  if (band) parts.push(`Band: ${formatBandLabel(normalizeBandValue(band))}`);
+  if (state.mode) parts.push(`Mode: ${state.mode}`);
+  const ap = state.ap_interface || info.apIfname || '';
+  if (ap) parts.push(`AP: ${ap}`);
+  if (state.fallback_reason) parts.push(`Fallback: ${state.fallback_reason}`);
   return parts.join(' | ');
 }
 
@@ -960,10 +959,11 @@ async function copyFieldValue(fieldId, label) {
 }
 
 function setPill(state) {
+  const cmdInfo = parseEngineCmd(state && state.engine ? state.engine.cmd : null);
   const running = !!state.running;
   const phase = state.phase || '--';
-  const adapter = state.adapter || '--';
-  const band = state.band || '--';
+  const adapter = state.adapter || cmdInfo.apIfname || '--';
+  const band = state.band || cmdInfo.band || '--';
   const mode = state.mode || '--';
 
   // Create clean, readable status text
@@ -986,7 +986,7 @@ function setPill(state) {
   }
 
   if (band && band !== '--') {
-    statusParts.push(band);
+    statusParts.push(formatBandLabel(normalizeBandValue(band)));
   }
 
   if (mode && mode !== '--' && mode !== 'nat') {
@@ -1018,7 +1018,10 @@ function updateBasicStatusMeta(state) {
   const adapter = state.adapter || '--';
   const band = state.band || cmdInfo.band || '--';
   const metaEl = document.getElementById('basicStatusAdapterBand');
-  if (metaEl) metaEl.textContent = `Adapter: ${adapter} | Band: ${band}`;
+  if (metaEl) {
+    const bandLabel = band !== '--' ? formatBandLabel(normalizeBandValue(band)) : band;
+    metaEl.textContent = `Adapter: ${adapter} | Band: ${bandLabel}`;
+  }
 
   const detailsEl = document.getElementById('basicStatusDetails');
   if (detailsEl) {
@@ -1560,7 +1563,7 @@ async function refresh() {
   const eff = formatEffectiveSummary(s);
   const effEl = document.getElementById('statusEffective');
   if (effEl) {
-    effEl.textContent = eff ? `Effective: ${eff}` : '';
+    effEl.textContent = eff || '';
     effEl.style.display = eff ? '' : 'none';
   }
 

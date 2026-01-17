@@ -1720,7 +1720,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
 
     if ap_info:
-        detected_band = _band_from_freq_mhz(ap_info.freq_mhz)
+        detected_band = _band_from_freq_mhz(ap_info.freq_mhz) or bp
         affinity_pids = _collect_affinity_pids(
             adapter_ifname=ap_ifname,
             ap_interface=ap_info.ifname,
@@ -1865,7 +1865,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             )
 
         if ap_info_retry:
-            detected_band = _band_from_freq_mhz(ap_info_retry.freq_mhz)
+            detected_band = _band_from_freq_mhz(ap_info_retry.freq_mhz) or bp
             affinity_pids = _collect_affinity_pids(
                 adapter_ifname=ap_ifname,
                 ap_interface=ap_info_retry.ifname,
@@ -2062,7 +2062,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             )
 
         if ap_info_fallback:
-            detected_band = _band_from_freq_mhz(ap_info_fallback.freq_mhz)
+            detected_band = _band_from_freq_mhz(ap_info_fallback.freq_mhz) or band
             affinity_pids = _collect_affinity_pids(
                 adapter_ifname=ap_ifname,
                 ap_interface=ap_info_fallback.ifname,
