@@ -304,12 +304,17 @@ def _write_hostapd_conf(
     dtim_period: int = 1,
     short_guard_interval: bool = True,
     tx_power: Optional[int] = None,
-    compat: bool = False,
+    mode: str = "full",
 ) -> None:
     cc = (country or "").strip().upper()
 
     chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
     chwidth = chwidth_map.get(channel_width.lower(), 2)
+    mode = (mode or "full").strip().lower()
+    if mode not in ("full", "reduced", "legacy"):
+        mode = "full"
+    compat = mode == "legacy"
+    reduced = mode == "reduced"
 
     def _vht_center_seg0_idx_5ghz(primary_channel: int, width: int) -> Optional[int]:
         if width < 2:
@@ -361,15 +366,17 @@ def _write_hostapd_conf(
     elif band == "5ghz":
         lines += ["hw_mode=a", f"channel={int(channel)}"]
         if not compat:
-            lines += ["ieee80211n=1", "ieee80211ac=1"]
+            lines.append("ieee80211n=1")
+            if not reduced:
+                lines.append("ieee80211ac=1")
             if short_guard_interval:
                 lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
-                if chwidth >= 2:
+                if (not reduced) and chwidth >= 2:
                     vht_caps = ["SHORT-GI-80"]
                     if chwidth >= 3:
                         vht_caps.append("SHORT-GI-160")
                     lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
-            if chwidth >= 2:
+            if (not reduced) and chwidth >= 2:
                 seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
                 if seg0 is not None:
                     lines.append(f"vht_oper_chwidth={chwidth - 1}")
@@ -377,7 +384,7 @@ def _write_hostapd_conf(
     else:
         raise RuntimeError("invalid_band")
 
-    if wifi6 and not compat:
+    if wifi6 and not compat and not reduced:
         lines.append("ieee80211ax=1")
         lines += [
             "he_su_beamformee=1",
@@ -538,7 +545,7 @@ def main() -> int:
 
     channel = int(args.channel) if args.channel is not None else (6 if band == "2.4ghz" else 36)
 
-    compat_mode = False
+    mode = "full"
     hostapd_p: Optional[subprocess.Popen] = None
     early_rc: Optional[int] = None
 
@@ -558,7 +565,7 @@ def main() -> int:
             dtim_period=args.dtim_period,
             short_guard_interval=args.short_guard_interval,
             tx_power=args.tx_power,
-            compat=compat_mode,
+            mode=mode,
         )
         _ensure_ctrl_interface_dir(hostapd_conf)
         hostapd_cmd = [hostapd, hostapd_conf]
@@ -578,12 +585,16 @@ def main() -> int:
 
         lines = _collect_proc_output(hostapd_p)
         _emit_lines(lines)
-        if compat_mode or not _should_retry_compat(lines):
+        if mode == "legacy" or not _should_retry_compat(lines):
             early_rc = hostapd_p.returncode or 1
             break
 
-        print("hostapd_compat_retry: legacy config")
-        compat_mode = True
+        if mode == "full":
+            print("hostapd_compat_retry: reduced config")
+            mode = "reduced"
+        else:
+            print("hostapd_compat_retry: legacy config")
+            mode = "legacy"
         _iface_down(ap_iface)
         _flush_ip(ap_iface)
         _iface_up(ap_iface)
