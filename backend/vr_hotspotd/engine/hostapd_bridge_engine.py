@@ -193,8 +193,8 @@ def _write_hostapd_conf(
     cc = (country or "").strip().upper()
     
     # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
-    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3}
-    chwidth = chwidth_map.get(channel_width.lower(), 0)  # Default to 20MHz if auto/unknown
+    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
+    chwidth = chwidth_map.get(channel_width.lower(), 2)  # Default to 80MHz for VR
     
     lines = [
         f"interface={ifname}",
@@ -219,7 +219,11 @@ def _write_hostapd_conf(
         lines += ["hw_mode=a", f"channel={int(channel)}", "ieee80211n=1", "ieee80211ac=1"]
         if short_guard_interval:
             lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
-            lines.append("vht_capab=[SHORT-GI-80][SHORT-GI-160]")
+            if chwidth >= 2:
+                vht_caps = ["SHORT-GI-80"]
+                if chwidth >= 3:
+                    vht_caps.append("SHORT-GI-160")
+                lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
         # VHT channel width
         if chwidth >= 2:
             lines.append(f"vht_oper_chwidth={chwidth - 1}")  # 1=80MHz, 2=160MHz

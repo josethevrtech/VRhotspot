@@ -308,8 +308,8 @@ def _write_hostapd_conf(
 ) -> None:
     cc = (country or "").strip().upper()
 
-    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3}
-    chwidth = chwidth_map.get(channel_width.lower(), 0)
+    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
+    chwidth = chwidth_map.get(channel_width.lower(), 2)
 
     if compat:
         beacon_interval = 100
@@ -341,7 +341,11 @@ def _write_hostapd_conf(
             lines += ["ieee80211n=1", "ieee80211ac=1"]
             if short_guard_interval:
                 lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
-                lines.append("vht_capab=[SHORT-GI-80][SHORT-GI-160]")
+                if chwidth >= 2:
+                    vht_caps = ["SHORT-GI-80"]
+                    if chwidth >= 3:
+                        vht_caps.append("SHORT-GI-160")
+                    lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
             if chwidth >= 2:
                 lines.append(f"vht_oper_chwidth={chwidth - 1}")
                 lines.append(f"vht_oper_centr_freq_seg0_idx={int(channel)}")

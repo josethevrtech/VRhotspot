@@ -526,14 +526,14 @@ UI_HTML = r"""<!doctype html>
           <div data-field="channel_width">
             <label for="channel_width">Channel width</label>
             <select id="channel_width">
-              <option value="auto">auto (select best)</option>
+              <option value="auto">auto (>=80 MHz for VR)</option>
               <option value="20">20 MHz</option>
               <option value="40">40 MHz</option>
               <option value="80">80 MHz (recommended for VR)</option>
               <option value="160">160 MHz (maximum throughput)</option>
             </select>
             <div class="small mt-6">
-              Wider channels can improve throughput but are less stable in crowded 5 GHz; DFS channels can delay AP start.
+              Default is 80 MHz for VR. Use 20/40 only for compatibility; DFS channels can delay AP start.
             </div>
           </div>
 

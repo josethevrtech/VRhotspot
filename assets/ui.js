@@ -16,7 +16,7 @@ const FIELD_VISIBILITY = (window.UI_FIELD_VISIBILITY || {});
 
 const ADVANCED_DEFAULTS = {
   channel_6g: null,
-  channel_width: 'auto',
+  channel_width: '80',
   beacon_interval: 50,
   dtim_period: 1,
   short_guard_interval: true,
@@ -1160,6 +1160,7 @@ function applyVrProfile(profileName = 'balanced') {
       qos_preset: 'ultra_low_latency',
       nat_accel: true,
       bridge_mode: false,
+      channel_width: '80',
       beacon_interval: 20,
       dtim_period: 1,
       short_guard_interval: true,
@@ -1201,6 +1202,7 @@ function applyVrProfile(profileName = 'balanced') {
       qos_preset: 'vr',
       nat_accel: true,
       bridge_mode: false,
+      channel_width: '80',
       beacon_interval: 50,
       dtim_period: 1,
       short_guard_interval: true,
@@ -1221,6 +1223,7 @@ function applyVrProfile(profileName = 'balanced') {
       qos_preset: 'balanced',
       nat_accel: false,
       bridge_mode: false,
+      channel_width: '80',
       beacon_interval: 100,
       dtim_period: 3,
       short_guard_interval: false,
@@ -1254,7 +1257,7 @@ function applyVrProfile(profileName = 'balanced') {
   document.getElementById('nat_accel').checked = profile.nat_accel;
   document.getElementById('bridge_mode').checked = profile.bridge_mode;
   if (document.getElementById('channel_width')) {
-    document.getElementById('channel_width').value = profile.channel_width || 'auto';
+    document.getElementById('channel_width').value = profile.channel_width || '80';
   }
   if (document.getElementById('beacon_interval')) {
     document.getElementById('beacon_interval').value = profile.beacon_interval;
@@ -1316,6 +1319,8 @@ function getForm() {
   if (ch5) {
     const n = parseInt(ch5, 10);
     if (!Number.isNaN(n)) out.channel_5g = n;
+  } else {
+    out.channel_5g = null;
   }
 
   // Optional 6 GHz channel
@@ -1323,6 +1328,8 @@ function getForm() {
   if (ch6) {
     const n = parseInt(ch6, 10);
     if (!Number.isNaN(n)) out.channel_6g = n;
+  } else {
+    out.channel_6g = null;
   }
 
   // Optional TX power
@@ -1330,6 +1337,8 @@ function getForm() {
   if (txPower) {
     const n = parseInt(txPower, 10);
     if (!Number.isNaN(n)) out.tx_power = n;
+  } else {
+    out.tx_power = null;
   }
 
   const gw = (document.getElementById('lan_gateway_ip').value || '').trim();
@@ -1379,7 +1388,7 @@ function applyConfig(cfg) {
   document.getElementById('ap_ready_timeout_s').value = (cfg.ap_ready_timeout_s ?? 6.0);
   document.getElementById('fallback_channel_2g').value = (cfg.fallback_channel_2g ?? 6);
   if (document.getElementById('channel_width')) {
-    document.getElementById('channel_width').value = (cfg.channel_width || 'auto');
+    document.getElementById('channel_width').value = (cfg.channel_width || '80');
   }
   if (document.getElementById('beacon_interval')) {
     document.getElementById('beacon_interval').value = (cfg.beacon_interval ?? 50);

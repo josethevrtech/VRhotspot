@@ -215,8 +215,8 @@ def _write_hostapd_6ghz_conf(
     cc = (country or "").strip().upper()
     
     # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
-    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3}
-    chwidth = chwidth_map.get(channel_width.lower(), 0)  # Default to 20MHz if auto/unknown
+    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
+    chwidth = chwidth_map.get(channel_width.lower(), 2)  # Default to 80MHz for VR
     
     lines = [
         f"interface={ifname}",

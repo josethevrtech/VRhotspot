@@ -20,7 +20,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "wifi6": "auto",             # "auto" | true | false
     "ap_security": "wpa2",        # "wpa2" | "wpa3_sae"
     "channel_6g": None,          # optional int
-    "channel_width": "auto",     # "auto" | "20" | "40" | "80" | "160" (MHz)
+    "channel_width": "80",       # "80" default for VR; "auto" | "20" | "40" | "80" | "160" (MHz)
     "beacon_interval": 50,        # Beacon interval in TU (Time Units, 1 TU = 1024 us), default 50ms for VR
     "dtim_period": 1,            # DTIM period (1-255), default 1 for VR streaming
     "short_guard_interval": True, # Enable short guard interval for improved throughput
