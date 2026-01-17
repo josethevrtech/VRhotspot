@@ -936,6 +936,7 @@ def _check_connection_quality(state: Dict[str, Any], cfg: Dict[str, object]) -> 
         interval = float(cfg.get("telemetry_interval_s", 2.0))
         telemetry_data = telemetry.get_snapshot(
             adapter_ifname=adapter_ifname,
+            ap_interface_hint=state.get("ap_interface"),
             enabled=True,
             interval_s=interval,
         )

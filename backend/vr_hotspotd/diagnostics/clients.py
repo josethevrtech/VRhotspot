@@ -176,6 +176,8 @@ def _select_ap_interface(
                         warnings.append("ap_interface_hint_not_ap")
                     return hint, ap_ifnames, warnings
             warnings.append("ap_interface_hint_missing")
+            if not ap_ifaces:
+                return hint, ap_ifnames, warnings
 
     if not ap_ifaces:
         return None, ap_ifnames, warnings
