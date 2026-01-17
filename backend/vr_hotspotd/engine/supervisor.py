@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 from . import firewalld  # SteamOS: firewalld owns nftables
+from vr_hotspotd import os_release
 
 ENGINE_STDOUT_MAX_LINES = 200
 ENGINE_STDERR_MAX_LINES = 200
@@ -134,6 +135,23 @@ def _vendor_bin() -> str:
     return os.path.abspath(os.path.join(here, "..", "..", "..", "vendor", "bin"))
 
 
+def _vendor_lib() -> str:
+    """
+    Resolve vendor/lib. Works both in repo layout and installed layout.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        # repo layout: backend/vr_hotspotd/engine -> backend/vendor/lib
+        os.path.abspath(os.path.join(here, "..", "..", "..", "vendor", "lib")),
+        # installed layout
+        "/var/lib/vr-hotspot/app/backend/vendor/lib",
+    ]
+    for c in candidates:
+        if os.path.isdir(c):
+            return c
+    return os.path.abspath(os.path.join(here, "..", "..", "..", "vendor", "lib"))
+
+
 def _which_in_path(exe: str, path: str) -> Optional[str]:
     for d in path.split(":"):
         cand = os.path.join(d, exe)
@@ -152,18 +170,42 @@ def _build_engine_env() -> Dict[str, str]:
     """
     env = os.environ.copy()
     vendor = _vendor_bin()
+    vendor_lib = _vendor_lib()
     sys_path = "/usr/sbin:/usr/bin:/sbin:/bin"
 
     sys_hostapd = _which_in_path("hostapd", sys_path)
     sys_dnsmasq = _which_in_path("dnsmasq", sys_path)
 
-    env["PATH"] = f"{sys_path}:{vendor}"
-    if sys_hostapd and sys_dnsmasq:
-        env.pop("HOSTAPD", None)
-        env.pop("DNSMASQ", None)
+    prefer_vendor = False
+    try:
+        prefer_vendor = os_release.is_bazzite()
+    except Exception:
+        prefer_vendor = False
+
+    vendor_hostapd = os.path.join(vendor, "hostapd")
+    vendor_dnsmasq = os.path.join(vendor, "dnsmasq")
+    vendor_ok = all(
+        os.path.isfile(p) and os.access(p, os.X_OK)
+        for p in (vendor_hostapd, vendor_dnsmasq)
+    )
+
+    if vendor_lib and os.path.isdir(vendor_lib):
+        ld_path = env.get("LD_LIBRARY_PATH", "")
+        if vendor_lib not in ld_path.split(":"):
+            env["LD_LIBRARY_PATH"] = f"{vendor_lib}:{ld_path}" if ld_path else vendor_lib
+
+    if prefer_vendor and vendor_ok:
+        env["PATH"] = f"{vendor}:{sys_path}"
+        env["HOSTAPD"] = vendor_hostapd
+        env["DNSMASQ"] = vendor_dnsmasq
     else:
-        env["HOSTAPD"] = os.path.join(vendor, "hostapd")
-        env["DNSMASQ"] = os.path.join(vendor, "dnsmasq")
+        env["PATH"] = f"{sys_path}:{vendor}"
+        if sys_hostapd and sys_dnsmasq:
+            env.pop("HOSTAPD", None)
+            env.pop("DNSMASQ", None)
+        else:
+            env["HOSTAPD"] = vendor_hostapd
+            env["DNSMASQ"] = vendor_dnsmasq
 
     env.setdefault("LC_ALL", "C")
     env.setdefault("LANG", "C")

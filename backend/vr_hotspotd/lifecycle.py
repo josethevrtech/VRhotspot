@@ -1924,10 +1924,149 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             update_state(engine={"ap_logs_tail": ap_logs})
         _kill_runtime_processes(ap_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
         _remove_conf_dirs(ap_ifname)
+    elif (not optimized_no_virt) and driver_error and (not bridge_mode) and bp in ("2.4ghz", "5ghz"):
+        warnings.append("optimized_virt_retry_with_no_virt")
+        retry_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        retry_beacon_interval = int(cfg.get("beacon_interval", 50))
+        retry_dtim_period = int(cfg.get("dtim_period", 1))
+        retry_short_guard_interval = bool(cfg.get("short_guard_interval", True))
+        retry_tx_power = cfg.get("tx_power")
+        if retry_tx_power is not None:
+            try:
+                retry_tx_power = int(retry_tx_power)
+            except Exception:
+                retry_tx_power = None
+
+        if use_hostapd_nat:
+            cmd_retry = build_cmd_nat(
+                ap_ifname=ap_ifname,
+                ssid=ssid,
+                passphrase=passphrase,
+                band=bp,
+                ap_security=ap_security,
+                country=country if isinstance(country, str) else None,
+                channel=selected_channel,
+                no_virt=True,
+                debug=debug,
+                wifi6=effective_wifi6,
+                gateway_ip=gateway_ip,
+                dhcp_start_ip=dhcp_start_ip,
+                dhcp_end_ip=dhcp_end_ip,
+                dhcp_dns=dhcp_dns,
+                enable_internet=enable_internet,
+                channel_width=retry_channel_width,
+                beacon_interval=retry_beacon_interval,
+                dtim_period=retry_dtim_period,
+                short_guard_interval=retry_short_guard_interval,
+                tx_power=retry_tx_power,
+            )
+        else:
+            cmd_retry = build_cmd(
+                ap_ifname=ap_ifname,
+                ssid=ssid,
+                passphrase=passphrase,
+                band_preference=bp,
+                country=country if isinstance(country, str) else None,
+                channel=selected_channel,
+                no_virt=True,
+                wifi6=effective_wifi6,
+                gateway_ip=gateway_ip,
+                dhcp_dns=dhcp_dns,
+                enable_internet=enable_internet,
+            )
+
+        res_retry = start_engine(cmd_retry, firewalld_cfg=fw_cfg)
+        update_state(
+            adapter=ap_ifname,
+            engine={
+                "pid": res_retry.pid,
+                "cmd": res_retry.cmd,
+                "started_ts": res_retry.started_ts,
+                "last_exit_code": res_retry.exit_code,
+                "last_error": res_retry.error,
+                "stdout_tail": res_retry.stdout_tail,
+                "stderr_tail": res_retry.stderr_tail,
+                "ap_logs_tail": [],
+            },
+        )
+
+        ap_info_retry = None
+        if res_retry.ok:
+            retry_expected_ifname = ap_ifname if use_hostapd_nat else None
+            ap_info_retry = _wait_for_ap_ready(
+                target_phy,
+                ap_ready_timeout_s,
+                ssid=ssid,
+                adapter_ifname=ap_ifname,
+                expected_ap_ifname=retry_expected_ifname,
+            )
+
+        if ap_info_retry:
+            detected_band = _band_from_freq_mhz(ap_info_retry.freq_mhz) or bp
+            affinity_pids = _collect_affinity_pids(
+                adapter_ifname=ap_ifname,
+                ap_interface=ap_info_retry.ifname,
+                engine_pid=res_retry.pid,
+            )
+            try:
+                tuning_state, runtime_warnings = system_tuning.apply_runtime(
+                    tuning_state,
+                    cfg,
+                    ap_ifname=ap_info_retry.ifname,
+                    adapter_ifname=ap_ifname,
+                    cpu_affinity_pids=affinity_pids,
+                )
+            except Exception as e:
+                runtime_warnings = [f"system_tuning_runtime_failed:{e}"]
+            if runtime_warnings:
+                warnings.extend(runtime_warnings)
+            try:
+                net_state, net_warnings = network_tuning.apply(
+                    cfg,
+                    ap_ifname=ap_info_retry.ifname,
+                    enable_internet=enable_internet,
+                    firewalld_cfg=fw_cfg,
+                )
+            except Exception as e:
+                net_state = {}
+                net_warnings = [f"network_tuning_apply_failed:{e}"]
+            if net_warnings:
+                warnings.extend(net_warnings)
+            state = update_state(
+                phase="running",
+                running=True,
+                ap_interface=ap_info_retry.ifname,
+                band=detected_band,
+                mode="fallback",
+                fallback_reason="virt_retry_no_virt",
+                warnings=warnings,
+                last_error=None,
+                last_correlation_id=correlation_id,
+                tuning=tuning_state,
+                network_tuning=net_state,
+                engine={"last_error": None, "last_exit_code": None, "ap_logs_tail": []},
+            )
+            if _watchdog_enabled(cfg) and is_running():
+                _ensure_watchdog_started()
+            return LifecycleResult("started_with_fallback", state)
+
+        warnings.append("optimized_virt_retry_failed")
+        try:
+            ap_candidate = _select_ap_from_iw(_iw_dev_dump(), target_phy=target_phy, ssid=ssid)
+        except Exception:
+            ap_candidate = None
+        ap_logs = _collect_ap_logs(ap_ifname, ap_candidate.ifname if ap_candidate else None)
+        if ap_logs:
+            update_state(engine={"ap_logs_tail": ap_logs})
+        _kill_runtime_processes(ap_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
+        _remove_conf_dirs(ap_ifname)
     fallback_no_virt = optimized_no_virt
     if optimized_no_virt and driver_error:
         fallback_no_virt = False
         warnings.append("optimized_no_virt_disabled_on_driver_error")
+    elif (not optimized_no_virt) and driver_error:
+        fallback_no_virt = True
+        warnings.append("optimized_virt_disabled_on_driver_error")
 
     fallback_chain: List[Tuple[str, Optional[int], bool, str]] = []
 
