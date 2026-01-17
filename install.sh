@@ -171,7 +171,7 @@ get_source_files() {
 configure_install() {
     print_step "Configuring installation..."
     if [ "$INTERACTIVE" -eq 1 ]; then
-        interactive_read -p "Enable autostart at boot? (y/N) " -n 1 -r || true; echo
+        interactive_read -p "Enable hotspot autostart at boot? (y/N) " -n 1 -r || true; echo
         [[ "$REPLY" =~ ^[Yy]$ ]] && ENABLE_AUTOSTART="y" || ENABLE_AUTOSTART="n"
 
         interactive_read -p "Enable remote access? (NOT for public networks) (y/N) " -n 1 -r || true; echo

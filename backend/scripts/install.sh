@@ -13,8 +13,8 @@ installation of the backend files and systemd services.
 
 Options:
   --install-dir <path>      Install backend into this directory (default: /var/lib/vr-hotspot/app)
-  --enable-autostart        Enable autostart oneshot service
-  --disable-autostart       Disable autostart oneshot service
+  --enable-autostart        Enable hotspot autostart on boot (config only)
+  --disable-autostart       Disable hotspot autostart on boot (config only)
   -h, --help                 Show this help
 USAGE
 }
@@ -97,13 +97,8 @@ EOF
 log "Reloading systemd"
 systemctl daemon-reload
 
-if [[ "$ENABLE_AUTOSTART" == "1" ]]; then
-  log "Enabling vr-hotspotd.service (Autostart ENABLED)"
-  systemctl enable vr-hotspotd.service
-else
-  log "Disabling vr-hotspotd.service (Autostart DISABLED)"
-  systemctl disable vr-hotspotd.service 2>/dev/null || true
-fi
+log "Enabling vr-hotspotd.service (daemon always enabled)"
+systemctl enable vr-hotspotd.service
 
 log "Starting vr-hotspotd.service"
 systemctl restart vr-hotspotd.service
