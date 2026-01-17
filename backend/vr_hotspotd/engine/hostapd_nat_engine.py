@@ -311,6 +311,29 @@ def _write_hostapd_conf(
     chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
     chwidth = chwidth_map.get(channel_width.lower(), 2)
 
+    def _vht_center_seg0_idx_5ghz(primary_channel: int, width: int) -> Optional[int]:
+        if width < 2:
+            return None
+        if width == 2:
+            blocks = (
+                (36, 48, 42),
+                (52, 64, 58),
+                (100, 112, 106),
+                (116, 128, 122),
+                (132, 144, 138),
+                (149, 161, 155),
+            )
+        else:
+            blocks = (
+                (36, 64, 50),
+                (100, 128, 114),
+                (149, 177, 163),
+            )
+        for start, end, center in blocks:
+            if start <= primary_channel <= end:
+                return center
+        return None
+
     if compat:
         beacon_interval = 100
         dtim_period = 2
@@ -347,8 +370,10 @@ def _write_hostapd_conf(
                         vht_caps.append("SHORT-GI-160")
                     lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
             if chwidth >= 2:
-                lines.append(f"vht_oper_chwidth={chwidth - 1}")
-                lines.append(f"vht_oper_centr_freq_seg0_idx={int(channel)}")
+                seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
+                if seg0 is not None:
+                    lines.append(f"vht_oper_chwidth={chwidth - 1}")
+                    lines.append(f"vht_oper_centr_freq_seg0_idx={seg0}")
     else:
         raise RuntimeError("invalid_band")
 

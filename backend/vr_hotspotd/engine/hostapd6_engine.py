@@ -217,6 +217,22 @@ def _write_hostapd_6ghz_conf(
     # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
     chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
     chwidth = chwidth_map.get(channel_width.lower(), 2)  # Default to 80MHz for VR
+
+    def _he_center_seg0_idx_6ghz(primary_channel: int, width: int) -> Optional[int]:
+        if width < 2:
+            return None
+        if (primary_channel - 1) % 4 != 0:
+            return None
+        if width == 2:
+            block = 16
+            offset = 6
+        else:
+            block = 32
+            offset = 14
+        start = primary_channel - ((primary_channel - 1) % block)
+        return start + offset
+
+    seg0 = _he_center_seg0_idx_6ghz(int(channel), chwidth)
     
     lines = [
         f"interface={ifname}",
@@ -233,8 +249,9 @@ def _write_hostapd_6ghz_conf(
         "wmm_enabled=1",
         # 6 GHz HE operating params
         f"he_oper_chwidth={chwidth}",
-        f"he_oper_centr_freq_seg0_idx={int(channel)}",
     ]
+    if seg0 is not None:
+        lines.append(f"he_oper_centr_freq_seg0_idx={seg0}")
     
     if short_guard_interval:
         # Short guard interval for improved throughput

@@ -195,6 +195,43 @@ def _write_hostapd_conf(
     # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
     chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
     chwidth = chwidth_map.get(channel_width.lower(), 2)  # Default to 80MHz for VR
+
+    def _vht_center_seg0_idx_5ghz(primary_channel: int, width: int) -> Optional[int]:
+        if width < 2:
+            return None
+        if width == 2:
+            blocks = (
+                (36, 48, 42),
+                (52, 64, 58),
+                (100, 112, 106),
+                (116, 128, 122),
+                (132, 144, 138),
+                (149, 161, 155),
+            )
+        else:
+            blocks = (
+                (36, 64, 50),
+                (100, 128, 114),
+                (149, 177, 163),
+            )
+        for start, end, center in blocks:
+            if start <= primary_channel <= end:
+                return center
+        return None
+
+    def _he_center_seg0_idx_6ghz(primary_channel: int, width: int) -> Optional[int]:
+        if width < 2:
+            return None
+        if (primary_channel - 1) % 4 != 0:
+            return None
+        if width == 2:
+            block = 16
+            offset = 6
+        else:
+            block = 32
+            offset = 14
+        start = primary_channel - ((primary_channel - 1) % block)
+        return start + offset
     
     lines = [
         f"interface={ifname}",
@@ -226,17 +263,21 @@ def _write_hostapd_conf(
                 lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
         # VHT channel width
         if chwidth >= 2:
-            lines.append(f"vht_oper_chwidth={chwidth - 1}")  # 1=80MHz, 2=160MHz
-            lines.append(f"vht_oper_centr_freq_seg0_idx={int(channel)}")
+            seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
+            if seg0 is not None:
+                lines.append(f"vht_oper_chwidth={chwidth - 1}")  # 1=80MHz, 2=160MHz
+                lines.append(f"vht_oper_centr_freq_seg0_idx={seg0}")
     elif band == "6ghz":
+        seg0_6g = _he_center_seg0_idx_6ghz(int(channel), chwidth)
         lines += [
             "hw_mode=a",
             f"channel={int(channel)}",
             "op_class=131",
             "ieee80211ax=1",
             f"he_oper_chwidth={chwidth}",
-            f"he_oper_centr_freq_seg0_idx={int(channel)}",
         ]
+        if seg0_6g is not None:
+            lines.append(f"he_oper_centr_freq_seg0_idx={seg0_6g}")
         # MIMO/Beamforming for WiFi 6
         lines += [
             "he_su_beamformee=1",
@@ -254,7 +295,9 @@ def _write_hostapd_conf(
         ]
         if band == "5ghz":
             lines.append(f"he_oper_chwidth={chwidth}")
-            lines.append(f"he_oper_centr_freq_seg0_idx={int(channel)}")
+            seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
+            if seg0 is not None:
+                lines.append(f"he_oper_centr_freq_seg0_idx={seg0}")
         
         # Frame aggregation for improved throughput
         lines += [
