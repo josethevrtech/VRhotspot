@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import signal
@@ -11,10 +12,12 @@ from dataclasses import dataclass
 from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 from . import firewalld  # SteamOS: firewalld owns nftables
-from vr_hotspotd.vendor_paths import resolve_vendor_required, vendor_bin_dirs, vendor_lib_dirs
+from vr_hotspotd.vendor_paths import resolve_vendor_exe, resolve_vendor_required, vendor_bin_dirs, vendor_lib_dirs
 
 ENGINE_STDOUT_MAX_LINES = 200
 ENGINE_STDERR_MAX_LINES = 200
+
+log = logging.getLogger("vr_hotspotd.engine.supervisor")
 
 _ln_proc: Optional[subprocess.Popen] = None
 _stdout_tail: Deque[str] = deque(maxlen=ENGINE_STDOUT_MAX_LINES)
@@ -83,7 +86,18 @@ def _hostapd_supports_ht_vht(
             env=env,
         )
     except Exception as e:
-        return {"supports_ht": False, "supports_vht": False, "unknown": [], "rc": None, "error": str(e)}
+        return {
+            "supports_ht": False,
+            "supports_vht": False,
+            "supports_secondary_channel": False,
+            "supports_ieee80211ac": False,
+            "supports_vht_oper_chwidth": False,
+            "supports_vht_oper_centr_freq_seg0_idx": False,
+            "unknown": [],
+            "unknown_keys": [],
+            "rc": None,
+            "error": str(e),
+        }
     finally:
         if conf_path:
             try:
@@ -95,14 +109,24 @@ def _hostapd_supports_ht_vht(
     out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
     unknown = _HOSTAPD_UNKNOWN_RE.findall(out)
     unknown_set = {u.strip() for u in unknown}
-    supports_ht = "secondary_channel" not in unknown_set
-    supports_vht = not bool(
-        {"ieee80211ac", "vht_oper_chwidth", "vht_oper_centr_freq_seg0_idx"} & unknown_set
+    supports_secondary_channel = "secondary_channel" not in unknown_set
+    supports_ieee80211ac = "ieee80211ac" not in unknown_set
+    supports_vht_oper_chwidth = "vht_oper_chwidth" not in unknown_set
+    supports_vht_oper_centr_freq_seg0_idx = "vht_oper_centr_freq_seg0_idx" not in unknown_set
+    supports_ht = supports_secondary_channel
+    supports_vht = bool(
+        supports_ieee80211ac and supports_vht_oper_chwidth and supports_vht_oper_centr_freq_seg0_idx
     )
+    unknown_keys = sorted(unknown_set)
     return {
         "supports_ht": supports_ht,
         "supports_vht": supports_vht,
-        "unknown": sorted(unknown_set),
+        "supports_secondary_channel": supports_secondary_channel,
+        "supports_ieee80211ac": supports_ieee80211ac,
+        "supports_vht_oper_chwidth": supports_vht_oper_chwidth,
+        "supports_vht_oper_centr_freq_seg0_idx": supports_vht_oper_centr_freq_seg0_idx,
+        "unknown": unknown_keys,
+        "unknown_keys": unknown_keys,
         "rc": p.returncode,
     }
 
@@ -110,6 +134,25 @@ def _hostapd_supports_ht_vht(
 def _note(msg: str) -> None:
     # Keep supervisor notes in stderr tail so they show up for diagnostics.
     _stderr_tail.append(f"[supervisor] {msg}")
+
+
+def _note_hostapd_caps(source: str, probe: Dict[str, object]) -> None:
+    unknown_keys = probe.get("unknown_keys")
+    if not isinstance(unknown_keys, list):
+        unknown_keys = probe.get("unknown")
+    if not isinstance(unknown_keys, list):
+        unknown_keys = []
+    _note(
+        "INFO hostapd_caps "
+        f"source={source} "
+        f"supports_secondary_channel={bool(probe.get('supports_secondary_channel'))} "
+        f"supports_ieee80211ac={bool(probe.get('supports_ieee80211ac'))} "
+        f"supports_vht_oper_chwidth={bool(probe.get('supports_vht_oper_chwidth'))} "
+        f"supports_vht_oper_centr_freq_seg0_idx={bool(probe.get('supports_vht_oper_centr_freq_seg0_idx'))} "
+        f"supports_ht={bool(probe.get('supports_ht'))} "
+        f"supports_vht={bool(probe.get('supports_vht'))} "
+        f"unknown_keys={json.dumps(unknown_keys)}"
+    )
 
 
 def _reader_thread(stream, tail: Deque[str], label: str) -> None:
@@ -351,17 +394,9 @@ def _build_engine_env() -> Dict[str, str]:
         )
 
         if sys_probe:
-            _note(
-                "hostapd_probe sys ht="
-                f"{sys_probe.get('supports_ht')} vht={sys_probe.get('supports_vht')} "
-                f"unknown={sys_probe.get('unknown')}"
-            )
+            _note_hostapd_caps("sys", sys_probe)
         if vendor_probe:
-            _note(
-                "hostapd_probe vendor ht="
-                f"{vendor_probe.get('supports_ht')} vht={vendor_probe.get('supports_vht')} "
-                f"unknown={vendor_probe.get('unknown')}"
-            )
+            _note_hostapd_caps("vendor", vendor_probe)
 
     def _supports_vht(p: Optional[Dict[str, object]]) -> bool:
         return bool(p and p.get("supports_vht"))
@@ -425,6 +460,31 @@ def _build_engine_env() -> Dict[str, str]:
 
     env.setdefault("LC_ALL", "C")
     env.setdefault("LANG", "C")
+
+    hostapd_cli = None
+    if chosen_hostapd:
+        hostapd_dir = os.path.dirname(chosen_hostapd)
+        cand = os.path.join(hostapd_dir, "hostapd_cli")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            hostapd_cli = cand
+    if not hostapd_cli:
+        hostapd_cli = _which_in_path("hostapd_cli", env.get("PATH", ""))
+
+    lnxrouter_path, _, _ = resolve_vendor_exe("lnxrouter")
+    if not lnxrouter_path:
+        fallback = str(vendor_bins[-1]) if vendor_bins else "/var/lib/vr-hotspot/app/backend/vendor/bin"
+        lnxrouter_path = os.path.join(fallback, "lnxrouter")
+
+    log.info(
+        "engine_bins hostapd=%s hostapd_cli=%s dnsmasq=%s lnxrouter=%s PATH0=%s LD0=%s vendor_bins=%s",
+        chosen_hostapd,
+        hostapd_cli,
+        chosen_dnsmasq,
+        lnxrouter_path,
+        env.get("PATH", "")[:160],
+        env.get("LD_LIBRARY_PATH", "")[:160],
+        [str(p) for p in vendor_bins],
+    )
     return env
 
 

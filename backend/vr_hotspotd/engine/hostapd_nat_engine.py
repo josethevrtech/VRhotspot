@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
 _CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
 
@@ -19,6 +19,11 @@ def _run(cmd: List[str], check: bool = True) -> Tuple[int, str]:
     if check and p.returncode != 0:
         raise RuntimeError(f"cmd_failed rc={p.returncode} cmd={' '.join(cmd)} out={out.strip()}")
     return p.returncode, out
+
+
+def _run_capture(cmd: List[str]) -> Tuple[int, str, str]:
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    return p.returncode, p.stdout or "", p.stderr or ""
 
 
 def _which_or_die(name: str) -> str:
@@ -36,6 +41,40 @@ def _resolve_binary(name: str, env_key: str) -> str:
     if not p:
         raise RuntimeError(f"{name}_not_found")
     return p
+
+
+def _iw_path() -> str:
+    return shutil.which("iw") or "/usr/sbin/iw"
+
+
+def _iface_driver_name(ifname: str) -> Optional[str]:
+    paths = (
+        f"/sys/class/net/{ifname}/device/driver/module",
+        f"/sys/class/net/{ifname}/device/driver",
+    )
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            target = os.path.realpath(path)
+        except Exception:
+            continue
+        base = os.path.basename(target)
+        if base:
+            return base
+    try:
+        with open(f"/sys/class/net/{ifname}/device/uevent", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("DRIVER="):
+                    return line.strip().split("=", 1)[1]
+    except Exception:
+        pass
+    return None
+
+
+def _iface_uses_driver(ifname: str, driver: str) -> bool:
+    name = _iface_driver_name(ifname)
+    return bool(name and name == driver)
 
 
 def _is_firewalld_active() -> bool:
@@ -76,13 +115,96 @@ def _mk_virt_name(base: str) -> str:
     return cand[:15]
 
 
-def _create_virtual_ap_iface(parent_if: str, virt_if: str) -> None:
-    iw = shutil.which("iw") or "/usr/sbin/iw"
-    _run([iw, "dev", parent_if, "interface", "add", virt_if, "type", "__ap"], check=True)
+_VALID_CHANNEL_WIDTHS = {"auto", "20", "40", "80", "160"}
+
+
+def _normalize_channel_width(band: str, requested: Optional[str], channel: Optional[int]) -> str:
+    requested_raw = str(requested or "auto").strip().lower()
+    requested_norm = requested_raw if requested_raw in _VALID_CHANNEL_WIDTHS else "auto"
+    if band == "2.4ghz":
+        normalized = "20"
+    else:
+        normalized = "80" if requested_norm == "auto" else requested_norm
+    if normalized != requested_raw:
+        print(
+            "WARNING hostapd_channel_width_clamped "
+            f"band={band} requested={requested_raw} normalized={normalized}"
+        )
+    return normalized
+
+
+def _one_line(value: str) -> str:
+    return value.replace("\r", "\\r").replace("\n", "\\n").strip()
+
+
+def _format_cmd_result(cmd: List[str], rc: int, stdout: str, stderr: str) -> str:
+    stdout_s = _one_line(stdout) or "none"
+    stderr_s = _one_line(stderr) or "none"
+    return f"cmd={' '.join(cmd)} rc={rc} stdout={stdout_s} stderr={stderr_s}"
+
+
+def _parse_wiphy_from_iw_dev(output: str, ifname: str) -> Optional[str]:
+    current_phy: Optional[str] = None
+    for line in output.splitlines():
+        s = line.strip()
+        if s.startswith("phy#"):
+            current_phy = s.split("#", 1)[1]
+            continue
+        if s.startswith("Interface "):
+            parts = s.split()
+            if len(parts) > 1 and parts[1] == ifname:
+                return current_phy
+    return None
+
+
+def _iw_wiphy_for_interface(ifname: str) -> Optional[str]:
+    iw = _iw_path()
+    rc, out, _ = _run_capture([iw, "dev", ifname, "info"])
+    if rc == 0:
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith("wiphy "):
+                parts = s.split()
+                if len(parts) > 1:
+                    return parts[1]
+    rc, out, _ = _run_capture([iw, "dev"])
+    if rc != 0:
+        return None
+    return _parse_wiphy_from_iw_dev(out, ifname)
+
+
+def _iw_interface_exists(ifname: str) -> bool:
+    iw = _iw_path()
+    rc, out, _ = _run_capture([iw, "dev"])
+    if rc != 0:
+        return False
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("Interface "):
+            parts = s.split()
+            if len(parts) > 1 and parts[1] == ifname:
+                return True
+    return False
+
+
+def _create_virtual_ap_iface(parent_if: str, virt_if: str) -> Tuple[bool, str]:
+    iw = _iw_path()
+    attempts: List[str] = []
+    wiphy = _iw_wiphy_for_interface(parent_if)
+    if wiphy:
+        cmd = [iw, "phy", wiphy, "interface", "add", virt_if, "type", "__ap"]
+        rc, out, err = _run_capture(cmd)
+        attempts.append(_format_cmd_result(cmd, rc, out, err))
+        if rc == 0:
+            return True, " | ".join(attempts)
+    cmd = [iw, "dev", parent_if, "interface", "add", virt_if, "type", "__ap"]
+    rc, out, err = _run_capture(cmd)
+    attempts.append(_format_cmd_result(cmd, rc, out, err))
+    return rc == 0, " | ".join(attempts)
 
 
 def _delete_iface(ifname: str) -> None:
-    iw = shutil.which("iw") or "/usr/sbin/iw"
+    iw = _iw_path()
     subprocess.run([iw, "dev", ifname, "del"], check=False, capture_output=True, text=True)
 
 
@@ -193,6 +315,60 @@ def _nm_set_managed(ifname: str, managed: bool) -> bool:
     return ok
 
 
+def _nm_managed_state(ifname: str) -> Optional[bool]:
+    nmcli = _nmcli_path()
+    if not nmcli:
+        return None
+    p = subprocess.run(
+        [nmcli, "-t", "-f", "GENERAL.MANAGED", "dev", "show", ifname],
+        capture_output=True,
+        text=True,
+    )
+    if p.returncode != 0:
+        return None
+    for line in (p.stdout or "").splitlines():
+        if line.startswith("GENERAL.MANAGED:"):
+            value = line.split(":", 1)[1].strip().lower()
+            if value == "yes":
+                return True
+            if value == "no":
+                return False
+    return None
+
+
+def _nm_isolate_iface(ifname: str) -> bool:
+    nmcli = _nmcli_path()
+    marked_unmanaged = False
+    if nmcli and _is_nm_running():
+        if _nm_knows(ifname):
+            rc, out, err = _run_capture([nmcli, "dev", "disconnect", ifname])
+            if rc != 0:
+                err_s = _one_line(err or out) or "unknown"
+                print(f"WARNING nmcli_disconnect_failed iface={ifname} err={err_s}")
+            rc, out, err = _run_capture([nmcli, "dev", "set", ifname, "managed", "no"])
+            if rc != 0:
+                err_s = _one_line(err or out) or "unknown"
+                print(f"WARNING nmcli_set_managed_failed iface={ifname} err={err_s}")
+            else:
+                marked_unmanaged = True
+        else:
+            print(f"WARNING nmcli_iface_unknown iface={ifname}")
+    elif nmcli:
+        print(f"WARNING nmcli_not_running iface={ifname}")
+
+    _iface_down(ifname)
+    _flush_ip(ifname)
+    _iface_up(ifname)
+
+    managed = _nm_managed_state(ifname)
+    if managed is None:
+        print(f"nmcli_managed_state iface={ifname} managed=unknown")
+    else:
+        print(f"nmcli_managed_state iface={ifname} managed={'yes' if managed else 'no'}")
+
+    return marked_unmanaged
+
+
 def _rfkill_unblock_wifi() -> None:
     rfkill = shutil.which("rfkill")
     if not rfkill:
@@ -216,6 +392,27 @@ def _emit_lines(lines: List[str]) -> None:
     for line in lines:
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
+
+
+def _select_ap_iface(parent_ifname: str, no_virt: bool) -> Tuple[str, Optional[str], bool]:
+    if no_virt:
+        return parent_ifname, None, False
+    virt_ifname = _mk_virt_name(parent_ifname)
+    if _iface_uses_driver(parent_ifname, "mt7921u"):
+        print(
+            "INFO hostapd_virt_skip "
+            f"iface={parent_ifname} virt={virt_ifname} driver=mt7921u"
+        )
+        return parent_ifname, virt_ifname, False
+    created, details = _create_virtual_ap_iface(parent_ifname, virt_ifname)
+    if _iw_interface_exists(virt_ifname):
+        return virt_ifname, virt_ifname, created
+    warn_details = details or "none"
+    print(
+        "WARNING hostapd_virt_iface_missing "
+        f"parent={parent_ifname} virt={virt_ifname} details={warn_details}"
+    )
+    return parent_ifname, virt_ifname, False
 
 
 _COMPAT_ERROR_PATTERNS = (
@@ -305,16 +502,32 @@ def _write_hostapd_conf(
     short_guard_interval: bool = True,
     tx_power: Optional[int] = None,
     mode: str = "full",
-) -> None:
+) -> Dict[str, Optional[int]]:
     cc = (country or "").strip().upper()
 
     chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
     chwidth = chwidth_map.get(channel_width.lower(), 2)
+    width_mhz_map = {0: 20, 1: 40, 2: 80, 3: 160}
+    channel_width_mhz = width_mhz_map.get(chwidth, 80)
     mode = (mode or "full").strip().lower()
     if mode not in ("full", "reduced", "legacy"):
         mode = "full"
     compat = mode == "legacy"
     reduced = mode == "reduced"
+
+    secondary_channel: Optional[int] = None
+    ieee80211n = 0
+    ieee80211ac = 0
+    ieee80211ax = 0
+    vht_oper_chwidth: Optional[int] = None
+    vht_oper_centr_freq_seg0_idx: Optional[int] = None
+
+    def _secondary_channel_5ghz(primary_channel: int) -> int:
+        if primary_channel in {36, 44, 149, 157}:
+            return 1
+        if primary_channel in {40, 48, 153, 161}:
+            return -1
+        return 1
 
     def _vht_center_seg0_idx_5ghz(primary_channel: int, width: int) -> Optional[int]:
         if width < 2:
@@ -358,33 +571,46 @@ def _write_hostapd_conf(
         lines += [f"country_code={cc}", "ieee80211d=1"]
 
     if band == "2.4ghz":
+        channel_width_mhz = 20
         lines += ["hw_mode=g", f"channel={int(channel)}"]
         if not compat:
+            ieee80211n = 1
             lines.append("ieee80211n=1")
             if short_guard_interval:
                 lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
     elif band == "5ghz":
         lines += ["hw_mode=a", f"channel={int(channel)}"]
         if not compat:
+            ieee80211n = 1
             lines.append("ieee80211n=1")
-            if not reduced:
-                lines.append("ieee80211ac=1")
+            ht_caps = []
             if short_guard_interval:
-                lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
-                if (not reduced) and chwidth >= 2:
-                    vht_caps = ["SHORT-GI-80"]
-                    if chwidth >= 3:
+                ht_caps.extend(["SHORT-GI-20", "SHORT-GI-40"])
+            if channel_width_mhz >= 40:
+                secondary_channel = _secondary_channel_5ghz(int(channel))
+                ht_caps.append("HT40+" if secondary_channel == 1 else "HT40-")
+            if ht_caps:
+                lines.append(f"ht_capab=[{']['.join(ht_caps)}]")
+
+            if not reduced:
+                ieee80211ac = 1
+                lines.append("ieee80211ac=1")
+                if channel_width_mhz >= 80:
+                    vht_caps = ["SHORT-GI-80", "RXLDPC", "TX-STBC-2BY1", "RX-STBC-1"]
+                    if channel_width_mhz >= 160:
                         vht_caps.append("SHORT-GI-160")
                     lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
-            if (not reduced) and chwidth >= 2:
-                seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
-                if seg0 is not None:
-                    lines.append(f"vht_oper_chwidth={chwidth - 1}")
-                    lines.append(f"vht_oper_centr_freq_seg0_idx={seg0}")
+                    vht_oper_chwidth = 1 if channel_width_mhz == 80 else 2
+                    lines.append(f"vht_oper_chwidth={vht_oper_chwidth}")
+                    seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
+                    if seg0 is not None:
+                        vht_oper_centr_freq_seg0_idx = seg0
+                        lines.append(f"vht_oper_centr_freq_seg0_idx={seg0}")
     else:
         raise RuntimeError("invalid_band")
 
     if wifi6 and not compat and not reduced:
+        ieee80211ax = 1
         lines.append("ieee80211ax=1")
         lines += [
             "he_su_beamformee=1",
@@ -415,6 +641,37 @@ def _write_hostapd_conf(
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     os.chmod(path, 0o600)
+    return {
+        "channel": int(channel),
+        "channel_width_mhz": channel_width_mhz,
+        "secondary_channel": secondary_channel,
+        "ieee80211n": ieee80211n,
+        "ieee80211ac": ieee80211ac,
+        "ieee80211ax": ieee80211ax,
+        "vht_oper_chwidth": vht_oper_chwidth,
+        "vht_oper_centr_freq_seg0_idx": vht_oper_centr_freq_seg0_idx,
+    }
+
+
+def _emit_hostapd_launch_info(info: Dict[str, Optional[int]]) -> None:
+    secondary = info["secondary_channel"]
+    parts = [
+        "INFO",
+        "hostapd_nat_config",
+        f"channel={info['channel']}",
+        f"channel_width_mhz={info['channel_width_mhz']}",
+        f"secondary_channel={'none' if secondary is None else secondary}",
+        f"ieee80211n={info['ieee80211n']}",
+        f"ieee80211ac={info['ieee80211ac']}",
+        f"ieee80211ax={info['ieee80211ax']}",
+    ]
+    vht_oper_chwidth = info["vht_oper_chwidth"]
+    if vht_oper_chwidth is not None:
+        parts.append(f"vht_oper_chwidth={vht_oper_chwidth}")
+    vht_seg0 = info["vht_oper_centr_freq_seg0_idx"]
+    if vht_seg0 is not None:
+        parts.append(f"vht_oper_centr_freq_seg0_idx={vht_seg0}")
+    print(" ".join(parts))
 
 
 def _write_dnsmasq_conf(
@@ -520,37 +777,24 @@ def main() -> int:
 
     tmpdir = tempfile.mkdtemp(prefix="vr-hotspotd-nat-")
     hostapd_conf = os.path.join(tmpdir, "hostapd.conf")
+    hostapd_log = os.path.join(tmpdir, "hostapd.log")
     dnsmasq_conf = os.path.join(tmpdir, "dnsmasq.conf")
 
-    created_virt = False
-    ap_iface = args.ap_ifname
-
-    if not args.no_virt:
-        virt = _mk_virt_name(args.ap_ifname)
-        _create_virtual_ap_iface(args.ap_ifname, virt)
-        created_virt = True
-        ap_iface = virt
-
-    nm_marked_unmanaged: Optional[str] = None
-    if _is_nm_running() and _nm_knows(ap_iface):
-        _nm_disconnect(ap_iface)
-        if _nm_set_managed(ap_iface, False):
-            nm_marked_unmanaged = ap_iface
+    ap_iface, virt_iface, created_virt = _select_ap_iface(args.ap_ifname, args.no_virt)
 
     _rfkill_unblock_wifi()
-
-    _iface_down(ap_iface)
-    _flush_ip(ap_iface)
-    _iface_up(ap_iface)
+    nm_marked_unmanaged: Optional[str] = None
 
     channel = int(args.channel) if args.channel is not None else (6 if band == "2.4ghz" else 36)
+    requested_channel_width = str(args.channel_width or "auto").lower()
+    normalized_channel_width = _normalize_channel_width(band, requested_channel_width, channel)
 
     mode = "full"
     hostapd_p: Optional[subprocess.Popen] = None
     early_rc: Optional[int] = None
 
     while True:
-        _write_hostapd_conf(
+        hostapd_info = _write_hostapd_conf(
             path=hostapd_conf,
             ifname=ap_iface,
             ssid=args.ssid,
@@ -560,19 +804,62 @@ def main() -> int:
             channel=channel,
             ap_security=str(args.ap_security).strip().lower(),
             wifi6=bool(args.wifi6),
-            channel_width=args.channel_width,
+            channel_width=normalized_channel_width,
             beacon_interval=args.beacon_interval,
             dtim_period=args.dtim_period,
             short_guard_interval=args.short_guard_interval,
             tx_power=args.tx_power,
             mode=mode,
         )
+        secondary_channel = hostapd_info["secondary_channel"]
+        vht_oper_chwidth = hostapd_info["vht_oper_chwidth"]
+        vht_seg0 = hostapd_info["vht_oper_centr_freq_seg0_idx"]
+        channel_width_mhz = hostapd_info["channel_width_mhz"]
+        reduced = mode == "reduced"
+        parts = [
+            "INFO",
+            "hostapd_write_conf",
+            f"mode={mode}",
+            f"band={band}",
+            f"primary_channel={channel}",
+            f"requested_width_mhz={channel_width_mhz}",
+            f"reduced={'true' if reduced else 'false'}",
+            f"secondary_channel={'none' if secondary_channel is None else secondary_channel}",
+            f"ieee80211ac={hostapd_info['ieee80211ac']}",
+            f"ieee80211ax={hostapd_info['ieee80211ax']}",
+            f"vht_oper_chwidth={'none' if vht_oper_chwidth is None else vht_oper_chwidth}",
+            f"vht_oper_centr_freq_seg0_idx={'none' if vht_seg0 is None else vht_seg0}",
+        ]
+        print(" ".join(parts))
+        if channel_width_mhz >= 80 or args.debug:
+            print(f"hostapd_conf_path={hostapd_conf}")
+            print(f"hostapd_log_path={hostapd_log}")
+            print(
+                "hostapd_conf_key "
+                f"channel={channel} "
+                f"width_mhz={channel_width_mhz} "
+                f"ieee80211ac={hostapd_info['ieee80211ac']} "
+                f"vht_oper_chwidth={'none' if vht_oper_chwidth is None else vht_oper_chwidth} "
+                f"vht_oper_centr_freq_seg0_idx={'none' if vht_seg0 is None else vht_seg0}"
+            )
+            with open(hostapd_conf, "r", encoding="utf-8") as f:
+                for line in f:
+                    print(f"hostapd_conf: {line.rstrip()}")
         _ensure_ctrl_interface_dir(hostapd_conf)
-        hostapd_cmd = [hostapd, hostapd_conf]
+        if _nm_isolate_iface(ap_iface) and nm_marked_unmanaged is None:
+            nm_marked_unmanaged = ap_iface
+        os.makedirs(tmpdir, exist_ok=True)
+        try:
+            with open(hostapd_log, "a", encoding="utf-8"):
+                pass
+        except Exception as exc:
+            print(f"hostapd_log_touch_failed: {hostapd_log} err={exc}")
+        hostapd_cmd = [hostapd, "-f", hostapd_log, hostapd_conf]
 
         if args.debug:
-            hostapd_cmd = [hostapd, "-dd", hostapd_conf]
+            hostapd_cmd = [hostapd, "-dd", "-f", hostapd_log, hostapd_conf]
 
+        _emit_hostapd_launch_info(hostapd_info)
         hostapd_p = subprocess.Popen(
             hostapd_cmd,
             stdout=subprocess.PIPE,
@@ -683,8 +970,8 @@ def main() -> int:
         except Exception:
             pass
 
-        if created_virt:
-            _delete_iface(ap_iface)
+        if created_virt and virt_iface:
+            _delete_iface(virt_iface)
 
         if nm_marked_unmanaged:
             _nm_set_managed(nm_marked_unmanaged, True)

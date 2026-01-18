@@ -2,6 +2,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import vr_hotspotd.lifecycle as lifecycle
+from vr_hotspotd.engine.hostapd_nat_cmd import build_cmd_nat
 from vr_hotspotd.state import DEFAULT_STATE
 
 
@@ -70,14 +71,72 @@ def _stubbed_env(monkeypatch, cfg, ap_ready_returns):
     ap_iter = iter(ap_ready_returns)
     monkeypatch.setattr(lifecycle, "_wait_for_ap_ready", lambda *_args, **_kwargs: next(ap_iter))
 
-    monkeypatch.setattr(lifecycle, "build_cmd_6ghz", lambda **_kwargs: ["cmd", "6ghz"])
+    def _build_engine_cmd(band, **kwargs):
+        return build_cmd_nat(
+            ap_ifname=kwargs.get("ap_ifname") or "wlan0",
+            ssid=kwargs.get("ssid") or cfg.get("ssid", "Test"),
+            passphrase=kwargs.get("passphrase") or cfg.get("wpa2_passphrase", "password123"),
+            band=band,
+            ap_security=str(cfg.get("ap_security", "wpa2")).lower(),
+            country=kwargs.get("country"),
+            channel=kwargs.get("channel"),
+            no_virt=kwargs.get("no_virt", False),
+            debug=kwargs.get("debug", False),
+            wifi6=kwargs.get("wifi6", True),
+            gateway_ip=kwargs.get("gateway_ip"),
+            dhcp_start_ip=kwargs.get("dhcp_start_ip"),
+            dhcp_end_ip=kwargs.get("dhcp_end_ip"),
+            dhcp_dns=kwargs.get("dhcp_dns"),
+            enable_internet=kwargs.get("enable_internet", True),
+            channel_width=kwargs.get("channel_width", "auto"),
+            beacon_interval=kwargs.get("beacon_interval", 50),
+            dtim_period=kwargs.get("dtim_period", 1),
+            short_guard_interval=kwargs.get("short_guard_interval", True),
+            tx_power=kwargs.get("tx_power"),
+        )
+
+    monkeypatch.setattr(
+        lifecycle,
+        "build_cmd_6ghz",
+        lambda **kwargs: _build_engine_cmd("6ghz", **kwargs),
+    )
     monkeypatch.setattr(
         lifecycle,
         "build_cmd",
-        lambda **kwargs: ["cmd", kwargs.get("band_preference")],
+        lambda **kwargs: _build_engine_cmd(str(kwargs.get("band_preference") or "5ghz"), **kwargs),
     )
 
     return state, calls
+
+
+def _bands_from_calls(calls):
+    bands = []
+    for call in calls:
+        if "--band" not in call:
+            raise AssertionError(f"missing --band in call: {call}")
+        band_index = call.index("--band")
+        if band_index + 1 >= len(call):
+            raise AssertionError(f"missing band value in call: {call}")
+        bands.append(call[band_index + 1])
+    return bands
+
+
+def _channel_width_for_band(calls, band):
+    for call in calls:
+        if "--band" not in call:
+            continue
+        band_index = call.index("--band")
+        if band_index + 1 >= len(call):
+            continue
+        if call[band_index + 1] != band:
+            continue
+        if "--channel-width" not in call:
+            raise AssertionError(f"missing --channel-width in call: {call}")
+        width_index = call.index("--channel-width")
+        if width_index + 1 >= len(call):
+            raise AssertionError(f"missing channel-width value in call: {call}")
+        return call[width_index + 1]
+    raise AssertionError(f"missing call for band {band}")
 
 
 def test_fallback_chain_6_to_5_to_2_4(monkeypatch):
@@ -109,7 +168,9 @@ def test_fallback_chain_6_to_5_to_2_4(monkeypatch):
     res = lifecycle._start_hotspot_impl(correlation_id="t1")
 
     assert res.code == "started_with_fallback"
-    assert calls == [["cmd", "6ghz"], ["cmd", "5ghz"], ["cmd", "2.4ghz"]]
+    bands = _bands_from_calls(calls)
+    assert bands == ["6ghz", "5ghz", "2.4ghz"]
+    assert _channel_width_for_band(calls, "2.4ghz") == "20"
     assert state["band"] == "2.4ghz"
     assert "fallback_to_5ghz" in state["warnings"]
     assert "fallback_to_2_4ghz" in state["warnings"]
@@ -142,7 +203,9 @@ def test_fallback_chain_5_to_2_4(monkeypatch):
     res = lifecycle._start_hotspot_impl(correlation_id="t2")
 
     assert res.code == "started_with_fallback"
-    assert calls == [["cmd", "5ghz"], ["cmd", "2.4ghz"]]
+    bands = _bands_from_calls(calls)
+    assert bands == ["5ghz", "2.4ghz"]
+    assert _channel_width_for_band(calls, "2.4ghz") == "20"
     assert state["band"] == "2.4ghz"
     assert "fallback_to_2_4ghz" in state["warnings"]
 
@@ -159,6 +222,7 @@ def test_no_fallback_for_2_4(monkeypatch):
     res = lifecycle._start_hotspot_impl(correlation_id="t3")
 
     assert res.code == "start_failed"
-    assert calls == [["cmd", "2.4ghz"]]
+    bands = _bands_from_calls(calls)
+    assert bands == ["2.4ghz"]
     assert state["phase"] == "error"
     assert state["last_error"] == "ap_ready_timeout"

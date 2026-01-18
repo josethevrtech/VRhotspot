@@ -55,6 +55,12 @@ log "Copying application files -> $INSTALL_DIR"
 # Copy source code
 mkdir -p "$INSTALL_DIR"
 cp -r "$BACKEND_SRC/../." "$INSTALL_DIR/"
+cp -a "$BACKEND_SRC/vendor" "$INSTALL_DIR/backend/"
+if [ -d "$INSTALL_DIR/backend/vendor/bin/bazzite" ]; then
+  log "INFO: bazzite_vendor_bundle_present=1"
+else
+  log "INFO: bazzite_vendor_bundle_present=0"
+fi
 
 # Ensure vendor binaries are executable if present
 if [[ -d "$INSTALL_DIR/backend/vendor/bin" ]]; then

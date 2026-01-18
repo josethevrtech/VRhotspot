@@ -64,6 +64,25 @@ def _virt_ap_ifname(base: str) -> str:
     return cand[:15]
 
 
+_VALID_CHANNEL_WIDTHS = {"auto", "20", "40", "80", "160"}
+
+
+def _normalize_channel_width(band: str, requested: Optional[str], channel: Optional[int]) -> str:
+    requested_raw = str(requested or "auto").strip().lower()
+    requested_norm = requested_raw if requested_raw in _VALID_CHANNEL_WIDTHS else "auto"
+    if band == "2.4ghz":
+        normalized = "20"
+    else:
+        normalized = "80" if requested_norm == "auto" else requested_norm
+    log.info(
+        "channel_width_normalized band=%s requested=%s normalized=%s",
+        band,
+        requested_raw,
+        normalized,
+    )
+    return normalized
+
+
 class LifecycleResult:
     def __init__(self, code, state):
         self.code = code
@@ -1539,7 +1558,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             except Exception:
                 bridge_channel = 6
 
-        channel_width = str(cfg.get("channel_width", "auto")).lower()
+        requested_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        channel_width = _normalize_channel_width(bp, requested_channel_width, bridge_channel)
         beacon_interval = int(cfg.get("beacon_interval", 50))
         dtim_period = int(cfg.get("dtim_period", 1))
         short_guard_interval = bool(cfg.get("short_guard_interval", True))
@@ -1591,7 +1611,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             except Exception:
                 channel_6g = None
 
-        channel_width = str(cfg.get("channel_width", "auto")).lower()
+        requested_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        channel_width = _normalize_channel_width("6ghz", requested_channel_width, channel_6g)
         beacon_interval = int(cfg.get("beacon_interval", 50))
         dtim_period = int(cfg.get("dtim_period", 1))
         short_guard_interval = bool(cfg.get("short_guard_interval", True))
@@ -1646,7 +1667,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             except Exception:
                 pass  # Best-effort
 
-        channel_width = str(cfg.get("channel_width", "auto")).lower()
+        requested_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        channel_width = _normalize_channel_width(bp, requested_channel_width, selected_channel)
         beacon_interval = int(cfg.get("beacon_interval", 50))
         dtim_period = int(cfg.get("dtim_period", 1))
         short_guard_interval = bool(cfg.get("short_guard_interval", True))
@@ -1810,7 +1832,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     driver_error = _stdout_has_hostapd_driver_error(latest_stdout or [])
     if optimized_no_virt and driver_error and (not bridge_mode) and bp in ("2.4ghz", "5ghz"):
         warnings.append("optimized_no_virt_retry_with_virt")
-        retry_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        retry_requested_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        retry_channel_width = _normalize_channel_width(bp, retry_requested_channel_width, selected_channel)
         retry_beacon_interval = int(cfg.get("beacon_interval", 50))
         retry_dtim_period = int(cfg.get("dtim_period", 1))
         retry_short_guard_interval = bool(cfg.get("short_guard_interval", True))
@@ -1947,7 +1970,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         _remove_conf_dirs(ap_ifname)
     elif (not optimized_no_virt) and driver_error and (not bridge_mode) and bp in ("2.4ghz", "5ghz"):
         warnings.append("optimized_virt_retry_with_no_virt")
-        retry_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        retry_requested_channel_width = str(cfg.get("channel_width", "auto")).lower()
+        retry_channel_width = _normalize_channel_width(bp, retry_requested_channel_width, selected_channel)
         retry_beacon_interval = int(cfg.get("beacon_interval", 50))
         retry_dtim_period = int(cfg.get("dtim_period", 1))
         retry_short_guard_interval = bool(cfg.get("short_guard_interval", True))
@@ -2139,7 +2163,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
         return LifecycleResult("start_failed", state)
 
-    fallback_channel_width = str(cfg.get("channel_width", "auto")).lower()
+    fallback_requested_channel_width = str(cfg.get("channel_width", "auto")).lower()
     fallback_beacon_interval = int(cfg.get("beacon_interval", 50))
     fallback_dtim_period = int(cfg.get("dtim_period", 1))
     fallback_short_guard_interval = bool(cfg.get("short_guard_interval", True))
@@ -2152,6 +2176,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
     for band, channel, no_virt, warning_tag in fallback_chain:
         warnings.append(warning_tag)
+        fallback_channel_width = _normalize_channel_width(band, fallback_requested_channel_width, channel)
 
         if use_hostapd_nat:
             cmd_fallback = build_cmd_nat(
