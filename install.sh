@@ -129,7 +129,26 @@ install_dependencies() {
             ;;
         rpm-ostree)
             # Check for missing dependencies to avoid unnecessary layering
+            local script_dir
+            script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            local vendor_bundle=0
+            if [ "$OS_ID" = "bazzite" ] && [ -x "$script_dir/backend/vendor/bin/bazzite/hostapd" ]; then
+                vendor_bundle=1
+            fi
+
+            local force_vendor=0
+            case "$(echo "${VR_HOTSPOT_FORCE_VENDOR_BIN:-}" | tr '[:upper:]' '[:lower:]')" in
+                1|true|yes|on) force_vendor=1 ;;
+            esac
+
             local deps=("python3" "python3-pip" "iw" "iproute" "iptables")
+            if [ "$vendor_bundle" -eq 1 ]; then
+                print_info "Bazzite vendor bundle detected; skipping hostapd/dnsmasq layering."
+            elif [ "$force_vendor" -eq 1 ]; then
+                print_info "VR_HOTSPOT_FORCE_VENDOR_BIN=1 set; skipping hostapd/dnsmasq layering."
+            else
+                deps+=("hostapd" "dnsmasq")
+            fi
             local needed=()
             for pkg in "${deps[@]}"; do
                 if ! rpm -q --whatprovides "$pkg" &>/dev/null; then
@@ -215,6 +234,15 @@ configure_install() {
         echo "VR_HOTSPOTD_HOST=$BIND_IP"
         echo "VR_HOTSPOTD_PORT=8732"
     } > "$ENV_FILE"
+    if [ "$OS_ID" = "bazzite" ]; then
+        echo "VR_HOTSPOT_VENDOR_PROFILE=bazzite" >> "$ENV_FILE"
+        if [ -x "$TEMP_INSTALL_DIR/backend/vendor/bin/bazzite/hostapd" ]; then
+            echo "VR_HOTSPOT_FORCE_VENDOR_BIN=1" >> "$ENV_FILE"
+            print_info "Bazzite vendor bundle detected; forcing bundled hostapd/dnsmasq."
+        else
+            print_warning "Bazzite vendor bundle not found. Using system hostapd until bundled binaries are added."
+        fi
+    fi
     print_success "Configuration saved to $ENV_FILE."
 }
 

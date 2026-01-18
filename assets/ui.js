@@ -206,6 +206,11 @@ function parseEngineCmd(cmd) {
       i += 1;
       continue;
     }
+    if (arg === '--channel-width') {
+      out.channelWidth = cmd[i + 1];
+      i += 1;
+      continue;
+    }
     if (arg === '--country') {
       out.country = cmd[i + 1];
       i += 1;
@@ -1020,7 +1025,17 @@ function updateBasicStatusMeta(state) {
   const metaEl = document.getElementById('basicStatusAdapterBand');
   if (metaEl) {
     const bandLabel = band !== '--' ? formatBandLabel(normalizeBandValue(band)) : band;
-    metaEl.textContent = `Adapter: ${adapter} | Band: ${bandLabel}`;
+    let widthLabel = '';
+    if (state && state.running) {
+      const rawWidth = (state.channel_width_mhz !== undefined && state.channel_width_mhz !== null)
+        ? state.channel_width_mhz
+        : cmdInfo.channelWidth;
+      if (rawWidth !== undefined && rawWidth !== null && rawWidth !== '' && rawWidth !== 'auto') {
+        const widthNum = parseInt(rawWidth, 10);
+        widthLabel = Number.isFinite(widthNum) ? `${widthNum} MHz` : String(rawWidth);
+      }
+    }
+    metaEl.textContent = `Adapter: ${adapter} | Band: ${bandLabel}${widthLabel ? ` | Width: ${widthLabel}` : ''}`;
   }
 
   const detailsEl = document.getElementById('basicStatusDetails');

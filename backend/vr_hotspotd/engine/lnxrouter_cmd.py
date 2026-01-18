@@ -1,21 +1,16 @@
 import os
 from typing import List, Optional
 
-
-def _vendor_bin() -> str:
-    # Prod install: VR_HOTSPOT_INSTALL_DIR is set by systemd.
-    install_dir = os.environ.get("VR_HOTSPOT_INSTALL_DIR")
-    if install_dir:
-        return os.path.join(install_dir, "backend", "vendor", "bin")
-
-    # Dev environment: find it relative to this file.
-    return os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "vendor", "bin")
-    )
+from vr_hotspotd.vendor_paths import resolve_vendor_exe, vendor_bin_dirs
 
 
 def _lnxrouter_path() -> str:
-    return os.path.join(_vendor_bin(), "lnxrouter")
+    path, _, _ = resolve_vendor_exe("lnxrouter")
+    if path:
+        return path
+    bins = vendor_bin_dirs()
+    fallback = str(bins[-1]) if bins else "/var/lib/vr-hotspot/app/backend/vendor/bin"
+    return os.path.join(fallback, "lnxrouter")
 
 
 def build_cmd(

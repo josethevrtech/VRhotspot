@@ -162,3 +162,109 @@ phy#0
     finally:
         lifecycle._iw_dev_dump = orig_iw
         lifecycle._hostapd_ready = orig_ready
+
+
+def test_wait_for_ap_ready_with_expected_ifname_and_log():
+    calls = {"hostapd": [], "get_tails": []}
+
+    def fake_iw_dev_dump():
+        return ""
+
+    def fake_hostapd_ready(ap_interface, *, adapter_ifname):
+        calls["hostapd"].append((ap_interface, adapter_ifname))
+        return ap_interface == "wlan0"
+
+    def fake_get_tails():
+        calls["get_tails"].append(1)
+        return [
+            "wlan0: AP-ENABLED ",
+        ], ""
+
+    orig_iw = lifecycle._iw_dev_dump
+    orig_ready = lifecycle._hostapd_ready
+    orig_tails = lifecycle.get_tails
+    orig_select = lifecycle._select_ap_from_iw
+    try:
+        lifecycle._iw_dev_dump = fake_iw_dev_dump
+        lifecycle._hostapd_ready = fake_hostapd_ready
+        lifecycle.get_tails = fake_get_tails
+        lifecycle._select_ap_from_iw = lambda *_args, **_kwargs: None
+        ap = lifecycle._wait_for_ap_ready(
+            target_phy="phy0",
+            timeout_s=0.1,
+            poll_s=0.01,
+            ssid="TestNet",
+            adapter_ifname="wlan0",
+            expected_ap_ifname="wlan0",
+            capture=None,
+        )
+        assert ap is not None
+        assert ap.ifname == "wlan0"
+        assert ap.phy == "phy0"
+        assert ap.ssid == "TestNet"
+        assert ap.freq_mhz is None
+        assert ap.channel is None
+        assert ap.channel_width_mhz is None
+        assert len(calls["get_tails"]) > 0
+    finally:
+        lifecycle._iw_dev_dump = orig_iw
+        lifecycle._hostapd_ready = orig_ready
+        lifecycle.get_tails = orig_tails
+        lifecycle._select_ap_from_iw = orig_select
+
+
+def test_wait_for_ap_ready_with_expected_ifname_and_hostapd_ready():
+    calls = {"hostapd": [], "get_tails": []}
+
+    def fake_iw_dev_dump():
+        return """
+phy#0
+    Interface wlan0
+        ifindex 5
+        wdev 0x3
+        addr 00:11:22:33:44:57
+        ssid TestNet
+        type AP
+        channel 36 (5180 MHz), width: 80 MHz
+"""
+
+    def fake_hostapd_ready(ap_interface, *, adapter_ifname):
+        calls["hostapd"].append((ap_interface, adapter_ifname))
+        return ap_interface == "wlan0"
+    
+    def fake_get_tails():
+        calls["get_tails"].append(1)
+        return [""], ""
+
+    orig_iw = lifecycle._iw_dev_dump
+    orig_ready = lifecycle._hostapd_ready
+    orig_tails = lifecycle.get_tails
+    orig_select = lifecycle._select_ap_from_iw
+    try:
+        lifecycle._iw_dev_dump = fake_iw_dev_dump
+        lifecycle._hostapd_ready = fake_hostapd_ready
+        lifecycle.get_tails = fake_get_tails
+        lifecycle._select_ap_from_iw = lambda *_args, **_kwargs: None
+        ap = lifecycle._wait_for_ap_ready(
+            target_phy="phy0",
+            timeout_s=0.1,
+            poll_s=0.01,
+            ssid="TestNet",
+            adapter_ifname="wlan0",
+            expected_ap_ifname="wlan0",
+            capture=None,
+        )
+        assert ap is not None
+        assert ap.ifname == "wlan0"
+        assert ap.phy == "phy0"
+        assert ap.ssid == "TestNet"
+        assert ap.freq_mhz == 5180
+        assert ap.channel == 36
+        assert ap.channel_width_mhz == 80
+        assert len(calls["get_tails"]) > 0
+        assert ("wlan0", "wlan0") in calls["hostapd"]
+    finally:
+        lifecycle._iw_dev_dump = orig_iw
+        lifecycle._hostapd_ready = orig_ready
+        lifecycle.get_tails = orig_tails
+        lifecycle._select_ap_from_iw = orig_select
