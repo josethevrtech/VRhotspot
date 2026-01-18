@@ -1,6 +1,9 @@
+import json
 import os
+import re
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from collections import deque
@@ -8,7 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 from . import firewalld  # SteamOS: firewalld owns nftables
-from vr_hotspotd import os_release
+from vr_hotspotd.vendor_paths import resolve_vendor_required, vendor_bin_dirs, vendor_lib_dirs
 
 ENGINE_STDOUT_MAX_LINES = 200
 ENGINE_STDERR_MAX_LINES = 200
@@ -24,6 +27,84 @@ _stderr_line_count = 0
 _last_ap_ifname: Optional[str] = None
 _last_firewalld_cfg: Dict[str, object] = {}
 _stdout_line_observer: Optional[Callable[[str], None]] = None
+
+_HOSTAPD_UNKNOWN_RE = re.compile(r"unknown configuration item '([^']+)'", re.IGNORECASE)
+
+
+class VendorSelectionError(RuntimeError):
+    def __init__(self, payload: Dict[str, object]) -> None:
+        super().__init__("vendor_selection_failed")
+        self.payload = payload
+
+    def to_payload(self) -> Dict[str, object]:
+        return dict(self.payload)
+
+
+def _hostapd_probe_config() -> str:
+    return "\n".join(
+        [
+            "ssid=vrhs-probe",
+            "hw_mode=a",
+            "channel=36",
+            "ieee80211n=1",
+            "secondary_channel=1",
+            "ieee80211ac=1",
+            "vht_oper_chwidth=1",
+            "vht_oper_centr_freq_seg0_idx=42",
+            "",
+        ]
+    )
+
+
+def _hostapd_supports_ht_vht(
+    hostapd_path: Optional[str],
+    *,
+    vendor_lib: Optional[str] = None,
+) -> Optional[Dict[str, object]]:
+    if not hostapd_path:
+        return None
+    env = os.environ.copy()
+    env.setdefault("LC_ALL", "C")
+    env.setdefault("LANG", "C")
+    if vendor_lib and os.path.isdir(vendor_lib):
+        ld = env.get("LD_LIBRARY_PATH", "")
+        if vendor_lib not in ld.split(":"):
+            env["LD_LIBRARY_PATH"] = f"{vendor_lib}:{ld}" if ld else vendor_lib
+    conf_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as f:
+            f.write(_hostapd_probe_config())
+            conf_path = f.name
+        p = subprocess.run(
+            [hostapd_path, "-t", conf_path],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            env=env,
+        )
+    except Exception as e:
+        return {"supports_ht": False, "supports_vht": False, "unknown": [], "rc": None, "error": str(e)}
+    finally:
+        if conf_path:
+            try:
+                os.unlink(conf_path)
+            except Exception:
+                pass
+
+    # Even on non-zero rc, parse stdout/stderr for unknown config items.
+    out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+    unknown = _HOSTAPD_UNKNOWN_RE.findall(out)
+    unknown_set = {u.strip() for u in unknown}
+    supports_ht = "secondary_channel" not in unknown_set
+    supports_vht = not bool(
+        {"ieee80211ac", "vht_oper_chwidth", "vht_oper_centr_freq_seg0_idx"} & unknown_set
+    )
+    return {
+        "supports_ht": supports_ht,
+        "supports_vht": supports_vht,
+        "unknown": sorted(unknown_set),
+        "rc": p.returncode,
+    }
 
 
 def _note(msg: str) -> None:
@@ -118,40 +199,6 @@ def _collect_failure_output() -> Tuple[List[str], List[str]]:
     )
 
 
-def _vendor_bin() -> str:
-    """
-    Resolve vendor/bin. Works both in repo layout and installed layout.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        # repo layout: backend/vr_hotspotd/engine -> backend/vendor/bin
-        os.path.abspath(os.path.join(here, "..", "..", "..", "vendor", "bin")),
-        # installed layout
-        "/var/lib/vr-hotspot/app/backend/vendor/bin",
-    ]
-    for c in candidates:
-        if os.path.isdir(c):
-            return c
-    return os.path.abspath(os.path.join(here, "..", "..", "..", "vendor", "bin"))
-
-
-def _vendor_lib() -> str:
-    """
-    Resolve vendor/lib. Works both in repo layout and installed layout.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        # repo layout: backend/vr_hotspotd/engine -> backend/vendor/lib
-        os.path.abspath(os.path.join(here, "..", "..", "..", "vendor", "lib")),
-        # installed layout
-        "/var/lib/vr-hotspot/app/backend/vendor/lib",
-    ]
-    for c in candidates:
-        if os.path.isdir(c):
-            return c
-    return os.path.abspath(os.path.join(here, "..", "..", "..", "vendor", "lib"))
-
-
 def _which_in_path(exe: str, path: str) -> Optional[str]:
     for d in path.split(":"):
         cand = os.path.join(d, exe)
@@ -165,47 +212,216 @@ def _build_engine_env() -> Dict[str, str]:
     Environment for lnxrouter execution.
 
     Behavior:
-      - Prefer system hostapd + dnsmasq if present.
-      - Otherwise use bundled vendor/bin hostapd + dnsmasq.
+      - Prefer OS-specific vendor bundles when present (e.g., vendor/bin/bazzite).
+      - Otherwise prefer system hostapd + dnsmasq when available.
     """
     env = os.environ.copy()
-    vendor = _vendor_bin()
-    vendor_lib = _vendor_lib()
+    vendor_bins = vendor_bin_dirs()
+    vendor_resolved, vendor_lib_dir, vendor_profile, vendor_missing = resolve_vendor_required(
+        ["hostapd", "dnsmasq"]
+    )
+    vendor_hostapd = vendor_resolved.get("hostapd")
+    vendor_dnsmasq = vendor_resolved.get("dnsmasq")
     sys_path = "/usr/sbin:/usr/bin:/sbin:/bin"
 
     sys_hostapd = _which_in_path("hostapd", sys_path)
     sys_dnsmasq = _which_in_path("dnsmasq", sys_path)
 
-    prefer_vendor = False
-    try:
-        prefer_vendor = os_release.is_bazzite()
-    except Exception:
-        prefer_vendor = False
-
-    vendor_hostapd = os.path.join(vendor, "hostapd")
-    vendor_dnsmasq = os.path.join(vendor, "dnsmasq")
-    vendor_ok = all(
-        os.path.isfile(p) and os.access(p, os.X_OK)
-        for p in (vendor_hostapd, vendor_dnsmasq)
+    force_vendor = env.get("VR_HOTSPOT_FORCE_VENDOR_BIN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    force_system = env.get("VR_HOTSPOT_FORCE_SYSTEM_BIN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    strict_vendor = env.get("VR_HOTSPOT_VENDOR_STRICT", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
-    if vendor_lib and os.path.isdir(vendor_lib):
-        ld_path = env.get("LD_LIBRARY_PATH", "")
-        if vendor_lib not in ld_path.split(":"):
-            env["LD_LIBRARY_PATH"] = f"{vendor_lib}:{ld_path}" if ld_path else vendor_lib
+    vendor_hostapd_ok = bool(vendor_hostapd)
+    vendor_dnsmasq_ok = bool(vendor_dnsmasq)
+    force_vendor_effective = force_vendor or strict_vendor
 
-    if prefer_vendor and vendor_ok:
-        env["PATH"] = f"{vendor}:{sys_path}"
-        env["HOSTAPD"] = vendor_hostapd
-        env["DNSMASQ"] = vendor_dnsmasq
+    prefer_vendor = False
+    if force_system:
+        prefer_vendor = False
+    elif force_vendor_effective:
+        prefer_vendor = True
     else:
-        env["PATH"] = f"{sys_path}:{vendor}"
-        if sys_hostapd and sys_dnsmasq:
-            env.pop("HOSTAPD", None)
-            env.pop("DNSMASQ", None)
+        # Prefer OS-specific vendor bundles when present (e.g., bazzite/hostapd).
+        prefer_vendor = bool(vendor_profile)
+
+    vendor_bin_path = ":".join(str(p) for p in vendor_bins if p)
+    if prefer_vendor and (vendor_hostapd_ok or vendor_dnsmasq_ok):
+        env["PATH"] = f"{vendor_bin_path}:{sys_path}" if vendor_bin_path else sys_path
+    else:
+        env["PATH"] = f"{sys_path}:{vendor_bin_path}" if vendor_bin_path else sys_path
+
+    vendor_libs = vendor_lib_dirs(preferred_profile=vendor_profile)
+    vendor_lib_path = ""
+    if vendor_libs:
+        ld_path = env.get("LD_LIBRARY_PATH", "")
+        ordered = []
+        seen = set()
+        for p in vendor_libs:
+            s = str(p)
+            if s and s not in seen:
+                seen.add(s)
+                ordered.append(s)
+        vendor_lib_path = ":".join(ordered)
+        env["LD_LIBRARY_PATH"] = f"{vendor_lib_path}:{ld_path}" if ld_path else vendor_lib_path
+
+    chosen_hostapd: Optional[str] = None
+    chosen_dnsmasq: Optional[str] = None
+    chosen_lib_dir: Optional[str] = None
+
+    if force_system:
+        if not sys_hostapd or not sys_dnsmasq:
+            selection_result = {
+                "vendor_profile": vendor_profile,
+                "force_vendor": force_vendor_effective,
+                "force_system": force_system,
+                "vendor_hostapd": vendor_hostapd,
+                "vendor_dnsmasq": vendor_dnsmasq,
+                "sys_hostapd": sys_hostapd,
+                "sys_dnsmasq": sys_dnsmasq,
+                "chosen_hostapd": None,
+                "chosen_dnsmasq": None,
+                "vendor_lib_dirs": [str(p) for p in vendor_libs],
+                "chosen_lib_dir": None,
+            }
+            missing = [name for name, path in (("hostapd", sys_hostapd), ("dnsmasq", sys_dnsmasq)) if not path]
+            raise VendorSelectionError(
+                {
+                    "error": "force_system_missing",
+                    "missing": missing,
+                    "selection": selection_result,
+                }
+            )
+        chosen_hostapd = sys_hostapd
+        chosen_dnsmasq = sys_dnsmasq
+    elif force_vendor_effective:
+        if not vendor_hostapd_ok or not vendor_dnsmasq_ok:
+            selection_result = {
+                "vendor_profile": vendor_profile,
+                "force_vendor": force_vendor_effective,
+                "force_system": force_system,
+                "vendor_hostapd": vendor_hostapd,
+                "vendor_dnsmasq": vendor_dnsmasq,
+                "sys_hostapd": sys_hostapd,
+                "sys_dnsmasq": sys_dnsmasq,
+                "chosen_hostapd": None,
+                "chosen_dnsmasq": None,
+                "vendor_lib_dirs": [str(p) for p in vendor_libs],
+                "chosen_lib_dir": None,
+            }
+            missing = vendor_missing or [
+                name for name, path in (("hostapd", vendor_hostapd), ("dnsmasq", vendor_dnsmasq)) if not path
+            ]
+            raise VendorSelectionError(
+                {
+                    "error": "force_vendor_missing",
+                    "missing": missing,
+                    "selection": selection_result,
+                }
+            )
+        chosen_hostapd = vendor_hostapd
+        chosen_dnsmasq = vendor_dnsmasq
+        chosen_lib_dir = str(vendor_lib_dir) if vendor_lib_dir else None
+    else:
+        if prefer_vendor:
+            chosen_hostapd = vendor_hostapd if vendor_hostapd_ok else sys_hostapd
+            chosen_dnsmasq = vendor_dnsmasq if vendor_dnsmasq_ok else sys_dnsmasq
         else:
-            env["HOSTAPD"] = vendor_hostapd
-            env["DNSMASQ"] = vendor_dnsmasq
+            chosen_hostapd = sys_hostapd or (vendor_hostapd if vendor_hostapd_ok else None)
+            chosen_dnsmasq = sys_dnsmasq or (vendor_dnsmasq if vendor_dnsmasq_ok else None)
+
+        sys_probe = _hostapd_supports_ht_vht(sys_hostapd)
+        vendor_probe = _hostapd_supports_ht_vht(
+            vendor_hostapd if vendor_hostapd_ok else None,
+            vendor_lib=str(vendor_lib_dir) if vendor_lib_dir else None,
+        )
+
+        if sys_probe:
+            _note(
+                "hostapd_probe sys ht="
+                f"{sys_probe.get('supports_ht')} vht={sys_probe.get('supports_vht')} "
+                f"unknown={sys_probe.get('unknown')}"
+            )
+        if vendor_probe:
+            _note(
+                "hostapd_probe vendor ht="
+                f"{vendor_probe.get('supports_ht')} vht={vendor_probe.get('supports_vht')} "
+                f"unknown={vendor_probe.get('unknown')}"
+            )
+
+    def _supports_vht(p: Optional[Dict[str, object]]) -> bool:
+        return bool(p and p.get("supports_vht"))
+
+    def _supports_ht(p: Optional[Dict[str, object]]) -> bool:
+        return bool(p and p.get("supports_ht"))
+
+    if not force_system and not force_vendor_effective:
+        if _supports_vht(vendor_probe) and not _supports_vht(sys_probe) and vendor_hostapd_ok:
+            chosen_hostapd = vendor_hostapd
+            _note("hostapd_select vendor (vht_supported)")
+        elif _supports_vht(sys_probe) and not _supports_vht(vendor_probe) and sys_hostapd:
+            chosen_hostapd = sys_hostapd
+            _note("hostapd_select system (vht_supported)")
+        elif _supports_ht(vendor_probe) and not _supports_ht(sys_probe) and vendor_hostapd_ok:
+            chosen_hostapd = vendor_hostapd
+            _note("hostapd_select vendor (ht_supported)")
+        elif _supports_ht(sys_probe) and not _supports_ht(vendor_probe) and sys_hostapd:
+            chosen_hostapd = sys_hostapd
+            _note("hostapd_select system (ht_supported)")
+
+        if chosen_hostapd == vendor_hostapd and vendor_lib_dir:
+            chosen_lib_dir = str(vendor_lib_dir)
+
+    if vendor_missing:
+        _note(f"vendor_missing_required {','.join(vendor_missing)}")
+
+    selection_result = {
+        "vendor_profile": vendor_profile,
+        "force_vendor": force_vendor_effective,
+        "force_system": force_system,
+        "vendor_hostapd": vendor_hostapd,
+        "vendor_dnsmasq": vendor_dnsmasq,
+        "sys_hostapd": sys_hostapd,
+        "sys_dnsmasq": sys_dnsmasq,
+        "chosen_hostapd": chosen_hostapd,
+        "chosen_dnsmasq": chosen_dnsmasq,
+        "vendor_lib_dirs": [str(p) for p in vendor_libs],
+        "chosen_lib_dir": chosen_lib_dir,
+    }
+
+    _note(
+        "selection_result "
+        f"vendor_profile={vendor_profile or 'none'} "
+        f"force_vendor={'1' if force_vendor_effective else '0'} "
+        f"force_system={'1' if force_system else '0'} "
+        f"hostapd_select={chosen_hostapd or 'none'} "
+        f"dnsmasq_select={chosen_dnsmasq or 'none'} "
+        f"LD_LIBRARY_PATH_prefix={vendor_lib_path or 'none'}"
+    )
+
+    if chosen_hostapd:
+        env["HOSTAPD"] = chosen_hostapd
+    else:
+        env.pop("HOSTAPD", None)
+
+    if chosen_dnsmasq:
+        env["DNSMASQ"] = chosen_dnsmasq
+    else:
+        env.pop("DNSMASQ", None)
 
     env.setdefault("LC_ALL", "C")
     env.setdefault("LANG", "C")
@@ -380,6 +596,38 @@ def start_engine(
         _note("could not extract AP ifname from cmd; skipping firewalld integration")
 
     try:
+        env = _build_engine_env()
+    except VendorSelectionError as e:
+        if ap_ifname:
+            _cleanup_firewalld(ap_ifname, firewalld_cfg)
+        payload = e.to_payload()
+        payload.setdefault("error", "vendor_selection_failed")
+        err_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        return EngineStartResult(
+            ok=False,
+            pid=None,
+            exit_code=None,
+            stdout_tail=[],
+            stderr_tail=[],
+            error=f"vendor_selection_failed:{err_json}",
+            cmd=_redact_cmd(cmd),
+            started_ts=None,
+        )
+    except Exception as e:
+        if ap_ifname:
+            _cleanup_firewalld(ap_ifname, firewalld_cfg)
+        return EngineStartResult(
+            ok=False,
+            pid=None,
+            exit_code=None,
+            stdout_tail=[],
+            stderr_tail=[],
+            error=f"spawn_failed: {e}",
+            cmd=_redact_cmd(cmd),
+            started_ts=None,
+        )
+
+    try:
         _ln_proc = subprocess.Popen(
             cmd,  # IMPORTANT: full cmd used to spawn (includes real passphrase)
             stdout=subprocess.PIPE,
@@ -387,7 +635,7 @@ def start_engine(
             text=True,
             bufsize=1,
             close_fds=True,
-            env=_build_engine_env(),
+            env=env,
             # isolate lnxrouter into its own session/PGID so we can reliably kill its whole tree
             start_new_session=True,
         )

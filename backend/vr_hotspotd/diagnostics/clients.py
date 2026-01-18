@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import re
 import subprocess
 import time
@@ -10,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from vr_hotspotd.config import load_config
 from vr_hotspotd.engine import lnxrouter_conf
+from vr_hotspotd.vendor_paths import resolve_vendor_exe
 
 
 LNXROUTER_TMP = lnxrouter_conf.DEFAULT_LNXROUTER_TMP
@@ -77,23 +79,27 @@ def _run(cmd: List[str], timeout_s: float) -> Tuple[int, str, str]:
         return 127, "", f"{type(e).__name__}: {e}"
 
 
-def _vendor_bin() -> Path:
-    # backend/vr_hotspotd/diagnostics/clients.py -> backend/vr_hotspotd -> backend
-    here = Path(__file__).resolve()
-    backend_dir = here.parents[2]
-    return backend_dir / "vendor" / "bin"
-
-
 def _hostapd_cli_path() -> Optional[str]:
-    vendor = _vendor_bin() / "hostapd_cli"
-    if vendor.exists() and os.access(vendor, os.X_OK):
-        return str(vendor)
-    hostapd = _vendor_bin() / "hostapd"
-    if hostapd.exists() and os.access(hostapd, os.X_OK):
-        bundled = hostapd.parent / "hostapd_cli"
+    sys_cli = shutil.which("hostapd_cli")
+    if sys_cli:
+        return sys_cli
+    vendor_cli, _, _ = resolve_vendor_exe("hostapd_cli")
+    if vendor_cli:
+        return vendor_cli
+    vendor_hostapd, _, _ = resolve_vendor_exe("hostapd")
+    if vendor_hostapd:
+        bundled = Path(vendor_hostapd).with_name("hostapd_cli")
         if bundled.exists() and os.access(bundled, os.X_OK):
             return str(bundled)
     return None
+
+
+def _iw_bin() -> str:
+    return shutil.which("iw") or "/usr/sbin/iw"
+
+
+def _ip_bin() -> str:
+    return shutil.which("ip") or "/usr/sbin/ip"
 
 
 def _get_config_ssid() -> Optional[str]:
@@ -109,7 +115,7 @@ def _get_config_ssid() -> Optional[str]:
 
 
 def _iw_dev_ifaces() -> Tuple[List[Dict[str, Optional[str]]], str]:
-    rc, stdout, stderr = _run(["iw", "dev"], timeout_s=0.8)
+    rc, stdout, stderr = _run([_iw_bin(), "dev"], timeout_s=0.8)
     if rc != 0:
         return [], f"iw_dev_failed(rc={rc}):{stderr[:120]}"
 
@@ -386,7 +392,7 @@ def _ip_neigh(ap_if: str) -> Dict[str, str]:
     """
     Returns mac -> ip from `ip neigh show dev <ap_if>`.
     """
-    rc, stdout, _ = _run(["ip", "neigh", "show", "dev", ap_if], timeout_s=0.8)
+    rc, stdout, _ = _run([_ip_bin(), "neigh", "show", "dev", ap_if], timeout_s=0.8)
     if rc != 0:
         return {}
     mapping: Dict[str, str] = {}
@@ -440,12 +446,12 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
     """
     Parse `iw dev <ap_if> station dump`.
     """
-    rc, stdout, stderr = _run(["iw", "dev", ap_if, "station", "dump"], timeout_s=1.2)
+    rc, stdout, stderr = _run([_iw_bin(), "dev", ap_if, "station", "dump"], timeout_s=1.2)
     if rc != 0:
         return None, f"iw_station_dump_failed(rc={rc}):{stderr[:120]}"
     if not stdout.strip():
         time.sleep(0.2)
-        rc, stdout, stderr = _run(["iw", "dev", ap_if, "station", "dump"], timeout_s=1.2)
+        rc, stdout, stderr = _run([_iw_bin(), "dev", ap_if, "station", "dump"], timeout_s=1.2)
         if rc != 0:
             return None, f"iw_station_dump_failed(rc={rc}):{stderr[:120]}"
         if not stdout.strip():
@@ -748,7 +754,7 @@ def list_clients(ap_ifname: str) -> List[dict]:
         leases = _parse_leases(lease_file) if lease_file else {}
 
         proc = subprocess.run(
-            ["ip", "neigh", "show", "dev", ap_ifname],
+            [_ip_bin(), "neigh", "show", "dev", ap_ifname],
             capture_output=True,
             text=True,
             timeout=0.8,
