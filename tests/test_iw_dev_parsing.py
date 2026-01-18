@@ -210,6 +210,7 @@ def test_wait_for_ap_ready_with_expected_ifname_and_log():
         lifecycle._iw_dev_dump = orig_iw
         lifecycle._hostapd_ready = orig_ready
         lifecycle.get_tails = orig_tails
+        lifecycle._select_ap_from_iw = orig_select
 
 
 def test_wait_for_ap_ready_with_expected_ifname_and_hostapd_ready():

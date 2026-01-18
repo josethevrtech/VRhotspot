@@ -593,9 +593,8 @@ def _wait_for_ap_ready(
             return ap
         if expected_ap_ifname:
             try:
-                stdout_tail, _stderr_tail = get_tails()
+                get_tails()
             except Exception:
-                stdout_tail = []
                 return APReadyInfo(
                     ifname=expected_ap_ifname,
                     phy=target_phy,
