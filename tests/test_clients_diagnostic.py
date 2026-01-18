@@ -6,6 +6,9 @@ from typing import List, Tuple
 
 import vr_hotspotd.diagnostics.clients as clients
 
+IW_BIN = clients._iw_bin()
+IP_BIN = clients._ip_bin()
+
 
 def test_parse_dnsmasq_leases(tmp_path: Path):
     conf = tmp_path / "lnxrouter.wlan1.conf.TEST"
@@ -22,7 +25,7 @@ def test_parse_dnsmasq_leases(tmp_path: Path):
 
 def test_iw_station_dump_parsing(monkeypatch):
     def fake_run(cmd: List[str], timeout_s: float) -> Tuple[int, str, str]:
-        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+        if cmd[:4] == [IW_BIN, "dev", "x0wlan1", "station"]:
             return (
                 0,
                 "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n"
@@ -84,7 +87,7 @@ def test_snapshot_falls_back_to_iw_when_hostapd_cli_times_out(tmp_path: Path, mo
     monkeypatch.setattr(clients, "_hostapd_cli_path", lambda: "hostapd_cli")
 
     def fake_run(cmd: List[str], timeout_s: float):
-        if cmd == ["iw", "dev"]:
+        if cmd == [IW_BIN, "dev"]:
             return (
                 0,
                 "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot-Test\n\t\ttype AP\n",
@@ -98,14 +101,14 @@ def test_snapshot_falls_back_to_iw_when_hostapd_cli_times_out(tmp_path: Path, mo
         if cmd[:1] == ["hostapd_cli"] and "all_sta" in cmd:
             return 127, "", "nope"
         # iw fallback works
-        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+        if cmd[:4] == [IW_BIN, "dev", "x0wlan1", "station"]:
             return (
                 0,
                 "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n\tsignal:\t-50 dBm\n",
                 "",
             )
         # ip neigh enrichment
-        if cmd[:3] == ["ip", "neigh", "show"]:
+        if cmd[:3] == [IP_BIN, "neigh", "show"]:
             return (0, "192.168.120.217 lladdr 76:d4:ff:3c:12:8d REACHABLE\n", "")
         return 127, "", "nope"
 
@@ -140,19 +143,19 @@ def test_conf_dir_prefers_ctrl_socket_match(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(clients, "_hostapd_cli_path", lambda: None)
 
     def fake_run(cmd: List[str], timeout_s: float):
-        if cmd == ["iw", "dev"]:
+        if cmd == [IW_BIN, "dev"]:
             return (
                 0,
                 "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot\n\t\ttype AP\n",
                 "",
             )
-        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+        if cmd[:4] == [IW_BIN, "dev", "x0wlan1", "station"]:
             return (
                 0,
                 "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n\tsignal:\t-50 dBm\n",
                 "",
             )
-        if cmd[:3] == ["ip", "neigh", "show"]:
+        if cmd[:3] == [IP_BIN, "neigh", "show"]:
             return (0, "", "")
         return 127, "", "nope"
 
@@ -174,19 +177,19 @@ def test_snapshot_skips_hostapd_cli_when_ctrl_missing(tmp_path: Path, monkeypatc
     monkeypatch.setattr(clients, "load_config", lambda: {"ssid": "VRHotspot"})
 
     def fake_run(cmd: List[str], timeout_s: float):
-        if cmd == ["iw", "dev"]:
+        if cmd == [IW_BIN, "dev"]:
             return (
                 0,
                 "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot\n\t\ttype AP\n",
                 "",
             )
-        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+        if cmd[:4] == [IW_BIN, "dev", "x0wlan1", "station"]:
             return (
                 0,
                 "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n\tsignal:\t-50 dBm\n",
                 "",
             )
-        if cmd[:3] == ["ip", "neigh", "show"]:
+        if cmd[:3] == [IP_BIN, "neigh", "show"]:
             return (0, "192.168.120.217 lladdr 76:d4:ff:3c:12:8d REACHABLE\n", "")
         return 127, "", "nope"
 
@@ -209,7 +212,7 @@ def test_snapshot_no_active_ap_interface(monkeypatch):
 
     def fake_run(cmd: List[str], timeout_s: float):
         calls.append(cmd)
-        if cmd == ["iw", "dev"]:
+        if cmd == [IW_BIN, "dev"]:
             return (
                 0,
                 "phy#0\n\tInterface wlan0\n\t\ttype managed\n",
@@ -225,7 +228,7 @@ def test_snapshot_no_active_ap_interface(monkeypatch):
     assert snap["clients"] == []
     assert snap["sources"]["primary"] is None
     assert "no_active_ap_interface" in snap["warnings"]
-    assert calls == [["iw", "dev"]]
+    assert calls == [[IW_BIN, "dev"]]
 
 
 def test_station_dump_empty_then_non_empty(tmp_path: Path, monkeypatch):
@@ -243,13 +246,13 @@ def test_station_dump_empty_then_non_empty(tmp_path: Path, monkeypatch):
     calls = {"station": 0}
 
     def fake_run(cmd: List[str], timeout_s: float):
-        if cmd == ["iw", "dev"]:
+        if cmd == [IW_BIN, "dev"]:
             return (
                 0,
                 "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot\n\t\ttype AP\n",
                 "",
             )
-        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+        if cmd[:4] == [IW_BIN, "dev", "x0wlan1", "station"]:
             calls["station"] += 1
             if calls["station"] == 1:
                 return 0, "", ""
@@ -258,7 +261,7 @@ def test_station_dump_empty_then_non_empty(tmp_path: Path, monkeypatch):
                 "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n\tsignal:\t-50 dBm\n",
                 "",
             )
-        if cmd[:3] == ["ip", "neigh", "show"]:
+        if cmd[:3] == [IP_BIN, "neigh", "show"]:
             return (0, "192.168.120.217 lladdr 76:d4:ff:3c:12:8d REACHABLE\n", "")
         return 127, "", "nope"
 
@@ -288,15 +291,15 @@ def test_station_dump_empty_twice(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(clients, "_hostapd_cli_ping", explode)
 
     def fake_run(cmd: List[str], timeout_s: float):
-        if cmd == ["iw", "dev"]:
+        if cmd == [IW_BIN, "dev"]:
             return (
                 0,
                 "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot\n\t\ttype AP\n",
                 "",
             )
-        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+        if cmd[:4] == [IW_BIN, "dev", "x0wlan1", "station"]:
             return 0, "", ""
-        if cmd[:3] == ["ip", "neigh", "show"]:
+        if cmd[:3] == [IP_BIN, "neigh", "show"]:
             return (0, "", "")
         return 127, "", "nope"
 
@@ -325,7 +328,7 @@ def test_snapshot_uses_iw_when_hostapd_cli_ping_times_out(tmp_path: Path, monkey
     monkeypatch.setattr(clients, "_hostapd_cli_path", lambda: "hostapd_cli")
 
     def fake_run(cmd: List[str], timeout_s: float):
-        if cmd == ["iw", "dev"]:
+        if cmd == [IW_BIN, "dev"]:
             return (
                 0,
                 "phy#0\n\tInterface x0wlan1\n\t\tssid VRHotspot-Test\n\t\ttype AP\n",
@@ -333,7 +336,7 @@ def test_snapshot_uses_iw_when_hostapd_cli_ping_times_out(tmp_path: Path, monkey
             )
         if cmd[:1] == ["hostapd_cli"] and "ping" in cmd:
             return 124, "", ""
-        if cmd[:4] == ["iw", "dev", "x0wlan1", "station"]:
+        if cmd[:4] == [IW_BIN, "dev", "x0wlan1", "station"]:
             return (
                 0,
                 "Station 76:d4:ff:3c:12:8d (on x0wlan1)\n\tsignal:\t-50 dBm\n",

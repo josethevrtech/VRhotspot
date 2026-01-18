@@ -73,8 +73,18 @@ def _stubbed_env(monkeypatch, cfg, supports_wifi6):
         lifecycle,
         "_wait_for_ap_ready",
         lambda *_args, **_kwargs: lifecycle.APReadyInfo(
-            ifname="ap0", phy="phy0", ssid="Test", freq_mhz=5180, channel=36
+            ifname="ap0",
+            phy="phy0",
+            ssid="Test",
+            freq_mhz=5180,
+            channel=36,
+            channel_width_mhz=None,
         ),
+    )
+    monkeypatch.setattr(
+        lifecycle.preflight,
+        "run",
+        lambda *_args, **_kwargs: {"errors": [], "warnings": [], "details": {"hostapd": {"he": None}}},
     )
 
     return state, calls
