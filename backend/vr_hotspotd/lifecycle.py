@@ -133,6 +133,7 @@ _HOSTAPD_CTRL_CANDIDATES = (Path("/run/hostapd"), Path("/var/run/hostapd"))
 _IW_PHY_RE = re.compile(r"^phy#(\d+)$")
 _IW_CHANNEL_RE = re.compile(r"^channel\s+(\d+)(?:\s+\((\d+(?:\.\d+)?)\s+MHz\))?")
 _IW_FREQ_RE = re.compile(r"^(?:freq|frequency)(?:[:\s]+)(\d+(?:\.\d+)?)\b")
+_IW_WIDTH_RE = re.compile(r"width:\s*(\d+)\s*mhz", re.IGNORECASE)
 _HOSTAPD_CTRL_DIR_RE = re.compile(r"DIR=(.+)")
 _COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
 
@@ -275,6 +276,7 @@ class APReadyInfo:
     ssid: Optional[str]
     freq_mhz: Optional[int]
     channel: Optional[int]
+    channel_width_mhz: Optional[int]
 
 
 def _iw_bin() -> str:
@@ -314,6 +316,7 @@ def _parse_iw_dev_ap_info(iw_text: str) -> List[APReadyInfo]:
                     ssid=cur.get("ssid"),
                     freq_mhz=cur.get("freq_mhz"),
                     channel=cur.get("channel"),
+                    channel_width_mhz=cur.get("channel_width_mhz"),
                 )
             )
         cur = None
@@ -339,6 +342,7 @@ def _parse_iw_dev_ap_info(iw_text: str) -> List[APReadyInfo]:
                 "ssid": None,
                 "freq_mhz": None,
                 "channel": None,
+                "channel_width_mhz": None,
             }
             continue
 
@@ -363,12 +367,26 @@ def _parse_iw_dev_ap_info(iw_text: str) -> List[APReadyInfo]:
                     cur["freq_mhz"] = int(float(m_channel.group(2)))
                 except Exception:
                     pass
+            m_width = _IW_WIDTH_RE.search(line)
+            if m_width:
+                try:
+                    cur["channel_width_mhz"] = int(m_width.group(1))
+                except Exception:
+                    pass
             continue
 
         m_freq = _IW_FREQ_RE.match(line)
         if m_freq and cur.get("freq_mhz") is None:
             try:
                 cur["freq_mhz"] = int(float(m_freq.group(1)))
+            except Exception:
+                pass
+            continue
+
+        m_width = _IW_WIDTH_RE.search(line)
+        if m_width:
+            try:
+                cur["channel_width_mhz"] = int(m_width.group(1))
             except Exception:
                 pass
 
@@ -578,13 +596,13 @@ def _wait_for_ap_ready(
                 stdout_tail, _stderr_tail = get_tails()
             except Exception:
                 stdout_tail = []
-            if _stdout_has_ap_enabled(stdout_tail, expected_ap_ifname):
                 return APReadyInfo(
                     ifname=expected_ap_ifname,
                     phy=target_phy,
                     ssid=ssid,
                     freq_mhz=None,
                     channel=None,
+                    channel_width_mhz=None,
                 )
             ap_expected = _select_ap_by_ifname(dump, expected_ap_ifname)
             if ap_expected and _hostapd_ready(expected_ap_ifname, adapter_ifname=adapter_ifname):
@@ -596,6 +614,7 @@ def _wait_for_ap_ready(
                     ssid=ssid,
                     freq_mhz=None,
                     channel=None,
+                    channel_width_mhz=None,
                 )
 
         time.sleep(poll_s)
@@ -1757,6 +1776,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             running=True,
             ap_interface=ap_info.ifname,
             band=detected_band,
+            channel_width_mhz=ap_info.channel_width_mhz,
             mode="optimized",
             fallback_reason=None,
             warnings=start_warnings,
@@ -1902,6 +1922,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 running=True,
                 ap_interface=ap_info_retry.ifname,
                 band=detected_band,
+                channel_width_mhz=ap_info_retry.channel_width_mhz,
                 mode="fallback",
                 fallback_reason="no_virt_retry",
                 warnings=warnings,
@@ -2038,6 +2059,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 running=True,
                 ap_interface=ap_info_retry.ifname,
                 band=detected_band,
+                channel_width_mhz=ap_info_retry.channel_width_mhz,
                 mode="fallback",
                 fallback_reason="virt_retry_no_virt",
                 warnings=warnings,
@@ -2238,6 +2260,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 running=True,
                 ap_interface=ap_info_fallback.ifname,
                 band=detected_band,
+                channel_width_mhz=ap_info_fallback.channel_width_mhz,
                 mode="fallback",
                 fallback_reason="ap_ready_timeout",
                 warnings=warnings,

@@ -21,6 +21,7 @@ DEFAULT_STATE: Dict[str, Any] = {
     "adapter": None,
     "ap_interface": None,
     "band": None,
+    "channel_width_mhz": None,
 
     "mode": None,                # optimized | fallback
     "fallback_reason": None,

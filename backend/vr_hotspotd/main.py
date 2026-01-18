@@ -1,3 +1,4 @@
+import os
 import sys
 import logging
 import signal
@@ -7,6 +8,7 @@ from vr_hotspotd.server import build_server
 from vr_hotspotd.logging import setup_logging
 from vr_hotspotd.config import ensure_config_file
 from vr_hotspotd.lifecycle import repair, stop_hotspot
+from vr_hotspotd import vendor_paths
 
 log = logging.getLogger("vr_hotspotd.main")
 
@@ -29,6 +31,21 @@ def _install_signal_handlers(stop_event: threading.Event) -> None:
 def main():
     setup_logging()
     ensure_config_file()
+
+    try:
+        install_dir = os.environ.get("VR_HOTSPOT_INSTALL_DIR", "")
+        vendor_root = str(vendor_paths._vendor_root())
+        vendor_bins = ",".join(str(p) for p in vendor_paths.vendor_bin_dirs())
+        vendor_libs = ",".join(str(p) for p in vendor_paths.vendor_lib_dirs())
+        log.info(
+            "vendor_root=%s vendor_bins=%s vendor_libs=%s install_dir=%s",
+            vendor_root,
+            vendor_bins or "none",
+            vendor_libs or "none",
+            install_dir or "none",
+        )
+    except Exception:
+        log.exception("vendor_path_log_failed")
 
     # Conservative crash recovery: if state says lnxrouter is running, ensure coherence.
     try:
