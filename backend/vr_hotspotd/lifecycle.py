@@ -1402,16 +1402,44 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         if inv_error and not inv.get("adapters"):
             raise RuntimeError(inv_error)
 
+        enforced_channel_width = None
+        enforced_channel_5g = None
+
         preferred = cfg.get("ap_adapter")
         if preferred and isinstance(preferred, str) and preferred.strip():
             ap_ifname = preferred.strip()
         else:
-            ap_ifname = _select_ap_adapter(inv, bp)
+            # [Added Logic] Prefer USB adapters for 5GHz if available to ensure better performance/AP support
+
+            if bp == "5ghz":
+                 for adapter in inv.get("adapters", []):
+                     # Check if it's USB and supports AP mode + 5GHz
+                     if (adapter.get("bus") == "usb" and 
+                         adapter.get("supports_ap") and 
+                         adapter.get("supports_5ghz")):
+                         preferred_usb = adapter.get("ifname")
+                         log.info(f"auto_selected_usb_adapter_for_performance: {preferred_usb}")
+                         ap_ifname = preferred_usb
+                         break
+                 else:
+                     ap_ifname = _select_ap_adapter(inv, bp)
+            else:
+                 ap_ifname = _select_ap_adapter(inv, bp)
 
         # Validate band capability if explicitly requested
         a = _get_adapter(inv, ap_ifname)
         if not a or not a.get("supports_ap"):
             raise RuntimeError("no_ap_capable_adapter_found")
+
+        if bp == "5ghz":
+            if not a.get("supports_80mhz"):
+                raise RuntimeError(f"adapter_lacks_80mhz_support_required_for_vr: {ap_ifname}")
+
+        # Enforce 80MHz optimization for USB adapters on 5GHz (whether auto-selected or manual)
+        if bp == "5ghz" and a.get("bus") == "usb" and a.get("supports_5ghz"):
+             log.info(f"enforcing_80mhz_optimization_on_usb_adapter: {ap_ifname}")
+             enforced_channel_width = "80"
+             enforced_channel_5g = 36
 
         if bp == "6ghz" and not a.get("supports_6ghz"):
             raise RuntimeError("selected_adapter_not_6ghz_capable")
@@ -1624,12 +1652,16 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     else:
         selected_channel = None
         if bp == "5ghz":
-            val = cfg.get("channel_5g")
-            if val is not None:
-                try:
-                    selected_channel = int(val)
-                except Exception:
-                    pass
+            # Use enforced channel if set, otherwise config
+            if enforced_channel_5g is not None:
+                selected_channel = enforced_channel_5g
+            else:
+                val = cfg.get("channel_5g")
+                if val is not None:
+                    try:
+                        selected_channel = int(val)
+                    except Exception:
+                        pass
 
         channel_auto_select = bool(cfg.get("channel_auto_select", False))
         # If auto-select is ON and no manual channel is set (or set to 0), scan for best.
@@ -1647,6 +1679,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 pass  # Best-effort
 
         channel_width = str(cfg.get("channel_width", "auto")).lower()
+        if enforced_channel_width:
+             channel_width = enforced_channel_width
         beacon_interval = int(cfg.get("beacon_interval", 50))
         dtim_period = int(cfg.get("dtim_period", 1))
         short_guard_interval = bool(cfg.get("short_guard_interval", True))

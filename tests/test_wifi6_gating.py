@@ -45,6 +45,8 @@ def _stubbed_env(monkeypatch, cfg, supports_wifi6):
                     "ifname": "wlan0",
                     "supports_ap": True,
                     "supports_6ghz": False,
+                    "supports_5ghz": True,
+                    "supports_80mhz": True,
                     "supports_wifi6": supports_wifi6,
                     "phy": "phy0",
                 }

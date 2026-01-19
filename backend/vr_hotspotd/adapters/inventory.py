@@ -116,6 +116,37 @@ def _phy_supports_wifi6(phy: str) -> bool:
     return _supports_wifi6_from_iw(out)
 
 
+@lru_cache(maxsize=64)
+def _phy_supports_80mhz(phy: str) -> bool:
+    """
+    Parse `iw phy <phy> info` and look for VHT or HE capabilities implying 80MHz support.
+    """
+    try:
+        out = _run_iw(["phy", phy, "info"])
+    except Exception:
+        return False
+    
+    # 1. Check HE (Wi-Fi 6) - HE80
+    if re.search(r"HE40/HE80/5GHz", out, re.IGNORECASE):
+        return True
+    
+    # 2. Check VHT (Wi-Fi 5)
+    vht_section = re.search(r"VHT Capabilities \(.*?\):(.*?)(?:\n\s*[A-Za-z]|\Z)", out, re.DOTALL | re.IGNORECASE)
+    if vht_section:
+        content = vht_section.group(1)
+        width_line = re.search(r"Supported Channel Width:(.*)", content, re.IGNORECASE)
+        if width_line:
+            val = width_line.group(1).strip().lower()
+            if "160" in val or "neither 160 nor 80+80" in val:
+                return True
+            if "20/40" in val:
+                return False
+        # Default VHT usually implies 80MHz support if not explicitly restricted
+        return True
+        
+    return False
+
+
 _FREQ_LINE_RE = re.compile(r"^\s*\*\s+(\d+(?:\.\d+)?)\s+MHz\s+\[(\d+)\].*$")
 
 
@@ -245,6 +276,7 @@ def _score_adapter(
     reg_source: str,
     supports_5ghz: bool,
     supports_6ghz: bool,
+    supports_80mhz: bool,
 ) -> Tuple[int, List[Dict], List[str]]:
     """
     Capability-based scoring (chipset-agnostic).
@@ -268,6 +300,13 @@ def _score_adapter(
     if supports_5ghz:
         score += 10
         breakdown.append({"points": 10, "reason": "supports_5ghz"})
+    
+    if supports_80mhz:
+        score += 20
+        breakdown.append({"points": 20, "reason": "supports_80mhz_bandwidth"})
+    elif supports_5ghz:
+         # Penalize 5GHz adapters that don't support 80MHz (production readiness)
+         warnings.append("adapter_lacks_80mhz_bandwidth_support")
 
     # Regulatory domain considerations
     if reg_source == "self-managed":
@@ -344,6 +383,7 @@ def get_adapters():
 
         supports_ap = _phy_supports_ap(phy) if phy else False
         supports_wifi6 = _phy_supports_wifi6(phy) if phy else False
+        supports_80mhz = _phy_supports_80mhz(phy) if phy else False
         band_caps = _phy_band_support(phy) if phy else {"supports_2ghz": False, "supports_5ghz": False, "supports_6ghz": False}
         bus_type = _detect_bus_type(ifname) if ifname else "unknown"
 
@@ -358,6 +398,7 @@ def get_adapters():
             reg_source=reg_source,
             supports_5ghz=bool(band_caps.get("supports_5ghz")),
             supports_6ghz=bool(band_caps.get("supports_6ghz")),
+            supports_80mhz=supports_80mhz,
         )
 
         item = {
@@ -370,6 +411,7 @@ def get_adapters():
             "supports_2ghz": bool(band_caps.get("supports_2ghz")),
             "supports_5ghz": bool(band_caps.get("supports_5ghz")),
             "supports_6ghz": bool(band_caps.get("supports_6ghz")),
+            "supports_80mhz": supports_80mhz,
             "regdom": {
                 "country": reg_country,
                 "source": reg_source,

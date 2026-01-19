@@ -518,7 +518,14 @@ def main() -> int:
     hostapd = _resolve_binary("hostapd", "HOSTAPD")
     dnsmasq = _resolve_binary("dnsmasq", "DNSMASQ")
 
-    tmpdir = tempfile.mkdtemp(prefix="vr-hotspotd-nat-")
+    # Align with lifecycle.py expectations
+    base_tmp = "/dev/shm/lnxrouter_tmp"
+    os.makedirs(base_tmp, exist_ok=True)
+    prefix = f"lnxrouter.{args.ap_ifname}.conf."
+    tmpdir = tempfile.mkdtemp(prefix=prefix, dir=base_tmp)
+    # Ensure correct permissions for the directory
+    os.chmod(tmpdir, 0o755)
+
     hostapd_conf = os.path.join(tmpdir, "hostapd.conf")
     dnsmasq_conf = os.path.join(tmpdir, "dnsmasq.conf")
 
