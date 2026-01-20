@@ -773,7 +773,7 @@ function initCharts() {
   const rateCtx = document.getElementById('rateChart');
   if (!rssiCtx || !rateCtx) return;
 
-  Chart.defaults.color = '#rgba(255,255,255,0.7)';
+  Chart.defaults.color = 'rgba(255,255,255,0.7)';
   Chart.defaults.borderColor = 'rgba(255,255,255,0.1)';
   Chart.defaults.font.family = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
 
