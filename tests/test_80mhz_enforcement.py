@@ -3,7 +3,7 @@ import sys
 import os
 import unittest
 from unittest.mock import MagicMock, patch
-import importlib
+
 
 # Add backend to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))

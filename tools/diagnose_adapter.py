@@ -1,8 +1,6 @@
 
 import subprocess
-import re
-import sys
-import shutil
+
 
 def run_cmd(args):
     try:
