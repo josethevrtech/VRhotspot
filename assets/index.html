@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>VR Hotspot</title>
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+<meta name="theme-color" content="#0d1117" />
+<link rel="stylesheet" href="/assets/ui.css" />
+<!-- INLINE_CSS -->
+<script defer src="/assets/qrcode.js"></script>
+<script defer src="/assets/chart.js"></script>
+<!-- Font import (optional, generic system fonts are fine but this suggests intent) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body data-ui-mode="basic">
+  <div class="app-container">
+    <header class="top-header">
+       <div class="header-brand">
+         <img class="brand-logo-small" src="/assets/logo.png" alt="VR Hotspot" />
+         <span class="brand-name">VR Hotspot</span>
+       </div>
+       <div class="header-controls">
+          <div class="ui-mode-toggle">
+            <span class="mode-label small">Basic</span>
+            <label class="slider-toggle" title="Basic/Advanced UI">
+              <input type="checkbox" id="uiModeToggle" />
+              <span class="slider"></span>
+            </label>
+            <span class="mode-label small">Pro</span>
+          </div>
+       </div>
+    </header>
+
+    <!-- QR Modal -->
+    <div id="qrModal" class="modal-overlay" style="display:none">
+      <div class="modal-content">
+        <h3>Scan to Connect</h3>
+        <div id="qrPlaceholder"></div>
+        <div class="small mt-10" id="qrSsidRaw"></div>
+        <button class="btn secondary mt-12" id="btnCloseQr">Close</button>
+      </div>
+    </div>
+
+    <!-- BASIC UI SECTION -->
+    <div class="basic-container" data-ui-section="basic">
+      <div class="basic-grid">
+        <div class="card basic-card">
+          <div class="card-header">
+            <h2>Status & Control</h2>
+          </div>
+          <div class="card-body">
+            <div id="basicPillContainer" class="status-indicator-lg mb-12">
+              <div id="basicPill" class="pill"><div class="dot"></div><span id="basicPillTxt">Loading…</span></div>
+            </div>
+            <div class="small meta-text" id="basicStatusAdapterBand">Adapter: -- | Band: --</div>
+            <div class="small mt-6" id="basicStatusDetails"></div>
+            <div class="small mt-6 error-text" id="basicLastError"></div>
+            
+            <div class="action-group mt-12">
+              <button class="btn primary lg" id="btnStartBasic">Start</button>
+              <button class="btn danger" id="btnStopBasic">Stop</button>
+              <button class="btn secondary" id="btnRepairBasic">Repair</button>
+            </div>
+
+            <div class="control-row mt-12">
+              <button class="btn icon-btn" id="btnRefreshBasic" title="Refresh"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 1 20.49 15"/></svg></button>
+              <label class="tog" title="Auto refresh">
+                <input type="checkbox" id="autoRefreshBasic" /> Auto
+              </label>
+              <select id="refreshEveryBasic" class="mini-select">
+                <option value="2000">2s</option>
+                <option value="3000">3s</option>
+                <option value="5000">5s</option>
+              </select>
+            </div>
+
+            <div class="control-row mt-12">
+              <label class="tog" title="Hide logs">
+                <input type="checkbox" id="privacyModeBasic" checked /> Privacy
+              </label>
+              <label class="tog" title="Show Telemetry">
+                <input type="checkbox" id="showTelemetryBasic" /> Stats
+              </label>
+            </div>
+
+             <div class="token-field mt-12">
+               <input id="apiTokenBasic" type="password" placeholder="API Token" />
+               <button class="btn sm" id="btnSaveTokenBasic">Save</button>
+             </div>
+             
+            <div id="msgBasic" class="small mt-10"></div>
+            <div id="dirtyBasic" class="small mt-6 warning-text"></div>
+          </div>
+        </div>
+
+        <div class="card basic-card">
+          <div class="card-header">
+            <h2>Quick Setup</h2>
+          </div>
+          <div class="card-body">
+            <div id="basicInfoBanner" class="info-banner" style="display:none">Basic mode hides advanced details.</div>
+            <div id="basicChannelBanner" class="info-banner warn" style="display:none"></div>
+            <div id="basicQuickFields" class="form-stack"></div>
+            <div class="action-group mt-12">
+              <button class="btn primary" id="btnSaveConfigBasic">Save Config</button>
+              <button class="btn secondary" id="btnSaveRestartBasic">Save & Restart</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card basic-card">
+          <div class="card-header">
+             <h2>Connect</h2>
+          </div>
+          <div class="card-body">
+            <div id="basicConnectFields" class="form-stack"></div>
+            <div class="action-group mt-12 wrap-btns">
+               <button class="btn secondary" id="btnCopySsid">Copy SSID</button>
+               <button class="btn secondary" id="btnCopyPass">Copy Pass</button>
+               <button class="btn secondary" id="btnShowQrBasic">QR Code</button>
+            </div>
+             <button class="btn primary mt-8 full-width" id="btnSavePassBasic">Update Passphrase</button>
+             <div class="small mt-6 faded" id="copyHint"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ADVANCED UI SECTION -->
+    <div class="advanced-layout" data-ui-section="advanced">
+      
+      <!-- Sidebar Navigation -->
+      <nav class="sidebar">
+        <ul class="nav-list">
+          <li class="nav-item active" data-tab="overview">
+             <span class="icon">📊</span> Overview
+          </li>
+          <li class="nav-item" data-tab="settings">
+             <span class="icon">⚙️</span> Settings
+          </li>
+          <li class="nav-item" data-tab="telemetry">
+             <span class="icon">📈</span> Telemetry
+          </li>
+          <li class="nav-item" data-tab="logs">
+             <span class="icon">📜</span> Logs
+          </li>
+        </ul>
+        
+        <div class="sidebar-footer">
+          <label class="tog block-tog">
+             <input type="checkbox" id="privacyMode" checked />
+             <span>Privacy Mode</span>
+          </label>
+           <div class="token-field mt-12">
+             <input id="apiToken" type="password" placeholder="API Token" />
+             <button class="btn sm" id="btnSaveToken">Save</button>
+           </div>
+        </div>
+      </nav>
+
+      <!-- Main Content Area -->
+      <main class="content-area">
+        
+        <!-- Tab: Overview -->
+        <div id="tab-overview" class="tab-pane active">
+           <div class="grid-overview">
+              <div class="card status-hero">
+                <h2>Service Status</h2>
+                <div id="statusPillContainer" class="hero-status">
+                   <div id="pill" class="pill large"><div class="dot"></div><span id="pillTxt">Loading…</span></div>
+                </div>
+                <div class="hero-meta">
+                   <div id="statusEffective" class="status-summary"></div>
+                   <div id="rawStatus" class="mono-box mini"></div>
+                </div>
+                <div class="hero-actions">
+                   <button class="btn primary lg" id="btnStart">Start Hotspot</button>
+                   <button class="btn danger lg" id="btnStop">Stop Hotspot</button>
+                   <button class="btn secondary" id="btnRestart">Restart Service</button>
+                   <button class="btn secondary" id="btnRepair">Repair Network</button>
+                </div>
+              </div>
+
+               <div class="card quick-controls">
+                  <h2>Quick Actions</h2>
+                   <div class="control-row">
+                      <button class="btn icon-btn" id="btnRefresh" title="Refresh">↻ Refresh</button>
+                       <label class="tog" title="Auto refresh">
+                        <input type="checkbox" id="autoRefresh" /> Auto
+                      </label>
+                      <select id="refreshEvery" class="mini-select">
+                        <option value="2000">2s</option>
+                        <option value="3000">3s</option>
+                        <option value="5000">5s</option>
+                      </select>
+                   </div>
+                   <div id="msg" class="small mt-10"></div>
+                   <div id="dirty" class="small mt-6 warning-text"></div>
+               </div>
+           </div>
+        </div>
+
+        <!-- Tab: Settings -->
+        <div id="tab-settings" class="tab-pane">
+           <div class="settings-header">
+              <h2>Configuration</h2>
+              <div class="action-group">
+                 <button class="btn primary" id="btnSaveConfig">Save Changes</button>
+                 <button class="btn secondary" id="btnSaveRestart">Save & Restart</button>
+              </div>
+           </div>
+           
+           <div class="preset-bar">
+               <span class="label">Performance Profile:</span>
+               <div class="btn-group">
+                 <button class="btn sm" id="btnApplyVrProfileUltra">Ultra Low Latency</button>
+                 <button class="btn sm" id="btnApplyVrProfileHigh">High Throughput</button>
+                 <button class="btn sm" id="btnApplyVrProfile">Balanced</button>
+                 <button class="btn sm" id="btnApplyVrProfileStable">Stability</button>
+               </div>
+           </div>
+
+           <div class="settings-columns">
+             <!-- Wireless Column -->
+             <div class="settings-group">
+                <h3>Wireless</h3>
+                <div class="form-group" data-field="ssid">
+                  <label for="ssid">SSID</label>
+                  <input id="ssid" />
+                </div>
+                <div class="form-group" data-field="wpa2_passphrase">
+                   <label for="wpa2_passphrase">Passphrase</label>
+                   <div class="input-with-action">
+                     <input id="wpa2_passphrase" type="password" placeholder="Saved" />
+                     <button id="btnRevealPass" class="btn icon-only" title="Show">👁</button>
+                   </div>
+                   <div class="row mt-8">
+                     <button class="btn sm secondary" id="btnShowQr">Show QR</button>
+                     <div class="small" id="passHint"></div>
+                   </div>
+                </div>
+
+                <div class="form-group" data-field="band_preference">
+                  <label for="band_preference">Band Preference</label>
+                  <select id="band_preference">
+                    <option value="6ghz">6ghz (Wi-Fi 6E)</option>
+                    <option value="5ghz">5ghz</option>
+                    <option value="2.4ghz">2.4ghz</option>
+                  </select>
+                  <div class="hint" id="bandHint"></div>
+                </div>
+
+                <div class="form-group" data-field="ap_security">
+                   <label for="ap_security">Security</label>
+                   <select id="ap_security">
+                     <option value="wpa2">WPA2 (PSK)</option>
+                     <option value="wpa3_sae">WPA3 (SAE)</option>
+                   </select>
+                   <div class="hint" id="secHint"></div>
+                </div>
+
+                <div class="form-group" id="fivegBox" data-field="channel_5g">
+                   <label for="channel_5g">5GHz Channel</label>
+                   <input id="channel_5g" type="number" step="1" min="36" max="177" placeholder="Auto" />
+                   <div class="hint" id="ch5Hint"></div>
+                </div>
+
+                 <div class="form-group" id="sixgBox" data-field="channel_6g">
+                    <label for="channel_6g">6GHz Channel</label>
+                    <input id="channel_6g" type="number" step="1" min="1" max="233" placeholder="Auto" />
+                 </div>
+
+                 <div class="form-group" data-field="channel_width">
+                    <label for="channel_width">Channel Width</label>
+                    <select id="channel_width">
+                      <option value="auto">Auto (Max)</option>
+                      <option value="20">20 MHz</option>
+                      <option value="40">40 MHz</option>
+                      <option value="80">80 MHz</option>
+                      <option value="160">160 MHz</option>
+                    </select>
+                 </div>
+                 
+                 <div class="form-row two-col" data-field="beacon_interval">
+                    <div>
+                      <label for="beacon_interval">Beacon (TU)</label>
+                      <input id="beacon_interval" type="number" step="1" min="20" max="1000" placeholder="50" />
+                    </div>
+                    <div>
+                      <label for="dtim_period">DTIM</label>
+                      <input id="dtim_period" type="number" step="1" min="1" max="255" placeholder="1" />
+                    </div>
+                 </div>
+
+                 <div class="form-group" data-field="short_guard_interval">
+                    <label class="tog"><input type="checkbox" id="short_guard_interval" /> Short Guard Interval</label>
+                 </div>
+
+                 <div class="form-group" data-field="tx_power">
+                    <label for="tx_power">TX Power (dBm)</label>
+                    <input id="tx_power" type="number" step="1" min="1" max="30" placeholder="Auto" />
+                 </div>
+                 
+                 <div class="form-group" data-field="channel_auto_select">
+                   <label class="tog"><input type="checkbox" id="channel_auto_select" /> Auto Channel Select (Scan)</label>
+                 </div>
+
+                 <div class="form-group" data-field="country">
+                    <label>Country Code</label>
+                    <div class="input-with-action">
+                       <select id="country_sel">
+                          <option value="US">United States</option>
+                          <option value="JP">Japan</option>
+                          <option value="AU">Australia</option>
+                          <option value="CA">Canada</option>
+                          <option value="GB">United Kingdom</option>
+                          <option value="DE">Germany</option>
+                          <option value="FR">France</option>
+                          <option value="ES">Spain</option>
+                          <option value="IT">Italy</option>
+                          <option value="NL">Netherlands</option>
+                          <option value="SE">Sweden</option>
+                          <option value="NO">Norway</option>
+                          <option value="DK">Denmark</option>
+                          <option value="FI">Finland</option>
+                          <option value="CH">Switzerland</option>
+                          <option value="PL">Poland</option>
+                          <option value="CZ">Czechia</option>
+                          <option value="KR">Korea</option>
+                          <option value="SG">Singapore</option>
+                          <option value="00">World (00)</option>
+                          <option value="__custom">Custom…</option>
+                       </select>
+                       <input id="country" type="hidden" />
+                    </div>
+                 </div>
+
+                 <div class="form-group" data-field="ap_adapter">
+                    <label for="ap_adapter">Wi-Fi Adapter</label>
+                    <select id="ap_adapter"></select>
+                    <div class="row mt-8">
+                       <button class="btn sm" id="btnUseRecommended">Recommended</button>
+                       <button class="btn sm" id="btnReloadAdapters">Rescan</button>
+                    </div>
+                    <div class="small mt-6" id="adapterHint"></div>
+                 </div>
+
+             </div>
+
+             <!-- Network & System Column -->
+             <div class="settings-group">
+                <h3>Network</h3>
+                <div class="form-group" data-field="enable_internet">
+                    <label class="tog"><input type="checkbox" id="enable_internet" /> Share Internet Connection</label>
+                </div>
+                
+                <div class="form-row two-col">
+                  <div data-field="lan_gateway_ip">
+                    <label for="lan_gateway_ip">Gateway IP</label>
+                    <input id="lan_gateway_ip" placeholder="192.168.68.1" />
+                  </div>
+                  <div data-field="dhcp_dns">
+                    <label for="dhcp_dns">DNS</label>
+                    <input id="dhcp_dns" placeholder="gateway" />
+                  </div>
+                </div>
+
+                <div class="form-row two-col">
+                   <div data-field="dhcp_start_ip">
+                      <label for="dhcp_start_ip">DHCP Start</label>
+                      <input id="dhcp_start_ip" placeholder="10" />
+                   </div>
+                   <div data-field="dhcp_end_ip">
+                      <label for="dhcp_end_ip">DHCP End</label>
+                      <input id="dhcp_end_ip" placeholder="250" />
+                   </div>
+                </div>
+
+                <div class="form-group" data-field="qos_preset">
+                   <label for="qos_preset">QoS / Scheduler</label>
+                   
+                   <!-- Basic QoS (Hidden here, logic in ui.js handles visibility but layout logic might need update) -->
+                   <div class="qos-basic" style="display:none">
+                      <div id="basicQosBanner" class="pillWarn info-banner">
+                        Settings applied in Basic mode.
+                      </div>
+                      <div class="segmented">
+                        <label class="seg"><input type="radio" name="qos_basic" value="off" />Off</label>
+                        <label class="seg"><input type="radio" name="qos_basic" value="ultra_low_latency" />Speed</label>
+                        <label class="seg"><input type="radio" name="qos_basic" value="vr" />Stable</label>
+                      </div>
+                   </div>
+
+                   <div class="qos-advanced">
+                     <select id="qos_preset">
+                       <option value="off">Off</option>
+                       <option value="ultra_low_latency">Ultra Low Latency</option>
+                       <option value="vr">VR (Stability)</option>
+                       <option value="high_throughput">High Throughput</option>
+                       <option value="balanced">Balanced</option>
+                     </select>
+                   </div>
+                </div>
+
+                <div class="form-group" data-field="nat_accel">
+                   <label class="tog"><input type="checkbox" id="nat_accel" /> Hardware NAT Acceleration</label>
+                </div>
+
+                <div class="form-group" data-field="bridge_mode">
+                   <label class="tog"><input type="checkbox" id="bridge_mode" /> Bridge Mode</label>
+                   <div class="form-row two-col mt-8">
+                      <input id="bridge_name" placeholder="vrbr0" />
+                      <input id="bridge_uplink" placeholder="eth0" />
+                   </div>
+                </div>
+
+                <div class="form-group" data-field="firewalld_enabled">
+                   <label>Firewall Integration</label>
+                   <div class="tog-group">
+                      <label class="tog"><input type="checkbox" id="firewalld_enabled" /> Enabled</label>
+                      <label class="tog"><input type="checkbox" id="firewalld_enable_masquerade" /> Masq</label>
+                      <label class="tog"><input type="checkbox" id="firewalld_enable_forward" /> Fwd</label>
+                      <label class="tog"><input type="checkbox" id="firewalld_cleanup_on_stop" /> Cleanup</label>
+                   </div>
+                </div>
+                
+                <h3 class="mt-12">System & Diagnostics</h3>
+                <div class="form-group" data-field="ap_ready_timeout_s">
+                   <label for="ap_ready_timeout_s">Startup Timeout (s)</label>
+                   <input id="ap_ready_timeout_s" type="number" step="0.1" min="1" />
+                </div>
+                
+                <div class="form-group" data-field="optimized_no_virt">
+                   <label class="tog"><input type="checkbox" id="optimized_no_virt" /> optimized_no_virt (No Virtual Interface)</label>
+                </div>
+
+                <div class="form-group" data-field="wifi_power_save_disable">
+                   <div class="tog-group vertical">
+                      <label class="tog"><input type="checkbox" id="wifi_power_save_disable" /> Disable Wi-Fi Power Save</label>
+                      <label class="tog"><input type="checkbox" id="usb_autosuspend_disable" /> Disable USB Autosusiend</label>
+                      <label class="tog"><input type="checkbox" id="cpu_governor_performance" /> CPU Performance Mode</label>
+                   </div>
+                </div>
+
+                <div class="form-group" data-field="debug">
+                   <label class="tog"><input type="checkbox" id="debug" /> Enable Debug Logging</label>
+                </div>
+
+             </div>
+           </div>
+        </div>
+
+        <!-- Tab: Telemetry -->
+        <div id="tab-telemetry" class="tab-pane">
+           <div class="card" id="cardTelemetry">
+             <div class="card-header">
+                <h2>Real-time Telemetry</h2>
+                <div class="small" id="telemetrySummary"></div>
+                <div class="small warning-text" id="telemetryWarnings"></div>
+             </div>
+             <div class="card-body">
+                <div class="chart-wrapper">
+                  <canvas id="rssiChart"></canvas>
+                </div>
+                <div class="chart-wrapper mt-12">
+                  <canvas id="rateChart"></canvas>
+                </div>
+                
+                <div class="table-container mt-12">
+                   <button class="btn sm secondary mb-12" id="btnToggleTable">Toggle Client List</button>
+                   <table id="telemetryTable" style="display:none">
+                    <thead>
+                      <tr>
+                        <th>Client</th>
+                        <th>RSSI</th>
+                        <th>TX Mbps</th>
+                        <th>RX Mbps</th>
+                        <th>Quality</th>
+                        <th>Retries %</th>
+                        <th>Loss %</th>
+                      </tr>
+                    </thead>
+                    <tbody id="telemetryBody"></tbody>
+                  </table>
+                </div>
+
+                <div class="form-group mt-12" data-field="telemetry_enable">
+                  <label>Settings</label>
+                  <div class="tog-group">
+                     <label class="tog"><input type="checkbox" id="telemetry_enable" /> Enable Telemetry</label>
+                     <label class="tog"><input type="checkbox" id="connection_quality_monitoring" /> Quality Monitoring</label>
+                  </div>
+                </div>
+             </div>
+           </div>
+        </div>
+
+        <!-- Tab: Logs -->
+        <div id="tab-logs" class="tab-pane">
+           <div class="card full-height">
+              <div class="card-header">
+                 <h2>Engine Output</h2>
+                 <span class="small faded">Stdout / Stderr</span>
+              </div>
+              <div class="card-body">
+                 <div class="mono log-viewer" id="stdout"></div>
+                 <div class="mono log-viewer error" id="stderr"></div>
+              </div>
+           </div>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+<script defer src="/assets/field_visibility.js"></script>
+<script defer src="/assets/ui.js"></script>
+<script>
+// Inline script for new dashboard navigation logic
+document.addEventListener('DOMContentLoaded', () => {
+  const navItems = document.querySelectorAll('.nav-item');
+  const tabs = document.querySelectorAll('.tab-pane');
+  
+  function switchTab(tabId) {
+    // Update nav
+    navItems.forEach(item => {
+      if(item.dataset.tab === tabId) item.classList.add('active');
+      else item.classList.remove('active');
+    });
+    
+    // Update panes
+    tabs.forEach(pane => {
+      if(pane.id === 'tab-' + tabId) pane.classList.add('active');
+      else pane.classList.remove('active');
+    });
+  }
+
+  navItems.forEach(item => {
+    item.addEventListener('click', () => {
+      const tabId = item.dataset.tab;
+      switchTab(tabId);
+    });
+  });
+});
+</script>
+</body>
+</html>
