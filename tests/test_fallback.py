@@ -24,7 +24,7 @@ def _state_helpers():
     return state, load_state, update_state
 
 
-def _stubbed_env(monkeypatch, cfg, ap_ready_returns):
+def _stubbed_env(monkeypatch, cfg, ap_ready_returns, fallback_candidates=None):
     state, load_state, update_state = _state_helpers()
 
     monkeypatch.setattr(lifecycle, "load_state", load_state)
@@ -33,6 +33,51 @@ def _stubbed_env(monkeypatch, cfg, ap_ready_returns):
     monkeypatch.setattr(lifecycle, "ensure_config_file", lambda: None)
     monkeypatch.setattr(lifecycle, "_repair_impl", lambda correlation_id="repair": state)
     monkeypatch.setattr(lifecycle, "_maybe_set_regdom", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "_iface_is_up", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(lifecycle, "_iw_dev_info", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(lifecycle, "_nm_interference_reason", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "is_running", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(lifecycle.system_tuning, "apply_pre", lambda *_args, **_kwargs: ({}, []))
+    monkeypatch.setattr(lifecycle.system_tuning, "apply_runtime", lambda *_args, **_kwargs: ({}, []))
+    monkeypatch.setattr(lifecycle.network_tuning, "apply", lambda *_args, **_kwargs: ({}, []))
+    monkeypatch.setattr(lifecycle.os_release, "read_os_release", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(lifecycle.os_release, "apply_platform_overrides", lambda cfg, _info: (cfg, []))
+    monkeypatch.setattr(lifecycle.os_release, "is_bazzite", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        lifecycle.wifi_probe,
+        "detect_firewall_backends",
+        lambda: {"selected_backend": "nftables"},
+    )
+    monkeypatch.setattr(
+        lifecycle.wifi_probe,
+        "probe",
+        lambda *_args, **_kwargs: {
+            "wifi": {
+                "errors": [],
+                "warnings": [],
+                "counts": {"dfs": 0},
+                "candidates": [
+                    {
+                        "band": 5,
+                        "width": 80,
+                        "primary_channel": 36,
+                        "center_channel": 42,
+                        "country": "US",
+                        "flags": ["non_dfs"],
+                        "rationale": "test",
+                    }
+                ],
+            }
+        },
+    )
+    if fallback_candidates is not None:
+        monkeypatch.setattr(
+            lifecycle.wifi_probe,
+            "probe_5ghz_40",
+            lambda *_args, **_kwargs: {"candidates": fallback_candidates},
+        )
+
     monkeypatch.setattr(
         lifecycle,
         "get_adapters",
@@ -68,99 +113,70 @@ def _stubbed_env(monkeypatch, cfg, ap_ready_returns):
 
     monkeypatch.setattr(lifecycle, "start_engine", start_engine)
     monkeypatch.setattr(lifecycle, "stop_engine", lambda **_kwargs: (True, 0, [], [], None))
+    monkeypatch.setattr(lifecycle, "build_cmd", lambda **_kwargs: ["cmd", "5ghz"])
 
     ap_iter = iter(ap_ready_returns)
     monkeypatch.setattr(lifecycle, "_wait_for_ap_ready", lambda *_args, **_kwargs: next(ap_iter))
 
-    monkeypatch.setattr(lifecycle, "build_cmd_6ghz", lambda **_kwargs: ["cmd", "6ghz"])
-    monkeypatch.setattr(
-        lifecycle,
-        "build_cmd",
-        lambda **kwargs: ["cmd", kwargs.get("band_preference")],
-    )
-
     return state, calls
 
 
-def test_fallback_chain_6_to_5_to_2_4(monkeypatch):
-    cfg = {
-        "ssid": "Test",
-        "wpa2_passphrase": "password123",
-        "band_preference": "6ghz",
-        "ap_security": "wpa3_sae",
-        "fallback_channel_2g": 6,
-        "ap_ready_timeout_s": 0.1,
-    }
-    state, calls = _stubbed_env(
-        monkeypatch,
-        cfg,
-        [
-            None,
-            None,
-            lifecycle.APReadyInfo(
-                ifname="ap0",
-                phy="phy0",
-                ssid="Test",
-                freq_mhz=2412,
-                channel=1,
-                channel_width_mhz=None,
-            ),
-        ],
-    )
-
-    res = lifecycle._start_hotspot_impl(correlation_id="t1")
-
-    assert res.code == "started_with_fallback"
-    assert calls == [["cmd", "6ghz"], ["cmd", "5ghz"], ["cmd", "2.4ghz"]]
-    assert state["band"] == "2.4ghz"
-    assert "fallback_to_5ghz" in state["warnings"]
-    assert "fallback_to_2_4ghz" in state["warnings"]
-
-
-def test_fallback_chain_5_to_2_4(monkeypatch):
+def test_fail_closed_no_fallback_for_5ghz(monkeypatch):
     cfg = {
         "ssid": "Test",
         "wpa2_passphrase": "password123",
         "band_preference": "5ghz",
-        "fallback_channel_2g": 6,
         "ap_ready_timeout_s": 0.1,
+        "allow_fallback_40mhz": False,
     }
-    state, calls = _stubbed_env(
-        monkeypatch,
-        cfg,
-        [
-            None,
-            lifecycle.APReadyInfo(
-                ifname="ap0",
-                phy="phy0",
-                ssid="Test",
-                freq_mhz=2412,
-                channel=1,
-                channel_width_mhz=None,
-            ),
-        ],
-    )
+    state, calls = _stubbed_env(monkeypatch, cfg, [None])
+
+    res = lifecycle._start_hotspot_impl(correlation_id="t1")
+
+    assert res.code == "start_failed"
+    assert len(calls) == 1
+    assert state["phase"] == "error"
+    assert state["last_error"] == "ap_start_timed_out"
+    assert len(state["attempts"]) == 1
+    assert state["attempts"][0]["failure_reason"] == "ap_start_timed_out"
+
+
+def test_pro_mode_allows_40mhz_fallback(monkeypatch):
+    cfg = {
+        "ssid": "Test",
+        "wpa2_passphrase": "password123",
+        "band_preference": "5ghz",
+        "ap_ready_timeout_s": 0.1,
+        "allow_fallback_40mhz": True,
+    }
+    fallback_candidates = [
+        {
+            "band": 5,
+            "width": 40,
+            "primary_channel": 36,
+            "center_channel": 38,
+            "country": "US",
+            "flags": ["non_dfs"],
+            "rationale": "test40",
+        }
+    ]
+    ap_ready = [
+        None,
+        lifecycle.APReadyInfo(
+            ifname="ap0",
+            phy="phy0",
+            ssid="Test",
+            freq_mhz=5180,
+            channel=36,
+            channel_width_mhz=40,
+        ),
+    ]
+    state, calls = _stubbed_env(monkeypatch, cfg, ap_ready, fallback_candidates=fallback_candidates)
 
     res = lifecycle._start_hotspot_impl(correlation_id="t2")
 
     assert res.code == "started_with_fallback"
-    assert calls == [["cmd", "5ghz"], ["cmd", "2.4ghz"]]
-    assert state["band"] == "2.4ghz"
-    assert "fallback_to_2_4ghz" in state["warnings"]
-
-
-def test_no_fallback_for_2_4(monkeypatch):
-    cfg = {
-        "ssid": "Test",
-        "wpa2_passphrase": "password123",
-        "band_preference": "2.4ghz",
-        "ap_ready_timeout_s": 0.1,
-    }
-    state, calls = _stubbed_env(monkeypatch, cfg, [None])
-
-    res = lifecycle._start_hotspot_impl(correlation_id="t3")
-
-    assert res.code == "start_failed"
-    assert calls == [["cmd", "2.4ghz"]]
-    assert state["phase"] == "error"
-    assert state["last_error"] == "ap_ready_timeout"
+    assert len(calls) == 2
+    assert state["mode"] == "fallback"
+    assert state["fallback_reason"] == "pro_mode_40mhz"
+    assert state["channel_width_mhz"] == 40

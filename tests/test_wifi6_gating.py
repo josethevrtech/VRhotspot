@@ -36,6 +36,38 @@ def _stubbed_env(monkeypatch, cfg, supports_wifi6):
     monkeypatch.setattr(lifecycle, "_repair_impl", lambda correlation_id="repair": state)
     monkeypatch.setattr(lifecycle, "_maybe_set_regdom", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
+        lifecycle.wifi_probe,
+        "detect_firewall_backends",
+        lambda: {"selected_backend": "nftables"},
+    )
+    monkeypatch.setattr(
+        lifecycle.wifi_probe,
+        "probe",
+        lambda *_args, **_kwargs: {
+            "wifi": {
+                "errors": [],
+                "warnings": [],
+                "counts": {"dfs": 0},
+                "candidates": [
+                    {
+                        "band": 5,
+                        "width": 80,
+                        "primary_channel": 36,
+                        "center_channel": 42,
+                        "country": "US",
+                        "flags": ["non_dfs"],
+                        "rationale": "test",
+                    }
+                ],
+            }
+        },
+    )
+    monkeypatch.setattr(lifecycle, "_iface_is_up", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(lifecycle, "_iw_dev_info", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(lifecycle, "_nm_interference_reason", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(lifecycle, "is_running", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
         lifecycle,
         "get_adapters",
         lambda: {
@@ -80,7 +112,7 @@ def _stubbed_env(monkeypatch, cfg, supports_wifi6):
             ssid="Test",
             freq_mhz=5180,
             channel=36,
-            channel_width_mhz=None,
+            channel_width_mhz=80,
         ),
     )
     monkeypatch.setattr(

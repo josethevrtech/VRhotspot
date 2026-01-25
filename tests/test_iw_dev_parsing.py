@@ -62,6 +62,21 @@ phy#0
     assert aps[0].channel is None
 
 
+def test_parse_iw_dev_info():
+    iw_text = """
+Interface wlan0
+    ifindex 3
+    wdev 0x1
+    addr 00:11:22:33:44:55
+    type AP
+    channel 36 (5180 MHz), width: 80 MHz, center1: 5210 MHz
+"""
+    info = lifecycle._parse_iw_dev_info(iw_text)
+    assert info["channel"] == 36
+    assert info["freq_mhz"] == 5180
+    assert info["channel_width_mhz"] == 80
+
+
 def test_band_from_freq_mhz():
     assert lifecycle._band_from_freq_mhz(2412) == "2.4ghz"
     assert lifecycle._band_from_freq_mhz(5180) == "5ghz"

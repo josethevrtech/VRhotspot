@@ -23,6 +23,8 @@ def build_cmd(
     channel: Optional[int] = None,
     no_virt: bool = False,
     wifi6: bool = True,
+    channel_width: Optional[str] = None,
+    center_channel: Optional[int] = None,
     gateway_ip: Optional[str] = None,
     dhcp_dns: Optional[str] = None,
     enable_internet: bool = True,
@@ -69,6 +71,22 @@ def build_cmd(
     # Enable Wi-Fi 6 features only when effective (hostapd option via linux-router)
     if wifi6:
         cmd += ["--wifi6"]
+
+    # Channel width (VHT/HE for 80MHz on 5GHz)
+    width = str(channel_width).lower().strip() if channel_width else ""
+    if bp == "5ghz" and width in ("40", "80", "160"):
+        # Enable HT/VHT for wider channels when explicitly requested
+        cmd += ["--wifi4"]
+        if width in ("80", "160") or wifi6:
+            cmd += ["--wifi5"]
+        if width == "80":
+            cmd += ["--vht-ch-width", "1"]
+            if center_channel is not None:
+                cmd += ["--vht-seg0-ch", str(int(center_channel))]
+            if wifi6:
+                cmd += ["--he-ch-width", "1"]
+                if center_channel is not None:
+                    cmd += ["--he-seg0-ch", str(int(center_channel))]
 
     # Fixed channel
     if channel is not None:

@@ -715,3 +715,19 @@ canvas {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-subtle);
 }
+
+/* Fix for Action Group Alignment */
+.action-group {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.action-group.wrap-btns {
+  justify-content: flex-start;
+}
+
+.action-group .btn.full-width {
+  width: 100%;
+}

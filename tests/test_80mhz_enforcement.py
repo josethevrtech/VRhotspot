@@ -84,28 +84,65 @@ class Test80MHzEnforcement(unittest.TestCase):
         mock_res = MagicMock()
         mock_res.ok = True
         mock_res.pid = 123
+        mock_res.exit_code = None
+        mock_res.stdout_tail = []
+        mock_res.stderr_tail = []
+        mock_res.error = None
+        mock_res.cmd = ["cmd"]
+        mock_res.started_ts = 123456
         mock_start_engine.return_value = mock_res
         
         # Mock AP Ready
-        mock_wait_ap.return_value = MagicMock(ifname="wlan1", freq_mhz=5180)
+        mock_wait_ap.return_value = MagicMock(
+            ifname="wlan1",
+            freq_mhz=5180,
+            channel=36,
+            channel_width_mhz=80,
+        )
 
         from vr_hotspotd import lifecycle
         print(f"DEBUG: lifecycle.build_cmd ID: {id(lifecycle.build_cmd)}")
         print(f"DEBUG: mock_build_cmd ID: {id(mock_build_cmd)}")
 
-        try:
-            res = lifecycle.start_hotspot()
-            print(f"DEBUG: Returned from lifecycle.start_hotspot() with code={res.code}")
-            if res.code != "started":
-                 # Inspect mock_update_state calls to find the error
-                 print("DEBUG: Inspecting update_state calls:")
-                 for call in mock_update_state.call_args_list:
-                     print(f"  Call: {call}")
-                 self.fail(f"start_hotspot failed with code {res.code}")
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self.fail(f"start_hotspot failed with exception: {e}")
+        probe_payload = {
+            "wifi": {
+                "errors": [],
+                "warnings": [],
+                "counts": {"dfs": 0},
+                "candidates": [
+                    {
+                        "band": 5,
+                        "width": 80,
+                        "primary_channel": 36,
+                        "center_channel": 42,
+                        "country": "US",
+                        "flags": ["non_dfs"],
+                        "rationale": "test",
+                    }
+                ],
+            }
+        }
+
+        with patch("vr_hotspotd.lifecycle.wifi_probe.detect_firewall_backends", return_value={"selected_backend": "nftables"}), \
+             patch("vr_hotspotd.lifecycle.wifi_probe.probe", return_value=probe_payload), \
+             patch("vr_hotspotd.lifecycle._iface_is_up", return_value=True), \
+             patch("vr_hotspotd.lifecycle._iw_dev_info", return_value=""), \
+             patch("vr_hotspotd.lifecycle._nm_interference_reason", return_value=None), \
+             patch("vr_hotspotd.lifecycle.is_running", return_value=True), \
+             patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
+            try:
+                res = lifecycle.start_hotspot()
+                print(f"DEBUG: Returned from lifecycle.start_hotspot() with code={res.code}")
+                if res.code != "started":
+                     # Inspect mock_update_state calls to find the error
+                     print("DEBUG: Inspecting update_state calls:")
+                     for call in mock_update_state.call_args_list:
+                         print(f"  Call: {call}")
+                     self.fail(f"start_hotspot failed with code {res.code}")
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.fail(f"start_hotspot failed with exception: {e}")
 
         # Check start_engine calls
         if mock_start_engine.called:
@@ -188,14 +225,52 @@ class Test80MHzEnforcement(unittest.TestCase):
         mock_res = MagicMock()
         mock_res.ok = True
         mock_start_engine.return_value = mock_res
-        mock_wait_ap.return_value = MagicMock(ifname="wlan0", freq_mhz=5180)
+        mock_res.pid = 123
+        mock_res.exit_code = None
+        mock_res.stdout_tail = []
+        mock_res.stderr_tail = []
+        mock_res.error = None
+        mock_res.cmd = ["cmd"]
+        mock_res.started_ts = 123456
+        mock_wait_ap.return_value = MagicMock(
+            ifname="wlan0",
+            freq_mhz=5180,
+            channel=36,
+            channel_width_mhz=80,
+        )
         
         from vr_hotspotd import lifecycle
 
-        try:
-            lifecycle.start_hotspot()
-        except:
-            pass
+        probe_payload = {
+            "wifi": {
+                "errors": [],
+                "warnings": [],
+                "counts": {"dfs": 0},
+                "candidates": [
+                    {
+                        "band": 5,
+                        "width": 80,
+                        "primary_channel": 36,
+                        "center_channel": 42,
+                        "country": "US",
+                        "flags": ["non_dfs"],
+                        "rationale": "test",
+                    }
+                ],
+            }
+        }
+
+        with patch("vr_hotspotd.lifecycle.wifi_probe.detect_firewall_backends", return_value={"selected_backend": "nftables"}), \
+             patch("vr_hotspotd.lifecycle.wifi_probe.probe", return_value=probe_payload), \
+             patch("vr_hotspotd.lifecycle._iface_is_up", return_value=True), \
+             patch("vr_hotspotd.lifecycle._iw_dev_info", return_value=""), \
+             patch("vr_hotspotd.lifecycle._nm_interference_reason", return_value=None), \
+             patch("vr_hotspotd.lifecycle.is_running", return_value=True), \
+             patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
+            try:
+                lifecycle.start_hotspot()
+            except:
+                pass
 
         current_call = mock_build_cmd.call_args
         if not current_call:
@@ -278,13 +353,51 @@ class Test80MHzEnforcement(unittest.TestCase):
         mock_res = MagicMock()
         mock_res.ok = True
         mock_start_engine.return_value = mock_res
-        mock_wait_ap.return_value = MagicMock(ifname="wlan1", freq_mhz=5180)
+        mock_res.pid = 123
+        mock_res.exit_code = None
+        mock_res.stdout_tail = []
+        mock_res.stderr_tail = []
+        mock_res.error = None
+        mock_res.cmd = ["cmd"]
+        mock_res.started_ts = 123456
+        mock_wait_ap.return_value = MagicMock(
+            ifname="wlan1",
+            freq_mhz=5180,
+            channel=36,
+            channel_width_mhz=80,
+        )
 
         from vr_hotspotd import lifecycle
-        try:
-            lifecycle.start_hotspot()
-        except:
-            pass
+        probe_payload = {
+            "wifi": {
+                "errors": [],
+                "warnings": [],
+                "counts": {"dfs": 0},
+                "candidates": [
+                    {
+                        "band": 5,
+                        "width": 80,
+                        "primary_channel": 36,
+                        "center_channel": 42,
+                        "country": "US",
+                        "flags": ["non_dfs"],
+                        "rationale": "test",
+                    }
+                ],
+            }
+        }
+
+        with patch("vr_hotspotd.lifecycle.wifi_probe.detect_firewall_backends", return_value={"selected_backend": "nftables"}), \
+             patch("vr_hotspotd.lifecycle.wifi_probe.probe", return_value=probe_payload), \
+             patch("vr_hotspotd.lifecycle._iface_is_up", return_value=True), \
+             patch("vr_hotspotd.lifecycle._iw_dev_info", return_value=""), \
+             patch("vr_hotspotd.lifecycle._nm_interference_reason", return_value=None), \
+             patch("vr_hotspotd.lifecycle.is_running", return_value=True), \
+             patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
+            try:
+                lifecycle.start_hotspot()
+            except:
+                pass
 
         # Verify build_cmd was called with channel 36
         current_call = mock_build_cmd.call_args
@@ -354,7 +467,8 @@ class Test80MHzEnforcement(unittest.TestCase):
         # Expect failure
         # Expect result code 'start_failed' because start_hotspot catches exceptions
         from vr_hotspotd import lifecycle
-        res = lifecycle.start_hotspot()
+        with patch("vr_hotspotd.lifecycle.wifi_probe.detect_firewall_backends", return_value={"selected_backend": "nftables"}):
+            res = lifecycle.start_hotspot()
         self.assertEqual(res.code, "start_failed")
         
         # Verify update_state was called with the error
@@ -377,4 +491,3 @@ class Test80MHzEnforcement(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -5,6 +5,7 @@ import subprocess
 from typing import Dict, List, Optional, Tuple
 
 from vr_hotspotd import qos, nat_accel
+from vr_hotspotd.engine import ufw
 
 
 def _default_uplink_iface() -> Optional[str]:
@@ -120,6 +121,7 @@ def apply(
     ap_ifname: Optional[str],
     enable_internet: bool,
     firewalld_cfg: Optional[Dict[str, object]] = None,
+    firewall_backend: Optional[str] = None,
 ) -> Tuple[Dict[str, object], List[str]]:
     state: Dict[str, object] = {}
     warnings: List[str] = []
@@ -143,6 +145,16 @@ def apply(
     if nat_state:
         state["nat_accel"] = nat_state
 
+    if firewall_backend == "ufw":
+        ufw_state, ufw_warn = ufw.apply(
+            ap_ifname=ap_ifname,
+            uplink_ifname=uplink_ifname,
+            enable_internet=enable_internet,
+        )
+        warnings.extend(ufw_warn)
+        if ufw_state:
+            state["ufw"] = ufw_state
+
     # Interrupt coalescing tuning
     if bool(cfg.get("interrupt_coalescing", False)):
         interfaces = [iface for iface in [ap_ifname, uplink_ifname] if iface]
@@ -162,6 +174,8 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
 
     warnings.extend(qos.revert(state.get("qos") if isinstance(state.get("qos"), dict) else None))
     warnings.extend(nat_accel.revert(state.get("nat_accel") if isinstance(state.get("nat_accel"), dict) else None))
+
+    warnings.extend(ufw.revert(state.get("ufw") if isinstance(state.get("ufw"), dict) else None))
     
     # Revert interrupt coalescing (best-effort)
     ic_state = state.get("interrupt_coalescing")

@@ -22,6 +22,13 @@ DEFAULT_STATE: Dict[str, Any] = {
     "ap_interface": None,
     "band": None,
     "channel_width_mhz": None,
+    "selected_band": None,
+    "selected_width_mhz": None,
+    "selected_channel": None,
+    "selected_country": None,
+    "attempts": [],
+    "pro_mode_allow_fallback_40mhz": False,
+    "last_error_detail": None,
 
     "mode": None,                # optimized | fallback
     "fallback_reason": None,

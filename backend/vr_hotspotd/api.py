@@ -50,6 +50,8 @@ _CONFIG_MUTABLE_KEYS = {
     "short_guard_interval",  # bool
     "tx_power",  # int (dBm) or None for auto
     "channel_auto_select",  # bool
+    "allow_fallback_40mhz",  # bool (Pro Mode)
+    "allow_dfs_channels",  # bool
     # Network
     "lan_gateway_ip",
     "dhcp_start_ip",
@@ -109,6 +111,8 @@ _START_OVERRIDE_KEYS = {
     "short_guard_interval",
     "tx_power",
     "channel_auto_select",
+    "allow_fallback_40mhz",
+    "allow_dfs_channels",
     # Network
     "lan_gateway_ip",
     "dhcp_start_ip",
@@ -173,6 +177,8 @@ _BOOL_KEYS = {
     "tcp_low_latency",
     "memory_tuning",
     "io_scheduler_optimize",
+    "allow_fallback_40mhz",
+    "allow_dfs_channels",
 }
 _INT_KEYS = {"fallback_channel_2g", "channel_6g", "channel_5g", "beacon_interval", "dtim_period", "tx_power"}
 _FLOAT_KEYS = {"ap_ready_timeout_s", "watchdog_interval_s", "telemetry_interval_s"}
@@ -256,11 +262,6 @@ def _classify_ping(ping_result: dict) -> Dict[str, str]:
 
 def _resolve_asset_path(asset_name: str) -> Optional[str]:
     """Resolve asset file path, trying install path first, then dev path."""
-    # Install path: /var/lib/vr-hotspot/app/assets/...
-    install_path = os.path.join("/var/lib/vr-hotspot/app/assets", asset_name)
-    if os.path.isfile(install_path):
-        return install_path
-    # Dev path: resolve relative to backend/vr_hotspotd/api.py -> repo root/assets/...
     api_file = os.path.abspath(__file__)
     # backend/vr_hotspotd/api.py -> backend/vr_hotspotd -> backend -> repo root
     backend_dir = os.path.dirname(os.path.dirname(api_file))
@@ -268,6 +269,12 @@ def _resolve_asset_path(asset_name: str) -> Optional[str]:
     dev_path = os.path.join(repo_root, "assets", asset_name)
     if os.path.isfile(dev_path):
         return dev_path
+
+    # Install path: /var/lib/vr-hotspot/app/assets/...
+    install_path = os.path.join("/var/lib/vr-hotspot/app/assets", asset_name)
+    if os.path.isfile(install_path):
+        return install_path
+    
     return None
 
 
@@ -984,7 +991,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "public, max-age=3600")
+                self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(data)
@@ -1103,8 +1110,9 @@ class APIHandler(BaseHTTPRequestHandler):
             if asset_path and os.path.isfile(asset_path):
                 length = os.path.getsize(asset_path)
                 self.send_response(200)
-                self._send_common_headers(content_type, length)
-                self.send_header("Cache-Control", "public, max-age=3600")
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(length))
+                self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
             self._respond_raw(404, b"Not Found", "text/plain")
@@ -1157,7 +1165,14 @@ class APIHandler(BaseHTTPRequestHandler):
             overrides, w_coerce = self._coerce_config_types(overrides)
             warnings += w_coerce
 
-            res = start_hotspot(correlation_id=cid, overrides=overrides if overrides else None)
+            # Extract basic_mode flag from request body
+            basic_mode = False
+            if isinstance(body, dict):
+                bm = body.get("basic_mode")
+                if bm is True or (isinstance(bm, str) and bm.lower() in ("true", "1", "yes")):
+                    basic_mode = True
+
+            res = start_hotspot(correlation_id=cid, overrides=overrides if overrides else None, basic_mode=basic_mode)
             self._respond(
                 200,
                 self._envelope(
@@ -1233,7 +1248,14 @@ class APIHandler(BaseHTTPRequestHandler):
             overrides, w_coerce = self._coerce_config_types(overrides)
             warnings += w_coerce
 
-            res = start_hotspot(correlation_id=cid + ":start", overrides=overrides if overrides else None)
+            # Extract basic_mode flag from request body
+            basic_mode = False
+            if isinstance(body, dict):
+                bm = body.get("basic_mode")
+                if bm is True or (isinstance(bm, str) and bm.lower() in ("true", "1", "yes")):
+                    basic_mode = True
+
+            res = start_hotspot(correlation_id=cid + ":start", overrides=overrides if overrides else None, basic_mode=basic_mode)
             self._respond(
                 200,
                 self._envelope(

@@ -60,7 +60,7 @@ const ADVANCED_DEFAULTS = {
 const ADVANCED_KEYS = Object.keys(FIELD_VISIBILITY).filter((key) => FIELD_VISIBILITY[key] === 'advanced');
 const ADVANCED_KEYS_FALLBACK = ADVANCED_KEYS.length ? ADVANCED_KEYS : Object.keys(ADVANCED_DEFAULTS);
 const BASIC_QUICK_FIELDS = ['ap_adapter', 'band_preference', 'ap_security', 'country', 'enable_internet', 'qos_preset'];
-const BASIC_CONNECT_FIELDS = ['ssid', 'wpa2_passphrase'];
+const BASIC_CONNECT_FIELDS = ['ssid'];
 const BASIC_FIELD_KEYS = Object.keys(FIELD_VISIBILITY).filter((key) => FIELD_VISIBILITY[key] === 'basic');
 const BASIC_FIELD_KEYS_FALLBACK = BASIC_FIELD_KEYS.length ? BASIC_FIELD_KEYS : BASIC_QUICK_FIELDS.concat(BASIC_CONNECT_FIELDS);
 const FIELD_HOMES = new Map();
@@ -336,15 +336,87 @@ function markPassphraseDirty(ev) {
   passphraseDirty = true;
 }
 
+function getPassphraseInputs() {
+  return {
+    advanced: document.getElementById('wpa2_passphrase'),
+    basic: document.getElementById('wpa2_passphrase_basic'),
+  };
+}
+
+function syncPassphraseInputs(sourceEl, ev) {
+  if (!sourceEl) return;
+  const { advanced, basic } = getPassphraseInputs();
+  const value = sourceEl.value || '';
+  if (sourceEl === advanced && basic && basic.value !== value) {
+    basic.value = value;
+  } else if (sourceEl === basic && advanced && advanced.value !== value) {
+    advanced.value = value;
+  }
+  markPassphraseDirty(ev);
+  markDirty(ev);
+}
+
+function getPassphraseValue() {
+  const { advanced, basic } = getPassphraseInputs();
+  const advVal = advanced ? (advanced.value || '').trim() : '';
+  if (advVal) return advVal;
+  const basicVal = basic ? (basic.value || '').trim() : '';
+  return basicVal;
+}
+
+function clearPassphraseInputs() {
+  const { advanced, basic } = getPassphraseInputs();
+  if (advanced) {
+    advanced.value = '';
+    advanced.type = 'password';
+  }
+  if (basic) {
+    basic.value = '';
+    basic.type = 'password';
+  }
+}
+
+function getEl(id) {
+  return document.getElementById(id);
+}
+
+function getValueIf(id) {
+  const el = getEl(id);
+  return el ? el.value : undefined;
+}
+
+function getCheckedIf(id) {
+  const el = getEl(id);
+  return el ? el.checked : undefined;
+}
+
+function setValueIf(id, value) {
+  const el = getEl(id);
+  if (el) el.value = value;
+}
+
+function setCheckedIf(id, value) {
+  const el = getEl(id);
+  if (el) el.checked = !!value;
+}
+
 function resetPassphraseUi(cfg) {
-  const passEl = document.getElementById('wpa2_passphrase');
-  if (!passEl) return;
+  const { advanced: passEl, basic: passBasic } = getPassphraseInputs();
+  if (!passEl && !passBasic) return;
   if (passphraseDirty) return; /* Do not overwrite user input */
   const hasSaved = !!(cfg && cfg.wpa2_passphrase_set);
-  passEl.type = 'password';
-  passEl.value = '';
-  passEl.placeholder = hasSaved ? 'Type new passphrase to change (currently saved)' : 'Type a new passphrase to set it';
-  passEl.readOnly = false;
+  if (passEl) {
+    passEl.type = 'password';
+    passEl.value = '';
+    passEl.placeholder = hasSaved ? 'Type new passphrase to change (currently saved)' : 'Type a new passphrase to set it';
+    passEl.readOnly = false;
+  }
+  if (passBasic) {
+    passBasic.type = 'password';
+    passBasic.value = '';
+    passBasic.placeholder = hasSaved ? 'Saved (tap eye to reveal)' : 'Enter a passphrase (8-63 characters)';
+    passBasic.readOnly = false;
+  }
   const passHint = document.getElementById('passHint');
   if (passHint) {
     if (hasSaved) {
@@ -356,6 +428,11 @@ function resetPassphraseUi(cfg) {
     } else {
       passHint.textContent = '';
     }
+  }
+  const basicHint = document.getElementById('copyHint');
+  if (basicHint) {
+    basicHint.textContent = hasSaved ? 'Passphrase saved' : '';
+    basicHint.style.color = '';
   }
   passphraseDirty = false;
 }
@@ -585,6 +662,11 @@ function pickBasicFields(cfg) {
       if (value !== undefined) out[key] = value;
     }
   }
+  // Explicitly preserve passphrase if set (critical fix for Basic Mode)
+  if (cfg.wpa2_passphrase !== undefined) {
+    out.wpa2_passphrase = cfg.wpa2_passphrase;
+  }
+  return out;
   return out;
 }
 
@@ -618,8 +700,15 @@ function wireDirtyTracking() {
 
   const passEl = document.getElementById('wpa2_passphrase');
   if (passEl) {
-    passEl.addEventListener('input', markPassphraseDirty);
-    passEl.addEventListener('change', markPassphraseDirty);
+    const onPass = (ev) => syncPassphraseInputs(passEl, ev);
+    passEl.addEventListener('input', onPass);
+    passEl.addEventListener('change', onPass);
+  }
+  const passBasic = document.getElementById('wpa2_passphrase_basic');
+  if (passBasic) {
+    const onPassBasic = (ev) => syncPassphraseInputs(passBasic, ev);
+    passBasic.addEventListener('input', onPassBasic);
+    passBasic.addEventListener('change', onPassBasic);
   }
 
   // Normalize country input to uppercase and 2 chars (or 00).
@@ -756,6 +845,20 @@ function renderTelemetry(t) {
       tr.appendChild(td);
     }
     body.appendChild(tr);
+  }
+
+  if (t) {
+    // Basic Mode Telemetry
+    const basicC = document.getElementById('basicTelemetryContainer');
+    if (basicC) {
+      const summary = t.summary || {};
+      basicC.innerHTML = `
+        <div>Clients: ${summary.client_count || 0}</div>
+        <div>Traffic: TX ${summary.tx_mbps_total || 0} Mbps / RX ${summary.rx_mbps_total || 0} Mbps</div>
+      `;
+    }
+    // Advanced charts
+    if (window.updateCharts) window.updateCharts(t);
   }
 
   updateCharts(t);
@@ -926,16 +1029,37 @@ async function startHotspot(overrides, label) {
   const prefix = label ? `Starting (${label})...` : 'Starting...';
   setMsg(prefix);
   const opts = { method: 'POST' };
-  if (overrides) opts.body = JSON.stringify({ overrides });
+
+  // Build request body with basic_mode flag
+  const payload = {};
+  if (overrides) payload.overrides = overrides;
+
+  // Send basic_mode: true when UI is in Basic Mode for VR-optimized enforcement
+  if (getUiMode() === 'basic') {
+    payload.basic_mode = true;
+  }
+
+  if (Object.keys(payload).length > 0) {
+    opts.body = JSON.stringify(payload);
+  }
+
   const r = await api('/v1/start', opts);
   setMsg(r.json ? ('Start: ' + r.json.result_code) : ('Start failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
   await refresh();
 }
 
-async function copyFieldValue(fieldId, label) {
-  const el = document.getElementById(fieldId);
-  if (!el) return;
-  const value = (el.value || '').toString().trim();
+async function copyFieldValue(fieldId, label, fallbackIds = []) {
+  const ids = [fieldId].concat(fallbackIds || []);
+  let value = '';
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const v = (el.value || '').toString().trim();
+    if (v) {
+      value = v;
+      break;
+    }
+  }
   if (!value) {
     setMsg(`${label} is empty`, 'dangerText');
     return;
@@ -1247,30 +1371,24 @@ function applyVrProfile(profileName = 'balanced') {
 
   const profile = profiles[profileName] || profiles['balanced'];
 
-  document.getElementById('band_preference').value = profile.band_preference;
-  document.getElementById('ap_security').value = profile.ap_security;
-  document.getElementById('optimized_no_virt').checked = profile.optimized_no_virt;
-  document.getElementById('enable_internet').checked = profile.enable_internet;
-  document.getElementById('wifi_power_save_disable').checked = profile.wifi_power_save_disable;
-  document.getElementById('usb_autosuspend_disable').checked = profile.usb_autosuspend_disable;
-  document.getElementById('cpu_governor_performance').checked = profile.cpu_governor_performance;
-  document.getElementById('sysctl_tuning').checked = profile.sysctl_tuning;
-  if (document.getElementById('tcp_low_latency')) {
-    document.getElementById('tcp_low_latency').checked = profile.tcp_low_latency || false;
-  }
-  if (document.getElementById('memory_tuning')) {
-    document.getElementById('memory_tuning').checked = profile.memory_tuning || false;
-  }
-  if (document.getElementById('interrupt_coalescing')) {
-    document.getElementById('interrupt_coalescing').checked = profile.interrupt_coalescing || false;
-  }
-  document.getElementById('telemetry_enable').checked = profile.telemetry_enable;
-  document.getElementById('telemetry_interval_s').value = profile.telemetry_interval_s;
-  document.getElementById('watchdog_enable').checked = profile.watchdog_enable;
-  document.getElementById('watchdog_interval_s').value = profile.watchdog_interval_s;
+  setValueIf('band_preference', profile.band_preference);
+  setValueIf('ap_security', profile.ap_security);
+  setCheckedIf('optimized_no_virt', profile.optimized_no_virt);
+  setCheckedIf('enable_internet', profile.enable_internet);
+  setCheckedIf('wifi_power_save_disable', profile.wifi_power_save_disable);
+  setCheckedIf('usb_autosuspend_disable', profile.usb_autosuspend_disable);
+  setCheckedIf('cpu_governor_performance', profile.cpu_governor_performance);
+  setCheckedIf('sysctl_tuning', profile.sysctl_tuning);
+  setCheckedIf('tcp_low_latency', profile.tcp_low_latency || false);
+  setCheckedIf('memory_tuning', profile.memory_tuning || false);
+  setCheckedIf('interrupt_coalescing', profile.interrupt_coalescing || false);
+  setCheckedIf('telemetry_enable', profile.telemetry_enable);
+  setValueIf('telemetry_interval_s', profile.telemetry_interval_s);
+  setCheckedIf('watchdog_enable', profile.watchdog_enable);
+  setValueIf('watchdog_interval_s', profile.watchdog_interval_s);
   setQoS(profile.qos_preset);
-  document.getElementById('nat_accel').checked = profile.nat_accel;
-  document.getElementById('bridge_mode').checked = profile.bridge_mode;
+  setCheckedIf('nat_accel', profile.nat_accel);
+  setCheckedIf('bridge_mode', profile.bridge_mode);
   if (document.getElementById('channel_width')) {
     document.getElementById('channel_width').value = profile.channel_width || '80';
   }
@@ -1289,94 +1407,191 @@ function applyVrProfile(profileName = 'balanced') {
 }
 
 function getForm() {
-  const out = {
-    ssid: document.getElementById('ssid').value,
-    band_preference: resolveBandPref(document.getElementById('band_preference').value),
-    ap_security: document.getElementById('ap_security').value,
-    country: document.getElementById('country').value,
-    optimized_no_virt: document.getElementById('optimized_no_virt').checked,
-    ap_adapter: document.getElementById('ap_adapter').value,
-    ap_ready_timeout_s: parseFloat(document.getElementById('ap_ready_timeout_s').value || '6.0'),
-    fallback_channel_2g: parseInt(document.getElementById('fallback_channel_2g').value || '6', 10),
-    channel_width: document.getElementById('channel_width').value,
-    beacon_interval: parseInt(document.getElementById('beacon_interval').value || '50', 10),
-    dtim_period: parseInt(document.getElementById('dtim_period').value || '1', 10),
-    short_guard_interval: document.getElementById('short_guard_interval').checked,
-    channel_auto_select: document.getElementById('channel_auto_select').checked,
-    enable_internet: document.getElementById('enable_internet').checked,
-    wifi_power_save_disable: document.getElementById('wifi_power_save_disable').checked,
-    usb_autosuspend_disable: document.getElementById('usb_autosuspend_disable').checked,
-    cpu_governor_performance: document.getElementById('cpu_governor_performance').checked,
-    sysctl_tuning: document.getElementById('sysctl_tuning').checked,
-    interrupt_coalescing: document.getElementById('interrupt_coalescing').checked,
-    tcp_low_latency: document.getElementById('tcp_low_latency').checked,
-    memory_tuning: document.getElementById('memory_tuning').checked,
-    io_scheduler_optimize: document.getElementById('io_scheduler_optimize').checked,
-    telemetry_enable: document.getElementById('telemetry_enable').checked,
-    telemetry_interval_s: parseFloat(document.getElementById('telemetry_interval_s').value || '2.0'),
-    watchdog_enable: document.getElementById('watchdog_enable').checked,
-    watchdog_interval_s: parseFloat(document.getElementById('watchdog_interval_s').value || '2.0'),
-    connection_quality_monitoring: document.getElementById('connection_quality_monitoring').checked,
-    auto_channel_switch: document.getElementById('auto_channel_switch').checked,
-    qos_preset: currentQosPreset,
-    nat_accel: document.getElementById('nat_accel').checked,
-    bridge_mode: document.getElementById('bridge_mode').checked,
-    firewalld_enabled: document.getElementById('firewalld_enabled').checked,
-    firewalld_enable_masquerade: document.getElementById('firewalld_enable_masquerade').checked,
-    firewalld_enable_forward: document.getElementById('firewalld_enable_forward').checked,
-    firewalld_cleanup_on_stop: document.getElementById('firewalld_cleanup_on_stop').checked,
-    debug: document.getElementById('debug').checked,
-    firewalld_zone: (lastCfg && lastCfg.firewalld_zone) ? lastCfg.firewalld_zone : 'trusted',
-  };
+  const out = {};
+
+  const ssid = getValueIf('ssid');
+  if (ssid !== undefined) out.ssid = ssid;
+
+  const bandPref = getValueIf('band_preference');
+  if (bandPref !== undefined) out.band_preference = resolveBandPref(bandPref);
+
+  const apSecurity = getValueIf('ap_security');
+  if (apSecurity !== undefined) out.ap_security = apSecurity;
+
+  const country = getValueIf('country');
+  if (country !== undefined) out.country = country;
+
+  const optimizedNoVirt = getCheckedIf('optimized_no_virt');
+  if (optimizedNoVirt !== undefined) out.optimized_no_virt = optimizedNoVirt;
+
+  const apAdapter = getValueIf('ap_adapter');
+  if (apAdapter !== undefined) out.ap_adapter = apAdapter;
+
+  const apReadyRaw = getValueIf('ap_ready_timeout_s');
+  if (apReadyRaw !== undefined) out.ap_ready_timeout_s = parseFloat(apReadyRaw || '6.0');
+
+  const fallbackRaw = getValueIf('fallback_channel_2g');
+  if (fallbackRaw !== undefined) out.fallback_channel_2g = parseInt(fallbackRaw || '6', 10);
+
+  const channelWidth = getValueIf('channel_width');
+  if (channelWidth !== undefined) out.channel_width = channelWidth || '80';
+
+  const beaconRaw = getValueIf('beacon_interval');
+  if (beaconRaw !== undefined) out.beacon_interval = parseInt(beaconRaw || '50', 10);
+
+  const dtimRaw = getValueIf('dtim_period');
+  if (dtimRaw !== undefined) out.dtim_period = parseInt(dtimRaw || '1', 10);
+
+  const shortGi = getCheckedIf('short_guard_interval');
+  if (shortGi !== undefined) out.short_guard_interval = shortGi;
+
+  const channelAuto = getCheckedIf('channel_auto_select');
+  if (channelAuto !== undefined) out.channel_auto_select = channelAuto;
+
+  const enableInternet = getCheckedIf('enable_internet');
+  if (enableInternet !== undefined) out.enable_internet = enableInternet;
+
+  const wifiPowerSave = getCheckedIf('wifi_power_save_disable');
+  if (wifiPowerSave !== undefined) out.wifi_power_save_disable = wifiPowerSave;
+
+  const usbAutosuspend = getCheckedIf('usb_autosuspend_disable');
+  if (usbAutosuspend !== undefined) out.usb_autosuspend_disable = usbAutosuspend;
+
+  const cpuGovernor = getCheckedIf('cpu_governor_performance');
+  if (cpuGovernor !== undefined) out.cpu_governor_performance = cpuGovernor;
+
+  const sysctl = getCheckedIf('sysctl_tuning');
+  if (sysctl !== undefined) out.sysctl_tuning = sysctl;
+
+  const interruptCoal = getCheckedIf('interrupt_coalescing');
+  if (interruptCoal !== undefined) out.interrupt_coalescing = interruptCoal;
+
+  const tcpLowLatency = getCheckedIf('tcp_low_latency');
+  if (tcpLowLatency !== undefined) out.tcp_low_latency = tcpLowLatency;
+
+  const memoryTuning = getCheckedIf('memory_tuning');
+  if (memoryTuning !== undefined) out.memory_tuning = memoryTuning;
+
+  const ioScheduler = getCheckedIf('io_scheduler_optimize');
+  if (ioScheduler !== undefined) out.io_scheduler_optimize = ioScheduler;
+
+  const telemetryEnable = getCheckedIf('telemetry_enable');
+  if (telemetryEnable !== undefined) out.telemetry_enable = telemetryEnable;
+
+  const telemetryRaw = getValueIf('telemetry_interval_s');
+  if (telemetryRaw !== undefined) out.telemetry_interval_s = parseFloat(telemetryRaw || '2.0');
+
+  const watchdogEnable = getCheckedIf('watchdog_enable');
+  if (watchdogEnable !== undefined) out.watchdog_enable = watchdogEnable;
+
+  const watchdogRaw = getValueIf('watchdog_interval_s');
+  if (watchdogRaw !== undefined) out.watchdog_interval_s = parseFloat(watchdogRaw || '2.0');
+
+  const connectionQuality = getCheckedIf('connection_quality_monitoring');
+  if (connectionQuality !== undefined) out.connection_quality_monitoring = connectionQuality;
+
+  const autoSwitch = getCheckedIf('auto_channel_switch');
+  if (autoSwitch !== undefined) out.auto_channel_switch = autoSwitch;
+
+  out.qos_preset = currentQosPreset;
+
+  const natAccel = getCheckedIf('nat_accel');
+  if (natAccel !== undefined) out.nat_accel = natAccel;
+
+  const bridgeMode = getCheckedIf('bridge_mode');
+  if (bridgeMode !== undefined) out.bridge_mode = bridgeMode;
+
+  const firewalldEnabled = getCheckedIf('firewalld_enabled');
+  if (firewalldEnabled !== undefined) out.firewalld_enabled = firewalldEnabled;
+
+  const fwMasq = getCheckedIf('firewalld_enable_masquerade');
+  if (fwMasq !== undefined) out.firewalld_enable_masquerade = fwMasq;
+
+  const fwForward = getCheckedIf('firewalld_enable_forward');
+  if (fwForward !== undefined) out.firewalld_enable_forward = fwForward;
+
+  const fwCleanup = getCheckedIf('firewalld_cleanup_on_stop');
+  if (fwCleanup !== undefined) out.firewalld_cleanup_on_stop = fwCleanup;
+
+  const debug = getCheckedIf('debug');
+  if (debug !== undefined) out.debug = debug;
+
+  out.firewalld_zone = (lastCfg && lastCfg.firewalld_zone) ? lastCfg.firewalld_zone : 'trusted';
 
   // Optional 5 GHz channel
-  const ch5 = (document.getElementById('channel_5g').value || '').trim();
-  if (ch5) {
-    const n = parseInt(ch5, 10);
-    if (!Number.isNaN(n)) out.channel_5g = n;
-  } else {
-    out.channel_5g = null;
+  const ch5Raw = getValueIf('channel_5g');
+  if (ch5Raw !== undefined) {
+    const ch5 = ch5Raw.trim();
+    if (ch5) {
+      const n = parseInt(ch5, 10);
+      if (!Number.isNaN(n)) out.channel_5g = n;
+    } else {
+      out.channel_5g = null;
+    }
   }
 
   // Optional 6 GHz channel
-  const ch6 = (document.getElementById('channel_6g').value || '').trim();
-  if (ch6) {
-    const n = parseInt(ch6, 10);
-    if (!Number.isNaN(n)) out.channel_6g = n;
-  } else {
-    out.channel_6g = null;
+  const ch6Raw = getValueIf('channel_6g');
+  if (ch6Raw !== undefined) {
+    const ch6 = ch6Raw.trim();
+    if (ch6) {
+      const n = parseInt(ch6, 10);
+      if (!Number.isNaN(n)) out.channel_6g = n;
+    } else {
+      out.channel_6g = null;
+    }
   }
 
   // Optional TX power
-  const txPower = (document.getElementById('tx_power').value || '').trim();
-  if (txPower) {
-    const n = parseInt(txPower, 10);
-    if (!Number.isNaN(n)) out.tx_power = n;
-  } else {
-    out.tx_power = null;
+  const txPowerRaw = getValueIf('tx_power');
+  if (txPowerRaw !== undefined) {
+    const txPower = txPowerRaw.trim();
+    if (txPower) {
+      const n = parseInt(txPower, 10);
+      if (!Number.isNaN(n)) out.tx_power = n;
+    } else {
+      out.tx_power = null;
+    }
   }
 
-  const gw = (document.getElementById('lan_gateway_ip').value || '').trim();
-  if (gw) out.lan_gateway_ip = gw;
+  const gwRaw = getValueIf('lan_gateway_ip');
+  if (gwRaw !== undefined) {
+    const gw = gwRaw.trim();
+    if (gw) out.lan_gateway_ip = gw;
+  }
 
-  const dhcpStart = (document.getElementById('dhcp_start_ip').value || '').trim();
-  if (dhcpStart) out.dhcp_start_ip = dhcpStart;
+  const dhcpStartRaw = getValueIf('dhcp_start_ip');
+  if (dhcpStartRaw !== undefined) {
+    const dhcpStart = dhcpStartRaw.trim();
+    if (dhcpStart) out.dhcp_start_ip = dhcpStart;
+  }
 
-  const dhcpEnd = (document.getElementById('dhcp_end_ip').value || '').trim();
-  if (dhcpEnd) out.dhcp_end_ip = dhcpEnd;
+  const dhcpEndRaw = getValueIf('dhcp_end_ip');
+  if (dhcpEndRaw !== undefined) {
+    const dhcpEnd = dhcpEndRaw.trim();
+    if (dhcpEnd) out.dhcp_end_ip = dhcpEnd;
+  }
 
-  const dhcpDns = (document.getElementById('dhcp_dns').value || '').trim();
-  if (dhcpDns) out.dhcp_dns = dhcpDns;
+  const dhcpDnsRaw = getValueIf('dhcp_dns');
+  if (dhcpDnsRaw !== undefined) {
+    const dhcpDns = dhcpDnsRaw.trim();
+    if (dhcpDns) out.dhcp_dns = dhcpDns;
+  }
 
-  out.cpu_affinity = (document.getElementById('cpu_affinity').value || '').trim();
-  out.irq_affinity = (document.getElementById('irq_affinity').value || '').trim();
+  const cpuAffinityRaw = getValueIf('cpu_affinity');
+  if (cpuAffinityRaw !== undefined) out.cpu_affinity = cpuAffinityRaw.trim();
 
-  out.bridge_name = (document.getElementById('bridge_name').value || '').trim();
-  out.bridge_uplink = (document.getElementById('bridge_uplink').value || '').trim();
+  const irqAffinityRaw = getValueIf('irq_affinity');
+  if (irqAffinityRaw !== undefined) out.irq_affinity = irqAffinityRaw.trim();
+
+  const bridgeNameRaw = getValueIf('bridge_name');
+  if (bridgeNameRaw !== undefined) out.bridge_name = bridgeNameRaw.trim();
+
+  const bridgeUplinkRaw = getValueIf('bridge_uplink');
+  if (bridgeUplinkRaw !== undefined) out.bridge_uplink = bridgeUplinkRaw.trim();
 
   // Only send passphrase if user typed a new one.
-  const passEl = document.getElementById('wpa2_passphrase');
-  const pw = passEl ? (passEl.value || '').trim() : '';
+  const pw = getPassphraseValue();
   if (passphraseDirty && pw) out.wpa2_passphrase = pw;
 
   return filterConfigForMode(out);
@@ -1428,7 +1643,7 @@ function applyConfig(cfg) {
   document.getElementById('wifi_power_save_disable').checked = !!cfg.wifi_power_save_disable;
   document.getElementById('usb_autosuspend_disable').checked = !!cfg.usb_autosuspend_disable;
   document.getElementById('cpu_governor_performance').checked = !!cfg.cpu_governor_performance;
-  document.getElementById('sysctl_tuning').checked = !!cfg.sysctl_tuning;
+  setCheckedIf('sysctl_tuning', !!cfg.sysctl_tuning);
   if (document.getElementById('irq_affinity')) {
     document.getElementById('irq_affinity').value = (cfg.irq_affinity || '');
   }
@@ -1444,10 +1659,10 @@ function applyConfig(cfg) {
   if (document.getElementById('io_scheduler_optimize')) {
     document.getElementById('io_scheduler_optimize').checked = !!cfg.io_scheduler_optimize;
   }
-  document.getElementById('telemetry_enable').checked = (cfg.telemetry_enable !== false);
-  document.getElementById('telemetry_interval_s').value = (cfg.telemetry_interval_s ?? 2.0);
-  document.getElementById('watchdog_enable').checked = (cfg.watchdog_enable !== false);
-  document.getElementById('watchdog_interval_s').value = (cfg.watchdog_interval_s ?? 2.0);
+  setCheckedIf('telemetry_enable', (cfg.telemetry_enable !== false));
+  setValueIf('telemetry_interval_s', (cfg.telemetry_interval_s ?? 2.0));
+  setCheckedIf('watchdog_enable', (cfg.watchdog_enable !== false));
+  setValueIf('watchdog_interval_s', (cfg.watchdog_interval_s ?? 2.0));
   if (document.getElementById('connection_quality_monitoring')) {
     document.getElementById('connection_quality_monitoring').checked = (cfg.connection_quality_monitoring !== false);
   }
@@ -1459,7 +1674,7 @@ function applyConfig(cfg) {
   document.getElementById('bridge_mode').checked = !!cfg.bridge_mode;
   document.getElementById('bridge_name').value = (cfg.bridge_name || 'vrbr0');
   document.getElementById('bridge_uplink').value = (cfg.bridge_uplink || '');
-  document.getElementById('cpu_affinity').value = (cfg.cpu_affinity || '');
+  setValueIf('cpu_affinity', (cfg.cpu_affinity || ''));
   document.getElementById('firewalld_enabled').checked = !!cfg.firewalld_enabled;
   document.getElementById('firewalld_enable_masquerade').checked = !!cfg.firewalld_enable_masquerade;
   document.getElementById('firewalld_enable_forward').checked = !!cfg.firewalld_enable_forward;
@@ -1594,7 +1809,10 @@ async function refresh() {
   document.getElementById('rawStatus').textContent = JSON.stringify(st.json, null, 2);
 
   const eng = (s.engine || {});
-  const out = (eng.stdout_tail || []).join('\n');
+  // Combine ap_logs_tail and stdout_tail
+  const apLogs = (eng.ap_logs_tail || []).join('\n');
+  const stdLogs = (eng.stdout_tail || []).join('\n');
+  const out = (apLogs ? apLogs + '\n' : '') + stdLogs;
   const err = (eng.stderr_tail || []).join('\n');
   document.getElementById('stdout').textContent = privacy ? '(hidden)' : (out || '(empty)');
   document.getElementById('stderr').textContent = privacy ? '(hidden)' : (err || '(empty)');
@@ -1654,29 +1872,48 @@ document.getElementById('btnUseRecommended').addEventListener('click', async () 
   }
 });
 
-const btnRevealPass = document.getElementById('btnRevealPass');
-if (btnRevealPass) btnRevealPass.addEventListener('click', async () => {
-  const passEl = document.getElementById('wpa2_passphrase');
-  if (!passEl) return;
-  btnRevealPass.disabled = true;
+async function revealPassphrase(btn, targetEl) {
+  if (!targetEl) return;
+  const existing = getPassphraseValue();
+  if (existing) {
+    if (targetEl.value !== existing) targetEl.value = existing;
+    targetEl.type = (targetEl.type === 'password') ? 'text' : 'password';
+    return;
+  }
+
+  if (btn) btn.disabled = true;
   setMsg('Revealing passphrase...');
   const r = await api('/v1/config/reveal_passphrase', { method: 'POST', body: JSON.stringify({ confirm: true }) });
   if (r.ok && r.json && r.json.data && typeof r.json.data.wpa2_passphrase === 'string') {
-    passEl.value = r.json.data.wpa2_passphrase;
-    passEl.type = 'text';
+    const pw = r.json.data.wpa2_passphrase;
+    const { advanced, basic } = getPassphraseInputs();
+    if (advanced) {
+      advanced.value = pw;
+      advanced.type = 'text';
+    }
+    if (basic) {
+      basic.value = pw;
+      basic.type = 'text';
+    }
     passphraseDirty = false;
     setMsg('Passphrase revealed');
   } else {
     const code = (r.json && r.json.result_code) ? r.json.result_code : `HTTP ${r.status}`;
     setMsg(`Reveal failed: ${code}`, 'dangerText');
   }
-  btnRevealPass.disabled = false;
+  if (btn) btn.disabled = false;
+}
+
+const btnRevealPass = document.getElementById('btnRevealPass');
+if (btnRevealPass) btnRevealPass.addEventListener('click', async () => {
+  const passEl = document.getElementById('wpa2_passphrase');
+  await revealPassphrase(btnRevealPass, passEl);
 });
 
 const btnCopySsid = document.getElementById('btnCopySsid');
 if (btnCopySsid) btnCopySsid.addEventListener('click', () => copyFieldValue('ssid', 'SSID'));
 const btnCopyPass = document.getElementById('btnCopyPass');
-if (btnCopyPass) btnCopyPass.addEventListener('click', () => copyFieldValue('wpa2_passphrase', 'Passphrase'));
+if (btnCopyPass) btnCopyPass.addEventListener('click', () => copyFieldValue('wpa2_passphrase', 'Passphrase', ['wpa2_passphrase_basic']));
 
 
 document.getElementById('privacyMode').addEventListener('change', () => {
@@ -1701,6 +1938,8 @@ if (showTelBasic) showTelBasic.addEventListener('change', () => {
   STORE.setItem(LS.showTelemetry, showTelemetryState ? '1' : '0');
   const telCard = document.getElementById('cardTelemetry');
   if (telCard) telCard.style.display = showTelemetryState ? '' : 'none';
+  const basicTel = document.getElementById('basicTelemetryContainer');
+  if (basicTel) basicTel.style.display = showTelemetryState ? '' : 'none';
 });
 
 document.getElementById('apiToken').addEventListener('input', (e) => {
@@ -1761,6 +2000,36 @@ if (refreshEveryBasic) refreshEveryBasic.addEventListener('change', () => {
   document.getElementById('refreshEvery').value = refreshEveryBasic.value;
   applyAutoRefresh();
 });
+
+function wireTabs() {
+  const tabs = document.querySelectorAll('.nav-item');
+  const panes = document.querySelectorAll('.tab-pane');
+
+  function switchTab(targetName) {
+    // Reset tabs
+    tabs.forEach(t => t.classList.remove('active'));
+    // Set active tab
+    tabs.forEach(t => {
+      if (t.dataset.tab === targetName) t.classList.add('active');
+    });
+
+    // Reset panes (hide all)
+    panes.forEach(p => p.classList.remove('active'));
+
+    // Show target pane
+    const targetPane = document.getElementById(`tab-${targetName}`);
+    if (targetPane) {
+      targetPane.classList.add('active');
+    }
+  }
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.dataset.tab;
+      if (target) switchTab(target);
+    });
+  });
+}
 
 function init() {
   const tok = STORE.getItem(LS.token) || '';
@@ -1836,34 +2105,58 @@ function init() {
     if (r.ok) {
       setDirty(false);
       cfgJustSaved = true;
-      const passEl = document.getElementById('wpa2_passphrase');
-      if (passEl) {
-        passEl.value = '';
-        passEl.type = 'password';
-      }
+      clearPassphraseInputs();
       passphraseDirty = false;
     }
     await refresh();
     return r;
   }
 
+
+  // Basic Mode Passphrase Logic
   const btnSavePassBasic = document.getElementById('btnSavePassBasic');
   if (btnSavePassBasic) btnSavePassBasic.addEventListener('click', async () => {
-    const passField = document.getElementById('wpa2_passphrase');
+    const passField = document.getElementById('wpa2_passphrase_basic'); // Use basic input
     const hint = document.getElementById('copyHint');
-    if (!passField || !passField.value.trim()) {
+
+    // Check if user entered something
+    const val = passField ? passField.value.trim() : '';
+    if (!passField || !val) {
       if (hint) {
         hint.textContent = 'Enter a passphrase (8-63 characters)';
         hint.style.color = 'var(--bad)';
       }
       return;
     }
+
+    // Sync to main config object manually since getForm() might strictly check the advanced input
+    // But wait, getForm() uses document.getElementById... we should update THAT or sync it here.
+    // Easiest: Update the advanced input value so getForm() picks it up if we use that.
+    // But better: Update the 'out' object in saveConfigOnly() logic?
+    // Let's just update the advanced field to match, trigger dirty, then save.
+    const advPass = document.getElementById('wpa2_passphrase');
+    if (advPass) advPass.value = val;
+
     passphraseDirty = true;
-    await saveConfigOnly();
+    const res = await saveConfigOnly();
+
     if (hint) {
-      hint.textContent = 'Passphrase saved to config';
-      hint.style.color = 'var(--good)';
+      if (res && res.ok) {
+        hint.textContent = 'Passphrase saved to config';
+        hint.style.color = 'var(--good)';
+      } else {
+        const code = (res && res.json && res.json.result_code) ? res.json.result_code : `HTTP ${res ? res.status : 'error'}`;
+        hint.textContent = `Passphrase save failed: ${code}`;
+        hint.style.color = 'var(--bad)';
+      }
     }
+  });
+
+  // Basic Reveal Button
+  const btnRevealBasic = document.getElementById('btnRevealPassBasic');
+  if (btnRevealBasic) btnRevealBasic.addEventListener('click', async () => {
+    const el = document.getElementById('wpa2_passphrase_basic');
+    await revealPassphrase(btnRevealBasic, el);
   });
 
   document.getElementById('btnSaveConfig').addEventListener('click', async () => {
@@ -1902,11 +2195,7 @@ function init() {
 
     setDirty(false);
     cfgJustSaved = true;
-    const passEl = document.getElementById('wpa2_passphrase');
-    if (passEl) {
-      passEl.value = '';
-      passEl.type = 'password';
-    }
+    clearPassphraseInputs();
     passphraseDirty = false;
 
     const r2 = await api('/v1/restart', { method: 'POST' });
@@ -1928,6 +2217,7 @@ function init() {
   wireQosBasic();
   enforceBandRules();
   wireQr();
+  wireTabs();
 
   // Load adapters first so the adapter select is populated before applying config.
   loadAdapters().then(refresh).then(applyAutoRefresh);
@@ -1942,30 +2232,12 @@ function wireQr() {
   function showQr() {
     // Gather SSID and Passphrase
     let ssid = document.getElementById('ssid').value.trim();
-    let pass = document.getElementById('wpa2_passphrase').value;
+    let pass = getPassphraseValue();
 
     // If empty in UI, try fallback to saved config
     if (!ssid && lastCfg && lastCfg.ssid) ssid = lastCfg.ssid;
 
-    // If passphrase is empty/saved, we might not know it if it's redacted.
-    // However, if the user hasn't typed a new one, we can't show it unless we implement a "reveal" API (which we don't have for security).
-    // So we only support showing QR if the user has typed it OR we make an assumption.
-    // Actually, widespread practice is: we can't show QR for a saved password if we don't have it in cleartext.
-    // But `v1/config` returns `wpa2_passphrase_set=True` but not the value.
-    // Wait, `api.py` says `_SENSITIVE_CONFIG_KEYS = {"wpa2_passphrase"}` and `v1/config` filters it?
-    // Let's check api.py... `_config_view(..., include_secrets=False)`.
-    // So the UI usually doesn't have the password.
-    // This means QR only works if the user *just* typed the password or if they are setting it up.
-    // *OR* we can tell the user "Enter passphrase to generate QR".
-
-    // Correction: existing logic `btnCopyPass` implies we might have it?
-    // No, `btnCopyPass` copies the value from the input field. If it's empty/placeholder, it fails.
-
-    // So, logic:
-    // 1. Get SSID (UI or Saved)
-    // 2. Get Pass (UI)
-    // 3. If Pass is empty, check if we have it in `lastCfg`? No, we won't.
-    // 4. Alert user if missing.
+    // QR only works if the passphrase is currently in the UI (typed or revealed).
 
     if (!ssid) {
       setMsg('SSID is missing', 'dangerText');
@@ -1977,7 +2249,9 @@ function wireQr() {
     // We'll warn the user.
     if (!pass) {
       setMsg('Enter passphrase to generate QR code', 'dangerText');
-      document.getElementById('wpa2_passphrase').focus();
+      const { advanced, basic } = getPassphraseInputs();
+      const focusEl = (getUiMode() === 'basic' ? basic : advanced) || advanced || basic;
+      if (focusEl) focusEl.focus();
       return;
     }
 

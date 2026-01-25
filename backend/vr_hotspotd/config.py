@@ -12,7 +12,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # Wi-Fi identity
     "ssid": "VR-Hotspot",
-    "wpa2_passphrase": "change-me-please",
+    "wpa2_passphrase": "",
 
     # Preferred (optimized) behavior
     "band_preference": "5ghz",   # "5ghz" or "2.4ghz" or "6ghz"
@@ -26,6 +26,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "short_guard_interval": True, # Enable short guard interval for improved throughput
     "tx_power": None,            # Transmit power in dBm (None = auto/adapter default)
     "channel_auto_select": False, # Auto-select channel with interference scanning
+    "allow_fallback_40mhz": False, # Pro Mode: allow 40MHz fallback after 80MHz attempts
+    "allow_dfs_channels": False,  # Allow DFS channels when non-DFS 80MHz blocks are unavailable
 
     # Steam Deck / SteamOS stability:
     # False => allow lnxrouter to create a virtual AP interface (often best default).
@@ -176,6 +178,10 @@ def _apply_migrations(cfg: Dict[str, Any]) -> Dict[str, Any]:
         out["tx_power"] = DEFAULT_CONFIG["tx_power"]
     if "channel_auto_select" not in out:
         out["channel_auto_select"] = DEFAULT_CONFIG["channel_auto_select"]
+    if "allow_fallback_40mhz" not in out:
+        out["allow_fallback_40mhz"] = DEFAULT_CONFIG["allow_fallback_40mhz"]
+    if "allow_dfs_channels" not in out:
+        out["allow_dfs_channels"] = DEFAULT_CONFIG["allow_dfs_channels"]
     if "connection_quality_monitoring" not in out:
         out["connection_quality_monitoring"] = DEFAULT_CONFIG["connection_quality_monitoring"]
     if "auto_channel_switch" not in out:
