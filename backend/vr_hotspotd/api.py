@@ -20,10 +20,12 @@ from vr_hotspotd.lifecycle import (
     reconcile_state_with_engine,
     collect_capture_logs,
 )
+from vr_hotspotd.engine.supervisor import get_tails
 from vr_hotspotd.diagnostics.clients import get_clients_snapshot
 from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator
 from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
+from vr_hotspotd.diagnostics.platform import collect_platform_matrix
 from vr_hotspotd import telemetry
 from vr_hotspotd.state import load_state
 
@@ -829,6 +831,12 @@ class APIHandler(BaseHTTPRequestHandler):
         if isinstance(eng, dict):
             eng["cmd"] = self._redact_cmd_list(eng.get("cmd"))
             if include_logs:
+                try:
+                    stdout_tail, stderr_tail = get_tails()
+                    eng["stdout_tail"] = stdout_tail
+                    eng["stderr_tail"] = stderr_tail
+                except Exception:
+                    pass
                 eng["stdout_tail"] = self._redact_lines(eng.get("stdout_tail"), secrets)
                 eng["stderr_tail"] = self._redact_lines(eng.get("stderr_tail"), secrets)
             else:
@@ -845,6 +853,13 @@ class APIHandler(BaseHTTPRequestHandler):
             out["capture_logs_tail"] = self._redact_lines(capture_logs, secrets)
         else:
             out["capture_logs_tail"] = []
+
+        # Platform capability matrix (always included, no sensitive data)
+        try:
+            out["platform"] = collect_platform_matrix()
+        except Exception:
+            out["platform"] = {}
+
         return out
 
     def _config_view(self, *, include_secrets: bool) -> Dict[str, Any]:

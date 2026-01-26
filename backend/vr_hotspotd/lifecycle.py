@@ -25,6 +25,13 @@ from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running,
 from vr_hotspotd.engine.channel_scan import select_best_channel
 from vr_hotspotd.engine.tx_power import auto_adjust_tx_power, set_tx_power, get_tx_power
 from vr_hotspotd import system_tuning, preflight, network_tuning, os_release, wifi_probe
+from vr_hotspotd.policy import (
+    BASIC_MODE_REQUIRED_BAND,
+    BASIC_MODE_REQUIRED_WIDTH_MHZ,
+    ERROR_BASIC_MODE_REQUIRES_5GHZ,
+    ERROR_BASIC_MODE_REQUIRES_80MHZ_ADAPTER,
+    ERROR_NM_INTERFACE_MANAGED,
+)
 
 log = logging.getLogger("vr_hotspotd.lifecycle")
 
@@ -2035,6 +2042,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
         return LifecycleResult("start_failed", state)
 
+    ap_ifname = None
     try:
         inv = get_adapters()
         inv_error = inv.get("error")
@@ -2073,12 +2081,12 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         # --- Basic Mode Enforcement ---
         if basic_mode:
             log.info("basic_mode_enforcement_active", extra={"adapter": ap_ifname, "band": bp})
-            # (1) Basic Mode requires 5GHz band
-            if bp != "5ghz":
-                raise RuntimeError("basic_mode_requires_5ghz")
-            # (2) Basic Mode requires 80MHz-capable adapter
+            # (1) Basic Mode requires specified band (policy.BASIC_MODE_REQUIRED_BAND)
+            if bp != BASIC_MODE_REQUIRED_BAND:
+                raise RuntimeError(ERROR_BASIC_MODE_REQUIRES_5GHZ)
+            # (2) Basic Mode requires 80MHz-capable adapter (policy.BASIC_MODE_REQUIRED_WIDTH_MHZ)
             if not a.get("supports_80mhz"):
-                raise RuntimeError("basic_mode_requires_80mhz_adapter")
+                raise RuntimeError(ERROR_BASIC_MODE_REQUIRES_80MHZ_ADAPTER)
             # (3) Basic Mode disables fallback - strict fail-fast
             if allow_fallback_40mhz:
                 log.info("basic_mode_disabling_fallback_40mhz", extra={"adapter": ap_ifname})
@@ -2110,18 +2118,28 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
         target_phy = _get_adapter_phy(inv, ap_ifname)
     except Exception as e:
+        err = str(e)
+        error_detail = None
+        if err in (
+            ERROR_BASIC_MODE_REQUIRES_5GHZ,
+            ERROR_BASIC_MODE_REQUIRES_80MHZ_ADAPTER,
+            ERROR_NM_INTERFACE_MANAGED,
+        ):
+            context = {"interface": ap_ifname} if err == ERROR_NM_INTERFACE_MANAGED and ap_ifname else {}
+            error_detail = wifi_probe.build_error_detail(err, context)
         state = update_state(
             phase="error",
             running=False,
             ap_interface=None,
-            last_error=str(e),
+            last_error=err,
+            last_error_detail=error_detail,
             last_correlation_id=correlation_id,
             engine={
                 "pid": None,
                 "cmd": None,
                 "started_ts": None,
                 "last_exit_code": None,
-                "last_error": str(e),
+                "last_error": err,
                 "stdout_tail": [],
                 "stderr_tail": [],
                 "ap_logs_tail": [],
