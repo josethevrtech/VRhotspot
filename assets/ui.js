@@ -274,26 +274,58 @@ function updateBandOptions() {
   if (!sel) return;
 
   cacheBandOptions(sel);
-  if (getUiMode() !== 'basic') {
-    const current = sel.value === 'recommended' ? getRecommendedBand(getSelectedAdapter()) : sel.value;
-    setBandOptions(sel, bandOptionsCache, current || '5ghz');
+
+  // === BASIC MODE: Enforce VR Minimums ===
+  // Basic Mode requires 5GHz + 80MHz for VR streaming.
+  // Only offer 5GHz to prevent users from selecting unsuitable bands.
+  if (typeof getUiMode === 'function' && getUiMode() === 'basic') {
+    const adapter = getSelectedAdapter();
+
+    // Tri-state 5GHz support labeling
+    let label;
+    if (adapter && adapter.supports_5ghz === true) {
+      label = '5 GHz (VR Required)';
+    } else if (adapter && adapter.supports_5ghz === false) {
+      label = '5 GHz (Required — adapter does not support 5 GHz; will fail)';
+    } else {
+      // supports_5ghz is undefined/missing
+      label = '5 GHz (Required — capability unknown; will validate at start)';
+    }
+
+    // In Basic Mode, only 5GHz is allowed for VR
+    const options = [
+      { value: '5ghz', label: label },
+    ];
+
+    // Force 5GHz selection and lock the select in Basic Mode
+    setBandOptions(sel, options, '5ghz');
+    sel.value = '5ghz';
+    sel.disabled = true; // Lock the selector in Basic Mode
     return;
   }
 
+  // === ADVANCED MODE ===
+  // Advanced Mode preserves legacy band options (including any HTML-provided entries).
+  sel.disabled = false;
   const adapter = getSelectedAdapter();
-  const recommended = getRecommendedBand(adapter);
-  const supports6 = adapter ? !!adapter.supports_6ghz : false;
-  const options = [
-    { value: 'recommended', label: `Recommended (${formatBandLabel(recommended)})` },
-    { value: '2.4ghz', label: '2.4 GHz' },
-    { value: '5ghz', label: '5 GHz' },
-  ];
-  if (supports6) options.push({ value: '6ghz', label: '6 GHz (Wi-Fi 6E)' });
 
-  let nextValue = sel.value || 'recommended';
-  if (nextValue === '6ghz' && !supports6) nextValue = 'recommended';
-  if (!options.some((opt) => opt.value === nextValue)) nextValue = 'recommended';
-  setBandOptions(sel, options, nextValue);
+  // Fallback if bandOptionsCache is empty or not an array
+  let options = bandOptionsCache;
+  if (!Array.isArray(options) || options.length === 0) {
+    const supports6 = adapter ? !!adapter.supports_6ghz : false;
+    const recommended = getRecommendedBand(adapter);
+    options = [
+      { value: 'recommended', label: `Recommended (${formatBandLabel(recommended)})` },
+      { value: '2.4ghz', label: '2.4 GHz' },
+      { value: '5ghz', label: '5 GHz' },
+    ];
+    if (supports6) {
+      options.push({ value: '6ghz', label: '6 GHz (Wi-Fi 6E)' });
+    }
+  }
+
+  const current = sel.value === 'recommended' ? getRecommendedBand(adapter) : sel.value;
+  setBandOptions(sel, options, current || '5ghz');
 }
 
 // --- Sticky edit guard
@@ -1142,6 +1174,23 @@ function truncateText(text, maxLen) {
   return raw.slice(0, Math.max(0, maxLen - 3)) + '...';
 }
 
+function extractRemediationText(detail) {
+  if (!detail || typeof detail !== 'object') return '';
+  let title = '';
+  let remediation = '';
+  if (typeof detail.title === 'string') title = detail.title.trim();
+  if (typeof detail.remediation === 'string') remediation = detail.remediation.trim();
+  if (!remediation && Array.isArray(detail.errors) && detail.errors.length > 0) {
+    const first = detail.errors[0];
+    if (first && typeof first === 'object') {
+      if (!title && typeof first.title === 'string') title = first.title.trim();
+      if (typeof first.remediation === 'string') remediation = first.remediation.trim();
+    }
+  }
+  if (!remediation) return '';
+  return title ? `${title} - ${remediation}` : remediation;
+}
+
 function updateBasicStatusMeta(state) {
   const cmdInfo = parseEngineCmd(state && state.engine ? state.engine.cmd : null);
   const adapter = state.adapter || '--';
@@ -1183,6 +1232,18 @@ function updateBasicStatusMeta(state) {
   } else {
     errEl.textContent = '';
     errEl.style.display = 'none';
+  }
+
+  const remEl = document.getElementById('basicLastErrorDetail');
+  if (remEl) {
+    const remediation = extractRemediationText(state.last_error_detail);
+    if (remediation) {
+      remEl.textContent = `Remediation: ${remediation}`;
+      remEl.style.display = '';
+    } else {
+      remEl.textContent = '';
+      remEl.style.display = 'none';
+    }
   }
 }
 
@@ -1789,6 +1850,34 @@ async function refresh() {
   const s = st.json.data || {};
   setPill(s);
   updateBasicStatusMeta(s);
+
+  const advErrEl = document.getElementById('statusLastError');
+  if (advErrEl) {
+    const err = s.last_error || (s.engine && s.engine.last_error) || '';
+    if (err) {
+      advErrEl.textContent = `Last error: ${truncateText(err, 140)}`;
+      advErrEl.style.display = '';
+    } else {
+      advErrEl.textContent = '';
+      advErrEl.style.display = 'none';
+    }
+  }
+  const advRemEl = document.getElementById('statusErrorDetail');
+  if (advRemEl) {
+    const remediation = extractRemediationText(s.last_error_detail);
+    if (remediation) {
+      advRemEl.textContent = `Remediation: ${remediation}`;
+      advRemEl.style.display = '';
+    } else {
+      advRemEl.textContent = '';
+      advRemEl.style.display = 'none';
+    }
+  }
+
+  const osName = (s.platform && s.platform.os && (s.platform.os.pretty_name || s.platform.os.id)) || '';
+  const osNodes = document.querySelectorAll('#uiOsName');
+  const el = osNodes && osNodes.length ? osNodes[0] : null;
+  if (el) el.textContent = osName ? `• ${osName}` : '';
 
   const metaParts = [
     `last_op=${s.last_op || '--'}`,

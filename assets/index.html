@@ -62,6 +62,7 @@
             <div class="small meta-text" id="basicStatusAdapterBand">Adapter: -- | Band: --</div>
             <div class="small mt-6" id="basicStatusDetails"></div>
             <div class="small mt-6 error-text" id="basicLastError"></div>
+            <div class="small mt-6 error-text" id="basicLastErrorDetail"></div>
             <div id="basicTelemetryContainer"
               style="display:none; font-family:monospace; margin-top:12px; padding:8px; background:var(--bg-subtle); border-radius:4px; font-size:11px;">
             </div>
@@ -91,12 +92,13 @@
 
             <div class="control-row mt-12">
               <label class="tog" title="Hide logs">
-                <input type="checkbox" id="privacyModeBasic" checked /> Privacy
+                <input type="checkbox" id="privacyModeBasic" /> Privacy
               </label>
               <label class="tog" title="Show Telemetry">
                 <input type="checkbox" id="showTelemetryBasic" /> Stats
               </label>
             </div>
+            <div class="small mt-6 faded" id="privacyHintBasic">Privacy mode hides logs</div>
 
             <div class="token-field mt-12">
               <input id="apiTokenBasic" type="password" placeholder="API Token" />
@@ -115,6 +117,9 @@
           <div class="card-body">
             <div id="basicInfoBanner" class="info-banner" style="display:none">Basic mode hides advanced details.</div>
             <div id="basicChannelBanner" class="info-banner warn" style="display:none"></div>
+            <div id="basicVrRequirementsBanner" class="info-banner info">
+              <strong>VR Mode:</strong> Requires 5 GHz + 80 MHz (VHT80). Anything less is a failure state.
+            </div>
             <div id="basicQuickFields" class="form-stack"></div>
             <div class="action-group mt-12">
               <button class="btn primary" id="btnSaveConfigBasic">Save Config</button>
@@ -172,12 +177,16 @@
 
         <div class="sidebar-footer">
           <label class="tog block-tog">
-            <input type="checkbox" id="privacyMode" checked />
+            <input type="checkbox" id="privacyMode" />
             <span>Privacy Mode</span>
           </label>
+          <div class="small mt-6 faded" id="privacyHint">Privacy mode hides logs</div>
           <div class="token-field mt-12">
             <input id="apiToken" type="password" placeholder="API Token" />
             <button class="btn sm" id="btnSaveToken">Save</button>
+          </div>
+          <div class="small mt-12 faded" id="uiVersionInfo">
+            <span id="uiVersion">v0.4</span> <span id="uiOsName" class="small faded"></span>
           </div>
         </div>
       </nav>
@@ -197,6 +206,8 @@
               </div>
               <div class="hero-meta">
                 <div id="statusEffective" class="status-summary"></div>
+                <div id="statusLastError" class="small mt-6 error-text"></div>
+                <div id="statusErrorDetail" class="small mt-6 error-text"></div>
                 <div id="rawStatus" class="mono-box mini"></div>
               </div>
               <div class="hero-actions">
