@@ -125,6 +125,7 @@ class Test80MHzEnforcement(unittest.TestCase):
              patch("vr_hotspotd.lifecycle._iface_is_up", return_value=True), \
              patch("vr_hotspotd.lifecycle._iw_dev_info", return_value=""), \
              patch("vr_hotspotd.lifecycle._nm_interference_reason", return_value=None), \
+             patch("vr_hotspotd.lifecycle._nm_gate_check", return_value=None), \
              patch("vr_hotspotd.lifecycle.is_running", return_value=True), \
              patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
             try:
@@ -230,8 +231,8 @@ class Test80MHzEnforcement(unittest.TestCase):
                     {
                         "band": 5,
                         "width": 80,
-                        "primary_channel": 36,
-                        "center_channel": 42,
+                        "primary_channel": 40,
+                        "center_channel": 46,
                         "country": "US",
                         "flags": ["non_dfs"],
                         "rationale": "test",
@@ -245,6 +246,7 @@ class Test80MHzEnforcement(unittest.TestCase):
              patch("vr_hotspotd.lifecycle._iface_is_up", return_value=True), \
              patch("vr_hotspotd.lifecycle._iw_dev_info", return_value=""), \
              patch("vr_hotspotd.lifecycle._nm_interference_reason", return_value=None), \
+             patch("vr_hotspotd.lifecycle._nm_gate_check", return_value=None), \
              patch("vr_hotspotd.lifecycle.is_running", return_value=True), \
              patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
             try:
@@ -259,8 +261,7 @@ class Test80MHzEnforcement(unittest.TestCase):
         kwargs = current_call.kwargs
         
         self.assertEqual(kwargs.get("ap_ifname"), "wlan0")
-        self.assertNotEqual(kwargs.get("channel"), 36)
-        self.assertIsNone(kwargs.get("channel"))
+        self.assertEqual(kwargs.get("channel"), 40)
 
 
     @patch("vr_hotspotd.lifecycle.load_config")
@@ -371,6 +372,7 @@ class Test80MHzEnforcement(unittest.TestCase):
              patch("vr_hotspotd.lifecycle._iface_is_up", return_value=True), \
              patch("vr_hotspotd.lifecycle._iw_dev_info", return_value=""), \
              patch("vr_hotspotd.lifecycle._nm_interference_reason", return_value=None), \
+             patch("vr_hotspotd.lifecycle._nm_gate_check", return_value=None), \
              patch("vr_hotspotd.lifecycle.is_running", return_value=True), \
              patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
             try:

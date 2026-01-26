@@ -232,6 +232,19 @@ class TestNmPreStartGate(unittest.TestCase):
         
         self.assertTrue(found_error, f"Expected nm_interface_managed error. Calls: {mock_update_state.call_args_list}")
 
+        from vr_hotspotd import wifi_probe
+
+        detail = None
+        for call in mock_update_state.call_args_list:
+            if call.kwargs.get("last_error") == "nm_interface_managed":
+                detail = call.kwargs.get("last_error_detail")
+                break
+
+        self.assertIsInstance(detail, dict, f"Expected last_error_detail dict. Calls: {mock_update_state.call_args_list}")
+        self.assertEqual(detail.get("code"), "nm_interface_managed")
+        self.assertEqual(detail.get("remediation"), wifi_probe.ERROR_REMEDIATIONS["nm_interface_managed"])
+        self.assertEqual(detail.get("context", {}).get("interface"), "wlan1")
+
     @patch("vr_hotspotd.lifecycle._nm_is_running")
     @patch("vr_hotspotd.lifecycle._nm_device_state")
     def test_nm_gate_check_returns_none_when_unmanaged(
@@ -661,6 +674,5 @@ class TestStrictPathWidthFailure(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 
 
