@@ -101,9 +101,6 @@ class Test80MHzEnforcement(unittest.TestCase):
         )
 
         from vr_hotspotd import lifecycle
-        print(f"DEBUG: lifecycle.build_cmd ID: {id(lifecycle.build_cmd)}")
-        print(f"DEBUG: mock_build_cmd ID: {id(mock_build_cmd)}")
-
         probe_payload = {
             "wifi": {
                 "errors": [],
@@ -132,36 +129,19 @@ class Test80MHzEnforcement(unittest.TestCase):
              patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
             try:
                 res = lifecycle.start_hotspot()
-                print(f"DEBUG: Returned from lifecycle.start_hotspot() with code={res.code}")
                 if res.code != "started":
-                     # Inspect mock_update_state calls to find the error
-                     print("DEBUG: Inspecting update_state calls:")
-                     for call in mock_update_state.call_args_list:
-                         print(f"  Call: {call}")
                      self.fail(f"start_hotspot failed with code {res.code}")
             except Exception as e:
                 import traceback
                 traceback.print_exc()
                 self.fail(f"start_hotspot failed with exception: {e}")
 
-        # Check start_engine calls
-        if mock_start_engine.called:
-            print(f"DEBUG: start_engine called with: {mock_start_engine.call_args}")
-            # If build_cmd was called, args[0] (cmd) should be a Mock (return of build_cmd)
-            cmd_arg = mock_start_engine.call_args[0][0]
-            if isinstance(cmd_arg, MagicMock):
-                print("DEBUG: cmd passed to start_engine IS a Mock (implies build_cmd called)")
-            else:
-                print(f"DEBUG: cmd passed to start_engine is {type(cmd_arg)}: {cmd_arg}")
-
         # Verify build_cmd was called with channel 36
         current_call = mock_build_cmd.call_args
         if not current_call:
-             print("DEBUG: mock_build_cmd.calls is EMPTY")
              self.fail("build_cmd was not called")
         
         kwargs = current_call.kwargs
-        print(f"DEBUG: build_cmd called with: {kwargs}")
         
         self.assertEqual(kwargs.get("ap_ifname"), "wlan1", "Should have selected USB adapter wlan1")
         self.assertEqual(kwargs.get("channel"), 36, "Should have enforced Channel 36")
@@ -277,7 +257,6 @@ class Test80MHzEnforcement(unittest.TestCase):
              self.fail("build_cmd was not called")
         
         kwargs = current_call.kwargs
-        print(f"DEBUG: build_cmd called with: {kwargs}")
         
         self.assertEqual(kwargs.get("ap_ifname"), "wlan0")
         self.assertNotEqual(kwargs.get("channel"), 36)
@@ -405,7 +384,6 @@ class Test80MHzEnforcement(unittest.TestCase):
              self.fail("build_cmd was not called")
         
         kwargs = current_call.kwargs
-        print(f"DEBUG: Manual Selection - build_cmd called with: {kwargs}")
         
         self.assertEqual(kwargs.get("ap_ifname"), "wlan1")
         self.assertEqual(kwargs.get("channel"), 36, "Manual USB selection should still enforce Channel 36")
