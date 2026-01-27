@@ -644,7 +644,7 @@ function wireQosBasic() {
   }
 }
 
-function applyUiMode(mode) {
+function applyUiMode(mode, opts = {}) {
   document.body.dataset.uiMode = mode;
   const toggle = document.getElementById('uiModeToggle');
   const label = document.getElementById('uiModeLabel');
@@ -658,7 +658,7 @@ function applyUiMode(mode) {
   }
 
   // Reload adapters to apply filtering and renaming rules
-  loadAdapters();
+  if (!opts.skipAdapters) loadAdapters();
 
   applyBasicLayout(mode);
   updateBandOptions();
@@ -799,6 +799,81 @@ function setToken(v) {
   if (basicEl && basicEl.value !== val) basicEl.value = val;
 }
 
+/**
+ * Safely set text content and color on an element. No-ops if el is null/undefined.
+ * @param {HTMLElement|null|undefined} el - The element to update
+ * @param {string} text - The text to display
+ * @param {string} [colorVar] - Optional CSS variable for color, e.g., 'var(--good)'
+ */
+function safeText(el, text, colorVar) {
+  if (!el) return;
+  try {
+    el.textContent = text;
+    if (colorVar) el.style.color = colorVar;
+  } catch {
+    // Ignore any DOM errors
+  }
+}
+
+function renderHintTip(el, text) {
+  if (!el) return;
+  const tipText = (text || '--').toString();
+  el.textContent = '';
+  el.classList.add('tip-only');
+  const tip = document.createElement('span');
+  tip.className = 'tip';
+  tip.textContent = 'ⓘ';
+  tip.setAttribute('data-tip', tipText);
+  tip.setAttribute('aria-label', tipText);
+  el.appendChild(tip);
+}
+
+/**
+ * Calls POST /v1/fix_nm to set the interface to unmanaged by NetworkManager.
+ * @param {string} ifname - The interface name to fix
+ * @param {HTMLElement|null} resultEl - Optional element to display result message
+ * @param {HTMLButtonElement|null} btn - Optional button that triggered this action
+ */
+async function fixNmControl(ifname, resultEl, btn) {
+  if (!ifname) {
+    safeText(resultEl, 'Error: No interface specified', 'var(--bad)');
+    return;
+  }
+
+  if (btn) {
+    try { btn.disabled = true; } catch { /* ignore */ }
+  }
+  safeText(resultEl, 'Fixing...', 'var(--text-secondary)');
+
+  try {
+    const r = await api('/v1/fix_nm', {
+      method: 'POST',
+      body: JSON.stringify({ ifname: ifname }),
+    });
+
+    if (r.ok && r.json && r.json.data && r.json.data.ok) {
+      safeText(resultEl, '✓ Fixed! You can now try Start again.', 'var(--good)');
+      setMsg('NetworkManager control fixed. You can now start the hotspot.');
+      // Refresh status
+      await refresh();
+    } else {
+      const errMsg = (r.json && r.json.data && r.json.data.error)
+        ? r.json.data.error
+        : (r.json && r.json.result_code) || `HTTP ${r.status}`;
+      safeText(resultEl, `✗ Failed: ${errMsg}`, 'var(--bad)');
+      setMsg(`Fix NM failed: ${errMsg}`, 'dangerText');
+    }
+  } catch (e) {
+    const errText = (e && e.message) ? e.message : String(e);
+    safeText(resultEl, `✗ Error: ${errText}`, 'var(--bad)');
+    setMsg(`Fix NM error: ${errText}`, 'dangerText');
+  } finally {
+    if (btn) {
+      try { btn.disabled = false; } catch { /* ignore */ }
+    }
+  }
+}
+
 function fmtTs(epoch) {
   if (!epoch) return '--';
   try { return new Date(epoch * 1000).toLocaleString(); } catch { return String(epoch); }
@@ -811,6 +886,53 @@ function fmtNum(v, digits = 1) {
   return n.toFixed(digits);
 }
 
+function formatOsLabel(platform) {
+  if (!platform || typeof platform !== 'object') return '';
+  const os = platform.os || {};
+  const rawId = (os.id || '').toString().trim();
+  const id = rawId.toLowerCase();
+  const version = (os.version_id || '').toString().trim();
+  const pretty = (os.pretty_name || '').toString().trim();
+  const map = {
+    steamos: 'SteamOS',
+    bazzite: 'Bazzite',
+    fedora: 'Fedora',
+    cachyos: 'CachyOS',
+    arch: 'Arch',
+    manjaro: 'Manjaro',
+    endeavour: 'EndeavourOS',
+    ubuntu: 'Ubuntu',
+    debian: 'Debian',
+    nixos: 'NixOS',
+    nobara: 'Nobara',
+    pop: 'Pop!_OS',
+    opensuse: 'openSUSE',
+    zorin: 'Zorin',
+  };
+  const name = map[id] || (rawId ? rawId.charAt(0).toUpperCase() + rawId.slice(1) : '');
+  if (name) return version ? `${name} ${version}` : name;
+  return pretty || '';
+}
+
+async function refreshInfo() {
+  const versionEl = document.getElementById('uiVersion');
+  if (!versionEl) return;
+  const fallback = (versionEl.textContent || '').trim();
+  try {
+    const r = await api('/v1/info');
+    const data = (r.ok && r.json && r.json.data) ? r.json.data : null;
+    const raw = data ? (data.server_version || data.version || '') : '';
+    const cleaned = raw ? String(raw).trim() : '';
+    if (cleaned) {
+      versionEl.textContent = cleaned.startsWith('v') ? cleaned : `v${cleaned}`;
+      return;
+    }
+  } catch {
+    // Ignore fetch errors; fall back to existing value.
+  }
+  if (!fallback) versionEl.textContent = '--';
+}
+
 function fmtPct(v) {
   return (v === null || v === undefined) ? '--' : fmtNum(v, 1);
 }
@@ -821,6 +943,11 @@ function fmtDbm(v) {
 
 function fmtMbps(v) {
   return (v === null || v === undefined) ? '--' : fmtNum(v, 1);
+}
+
+function updateBasicVrHint() {
+  const vrHint = document.getElementById('basicVrRequirementsBanner');
+  renderHintTip(vrHint, 'VR Mode: Requires 5 GHz + 80 MHz (VHT80). Anything less is a failure state.');
 }
 
 function renderTelemetry(t) {
@@ -1245,6 +1372,28 @@ function updateBasicStatusMeta(state) {
       remEl.style.display = 'none';
     }
   }
+
+  // Show/hide Fix NM button for both basic and advanced UI
+  const isNmError = err === 'nm_interface_managed';
+  const nmIfname = isNmError && state.last_error_detail && state.last_error_detail.context
+    ? state.last_error_detail.context.interface
+    : null;
+
+  // Basic UI button
+  const fixNmBasic = document.getElementById('fixNmContainer');
+  const fixNmBtnBasic = document.getElementById('btnFixNmBasic');
+  if (fixNmBasic) {
+    fixNmBasic.style.display = (isNmError && nmIfname) ? '' : 'none';
+    if (fixNmBtnBasic) fixNmBtnBasic.dataset.ifname = nmIfname || '';
+  }
+
+  // Advanced UI button
+  const fixNmAdv = document.getElementById('fixNmContainerAdv');
+  const fixNmBtnAdv = document.getElementById('btnFixNmAdv');
+  if (fixNmAdv) {
+    fixNmAdv.style.display = (isNmError && nmIfname) ? '' : 'none';
+    if (fixNmBtnAdv) fixNmBtnAdv.dataset.ifname = nmIfname || '';
+  }
 }
 
 function syncCountrySelectFromInput() {
@@ -1276,15 +1425,15 @@ function enforceBandRules() {
   if (is6) {
     secEl.value = 'wpa3_sae';
     secEl.disabled = true;
-    sixgBox.style.display = '';
+    if (g6Box) g6Box.style.display = '';
     bandHint.innerHTML = "<strong>6 GHz:</strong> requires a 6 GHz-capable adapter and a correct Country. WPA3-SAE is enforced.";
-    secHint.textContent = "Locked: 6 GHz requires WPA3 (SAE).";
+    renderHintTip(secHint, "Locked: 6 GHz requires WPA3 (SAE).");
   } else {
     secEl.disabled = false;
-    sixgBox.style.display = 'none';
+    if (g6Box) g6Box.style.display = 'none';
     if (band === '5ghz') bandHint.innerHTML = "<strong>5 GHz:</strong> best default for VR streaming on most adapters.";
     else bandHint.innerHTML = "<strong>2.4 GHz:</strong> compatibility/fallback band (higher latency / more interference).";
-    secHint.textContent = "WPA2 (PSK) is typical. WPA3 (SAE) may be supported but depends on driver + clients.";
+    renderHintTip(secHint, "WPA2 (PSK) is typical. WPA3 (SAE) may be supported but depends on driver + clients.");
   }
   applyFieldVisibility(getUiMode());
   updateBasicChannelBanner();
@@ -1874,10 +2023,9 @@ async function refresh() {
     }
   }
 
-  const osName = (s.platform && s.platform.os && (s.platform.os.pretty_name || s.platform.os.id)) || '';
-  const osNodes = document.querySelectorAll('#uiOsName');
-  const el = osNodes && osNodes.length ? osNodes[0] : null;
-  if (el) el.textContent = osName ? `• ${osName}` : '';
+  const osLabel = formatOsLabel(s.platform);
+  const osEl = document.getElementById('uiOsName');
+  if (osEl) osEl.textContent = `• ${osLabel || '--'}`;
 
   const metaParts = [
     `last_op=${s.last_op || '--'}`,
@@ -1886,7 +2034,8 @@ async function refresh() {
   ];
   if (s.mode) metaParts.push(`mode=${s.mode}`);
   if (s.fallback_reason) metaParts.push(`fallback=${s.fallback_reason}`);
-  document.getElementById('statusMeta').textContent = metaParts.join(' | ');
+  const statusMetaEl = document.getElementById('statusMeta');
+  if (statusMetaEl) statusMetaEl.textContent = metaParts.join(' | ');
 
   const eff = formatEffectiveSummary(s);
   const effEl = document.getElementById('statusEffective');
@@ -1895,7 +2044,8 @@ async function refresh() {
     effEl.style.display = eff ? '' : 'none';
   }
 
-  document.getElementById('rawStatus').textContent = JSON.stringify(st.json, null, 2);
+  const rawStatusEl = document.getElementById('rawStatus');
+  if (rawStatusEl) rawStatusEl.textContent = JSON.stringify(st.json, null, 2);
 
   const eng = (s.engine || {});
   // Combine ap_logs_tail and stdout_tail
@@ -1903,8 +2053,10 @@ async function refresh() {
   const stdLogs = (eng.stdout_tail || []).join('\n');
   const out = (apLogs ? apLogs + '\n' : '') + stdLogs;
   const err = (eng.stderr_tail || []).join('\n');
-  document.getElementById('stdout').textContent = privacy ? '(hidden)' : (out || '(empty)');
-  document.getElementById('stderr').textContent = privacy ? '(hidden)' : (err || '(empty)');
+  const stdoutEl = document.getElementById('stdout');
+  if (stdoutEl) stdoutEl.textContent = privacy ? '(hidden)' : (out || '(empty)');
+  const stderrEl = document.getElementById('stderr');
+  if (stderrEl) stderrEl.textContent = privacy ? '(hidden)' : (err || '(empty)');
 
   renderTelemetry(s.telemetry);
 }
@@ -2138,7 +2290,8 @@ function init() {
   document.getElementById('refreshEvery').value = every;
 
   const mode = loadUiMode();
-  applyUiMode(mode);
+  applyUiMode(mode, { skipAdapters: true });
+  updateBasicVrHint();
 
   initCharts();
 
@@ -2184,6 +2337,25 @@ function init() {
   if (btnRepairBasic) btnRepairBasic.addEventListener('click', () => {
     document.getElementById('btnRepair').click();
   });
+
+  // Fix NetworkManager Control buttons (null-safe: resultEl may be null)
+  const btnFixNmBasic = document.getElementById('btnFixNmBasic');
+  if (btnFixNmBasic) {
+    btnFixNmBasic.addEventListener('click', async () => {
+      const ifname = btnFixNmBasic.dataset.ifname || null;
+      const resultEl = document.getElementById('fixNmResult') || null;
+      await fixNmControl(ifname, resultEl, btnFixNmBasic);
+    });
+  }
+
+  const btnFixNmAdv = document.getElementById('btnFixNmAdv');
+  if (btnFixNmAdv) {
+    btnFixNmAdv.addEventListener('click', async () => {
+      const ifname = btnFixNmAdv.dataset.ifname || null;
+      const resultEl = document.getElementById('fixNmResultAdv') || null;
+      await fixNmControl(ifname, resultEl, btnFixNmAdv);
+    });
+  }
 
   async function saveConfigOnly() {
     const cfg = getForm();
@@ -2309,7 +2481,12 @@ function init() {
   wireTabs();
 
   // Load adapters first so the adapter select is populated before applying config.
-  loadAdapters().then(refresh).then(applyAutoRefresh);
+  loadAdapters()
+    .then(refresh)
+    .then(() => {
+      applyAutoRefresh();
+      return refreshInfo();
+    });
 }
 
 function wireQr() {

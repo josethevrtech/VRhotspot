@@ -1,6 +1,6 @@
 /* Cyberpunk Theme for VR Hotspot */
 :root {
-  --bg-app: #030008;
+  --bg-app: #000;
   --bg-panel: #0a0a16;
   --bg-subtle: #131326;
   --bg-input: #000000;
@@ -22,8 +22,8 @@
   --success-hover: #33ffb5;
   --warning: #ffee00;
   
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.5);
-  --shadow-md: 0 4px 6px rgba(0,0,0,0.5);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 15px rgba(0, 243, 255, 0.2);
   
   --radius-sm: 4px;
@@ -34,21 +34,20 @@
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
   font-family: var(--font-sans);
-  background: #030008; /* Fallback */
   background: var(--bg-app);
   color: var(--text-main);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  background-image: 
-    radial-gradient(circle at 10% 20%, rgba(0, 243, 255, 0.03) 0%, transparent 20%),
-    radial-gradient(circle at 90% 80%, rgba(255, 0, 85, 0.03) 0%, transparent 20%);
+  background-image: none;
 }
 
 /* Layout Containers */
@@ -69,7 +68,7 @@ body {
 /* Header */
 .top-header {
   height: 60px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: none;
   background: rgba(10, 10, 22, 0.8);
   backdrop-filter: blur(10px);
   display: flex;
@@ -87,7 +86,7 @@ body {
 }
 
 .brand-logo-small {
-  height: 32px;
+  height: 52px;
   width: auto;
   filter: drop-shadow(0 0 5px var(--accent-primary));
 }
@@ -181,6 +180,10 @@ input:checked + .slider:before {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 24px;
+}
+
+.basic-card {
+  overflow: visible;
 }
 
 /* Layout for Advanced Mode */
@@ -462,7 +465,74 @@ label {
   letter-spacing: 0.05em;
 }
 
-input, select {
+.info-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.hint.tip-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  color: var(--accent-primary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  text-transform: none;
+  z-index: 5;
+}
+
+.tip:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-main);
+}
+
+.tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 8px);
+  transform: translateX(-50%) translateY(-4px);
+  opacity: 0;
+  pointer-events: none;
+  background: rgba(8, 8, 12, 0.98);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-width: 300px;
+  width: max-content;
+  white-space: normal;
+  line-height: 1.4;
+  box-shadow: var(--shadow-md);
+  text-transform: none;
+  z-index: 999;
+}
+
+.tip:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+input,
+select {
   width: 100%;
   padding: 8px 12px;
   background: var(--bg-input);
@@ -474,7 +544,8 @@ input, select {
   transition: .15s;
 }
 
-input:focus, select:focus {
+input:focus,
+select:focus {
   outline: none;
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px var(--accent-subtle);
