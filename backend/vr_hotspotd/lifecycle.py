@@ -27,7 +27,6 @@ from vr_hotspotd.engine.tx_power import auto_adjust_tx_power, set_tx_power, get_
 from vr_hotspotd import system_tuning, preflight, network_tuning, os_release, wifi_probe
 from vr_hotspotd.policy import (
     BASIC_MODE_REQUIRED_BAND,
-    BASIC_MODE_REQUIRED_WIDTH_MHZ,
     ERROR_BASIC_MODE_REQUIRES_5GHZ,
     ERROR_BASIC_MODE_REQUIRES_80MHZ_ADAPTER,
     ERROR_NM_INTERFACE_MANAGED,
