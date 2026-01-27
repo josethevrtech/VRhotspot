@@ -9,7 +9,7 @@ import uuid
 import ipaddress
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.config import load_config, write_config_file
@@ -194,7 +194,7 @@ _ALLOWED_BANDS = {"2.4ghz", "5ghz", "6ghz"}
 _ALLOWED_SECURITY = {"wpa2", "wpa3_sae"}
 _ALLOWED_QOS = {"off", "vr", "balanced", "ultra_low_latency", "high_throughput"}
 
-SERVER_VERSION = "vr-hotspotd/0.4"
+SERVER_VERSION = "vr-hotspotd/1.0"
 
 
 def _clamp_int(
@@ -291,6 +291,16 @@ def _inline_ui_css() -> str:
         return ""
 
 
+def _apply_asset_version(html: str) -> str:
+    version = quote(SERVER_VERSION, safe="")
+    if not version:
+        return html
+    for asset in ("ui.css", "ui.js"):
+        html = html.replace(f'/assets/{asset}"', f'/assets/{asset}?v={version}"')
+        html = html.replace(f"/assets/{asset}'", f"/assets/{asset}?v={version}'")
+    return html
+
+
 
 def _build_ui_html() -> str:
     # Read the template from assets/index.html
@@ -306,9 +316,11 @@ def _build_ui_html() -> str:
 
     css = _inline_ui_css()
     if not css:
-        return html_content.replace("<!-- INLINE_CSS -->", "")
+        html_content = html_content.replace("<!-- INLINE_CSS -->", "")
+        return _apply_asset_version(html_content)
     style_tag = f"<style id=\"ui-inline-css\">\n{css}\n</style>"
-    return html_content.replace("<!-- INLINE_CSS -->", style_tag)
+    html_content = html_content.replace("<!-- INLINE_CSS -->", style_tag)
+    return _apply_asset_version(html_content)
 
 _ASSET_CONTENT_TYPES = {
     "favicon.svg": "image/svg+xml",

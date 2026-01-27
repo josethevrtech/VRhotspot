@@ -62,10 +62,6 @@
             <div class="small mt-6" id="basicStatusDetails"></div>
             <div class="small mt-6 error-text" id="basicLastError"></div>
             <div class="small mt-6 error-text" id="basicLastErrorDetail"></div>
-            <div id="fixNmContainer" class="mt-8" style="display:none">
-              <button class="btn warning" id="btnFixNmBasic">Fix NetworkManager Control</button>
-              <span id="fixNmResult" class="small ml-8"></span>
-            </div>
             <div id="basicTelemetryContainer"
               style="display:none; font-family:monospace; margin-top:12px; padding:8px; background:var(--bg-subtle); border-radius:4px; font-size:11px;">
             </div>
@@ -209,17 +205,108 @@
                 <div id="statusEffective" class="status-summary"></div>
                 <div id="statusLastError" class="small mt-6 error-text"></div>
                 <div id="statusErrorDetail" class="small mt-6 error-text"></div>
-                <div id="fixNmContainerAdv" class="mt-8" style="display:none">
-                  <button class="btn warning" id="btnFixNmAdv">Fix NetworkManager Control</button>
-                  <span id="fixNmResultAdv" class="small ml-8"></span>
-                </div>
-                <div id="rawStatus" class="mono-box mini"></div>
               </div>
               <div class="hero-actions">
                 <button class="btn primary lg" id="btnStart">Start Hotspot</button>
                 <button class="btn danger lg" id="btnStop">Stop Hotspot</button>
                 <button class="btn secondary" id="btnRestart">Restart Service</button>
                 <button class="btn secondary" id="btnRepair">Repair Network</button>
+              </div>
+            </div>
+
+            <div class="card debug-details">
+              <div class="card-header">
+                <h2>Pro Debug Details</h2>
+              </div>
+              <div class="card-body">
+                <div class="kv-grid">
+                  <div class="kv-item">
+                    <div class="kv-label">Adapter</div>
+                    <div class="kv-value" id="dbgAdapter">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">AP Interface</div>
+                    <div class="kv-value" id="dbgApInterface">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Band</div>
+                    <div class="kv-value" id="dbgBand">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Width</div>
+                    <div class="kv-value" id="dbgWidth">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Channel</div>
+                    <div class="kv-value" id="dbgChannel">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Country</div>
+                    <div class="kv-value" id="dbgCountry">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Uplink</div>
+                    <div class="kv-value" id="dbgUplink">--</div>
+                  </div>
+                </div>
+
+                <div class="mt-12">
+                  <div class="small muted">Warnings</div>
+                  <div class="badge-row" id="dbgWarnings"></div>
+                </div>
+
+                <div class="mt-12">
+                  <details class="debug-accordion" id="dbgTelemetryAcc">
+                    <summary>Telemetry</summary>
+                    <div class="accordion-body">
+                      <div class="kv-grid" id="dbgTelemetry"></div>
+                    </div>
+                  </details>
+
+                  <details class="debug-accordion" id="dbgEngineAcc">
+                    <summary>Engine</summary>
+                    <div class="accordion-body">
+                      <div class="kv-grid">
+                        <div class="kv-item">
+                          <div class="kv-label">PID</div>
+                          <div class="kv-value" id="dbgEnginePid">--</div>
+                        </div>
+                        <div class="kv-item kv-span">
+                          <div class="kv-label">Command</div>
+                          <div class="kv-value mono" id="dbgEngineCmd">--</div>
+                          <button class="btn sm mt-8" id="btnCopyEngineCmd">Copy command</button>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+
+                  <details class="debug-accordion" id="dbgPreflightAcc">
+                    <summary>Preflight</summary>
+                    <div class="accordion-body">
+                      <div class="kv-grid" id="dbgPreflight"></div>
+                    </div>
+                  </details>
+
+                  <details class="debug-accordion" id="dbgPlatformAcc">
+                    <summary>Platform</summary>
+                    <div class="accordion-body">
+                      <div class="kv-grid">
+                        <div class="kv-item">
+                          <div class="kv-label">OS</div>
+                          <div class="kv-value" id="dbgPlatformOs">--</div>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
+
+                  <details class="debug-accordion" id="dbgRawAcc">
+                    <summary>Raw JSON</summary>
+                    <div class="accordion-body">
+                      <button class="btn sm" id="btnToggleRawStatus">Show raw status JSON</button>
+                      <pre id="rawStatusPre" class="mono-box code-block"></pre>
+                    </div>
+                  </details>
+                </div>
               </div>
             </div>
 

@@ -405,6 +405,28 @@ def _nm_device_state(ifname: str) -> Optional[str]:
     return None
 
 
+def _nm_set_unmanaged(ifname: str) -> Tuple[bool, Optional[str]]:
+    if not ifname or not str(ifname).strip():
+        return False, "invalid_interface"
+    if os.geteuid() != 0:
+        return False, "not_root"
+    nmcli = _nmcli_path()
+    if not nmcli:
+        return False, "nmcli_not_found"
+    try:
+        p = subprocess.run(
+            [nmcli, "dev", "set", ifname, "managed", "no"],
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        return False, f"nmcli_error:{type(exc).__name__}"
+    if p.returncode != 0:
+        err = (p.stderr or p.stdout or "").strip()
+        return False, err or "nmcli_failed"
+    return True, None
+
+
 def _nm_interference_reason(ifname: str) -> Optional[str]:
     if not ifname or not _nm_is_running():
         return None
@@ -2043,6 +2065,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         return LifecycleResult("start_failed", state)
 
     ap_ifname = None
+    nm_remediation_attempted = False
+    nm_remediation_error: Optional[str] = None
     try:
         inv = get_adapters()
         inv_error = inv.get("error")
@@ -2093,9 +2117,18 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 allow_fallback_40mhz = False
 
         # --- Pre-start NetworkManager Gate (all modes) ---
-        nm_gate_error = _nm_gate_check(ap_ifname)
+        nm_gate_ifname = ap_ifname
+        nm_gate_error = _nm_gate_check(nm_gate_ifname)
         if nm_gate_error:
-            raise RuntimeError(nm_gate_error)
+            nm_remediation_attempted = True
+            rem_ok, rem_err = _nm_set_unmanaged(nm_gate_ifname)
+            nm_remediation_error = rem_err
+            if rem_ok:
+                nm_gate_error = _nm_gate_check(nm_gate_ifname)
+            if nm_gate_error:
+                if not nm_remediation_error:
+                    nm_remediation_error = "still_managed"
+                raise RuntimeError(nm_gate_error)
 
         if bp == "5ghz":
             if not a.get("supports_80mhz"):
@@ -2127,6 +2160,10 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         ):
             context = {"interface": ap_ifname} if err == ERROR_NM_INTERFACE_MANAGED and ap_ifname else {}
             error_detail = wifi_probe.build_error_detail(err, context)
+            if err == ERROR_NM_INTERFACE_MANAGED:
+                error_detail["remediation_attempted"] = nm_remediation_attempted
+                if nm_remediation_error:
+                    error_detail["remediation_error"] = nm_remediation_error
         state = update_state(
             phase="error",
             running=False,

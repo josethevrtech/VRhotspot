@@ -166,6 +166,9 @@ sudo mkdir -p /var/lib/vr-hotspot/app
 sudo rsync -a ./ /var/lib/vr-hotspot/app/
 ```
 
+Note: Installed deployments serve WebUI assets from `/var/lib/vr-hotspot/app/assets`.
+When running from the repo, the backend prefers `./assets` first.
+
 **3. Run the install script:**
 
 ```bash

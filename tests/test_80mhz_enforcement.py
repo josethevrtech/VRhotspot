@@ -127,6 +127,7 @@ class Test80MHzEnforcement(unittest.TestCase):
              patch("vr_hotspotd.lifecycle._nm_interference_reason", return_value=None), \
              patch("vr_hotspotd.lifecycle._nm_gate_check", return_value=None), \
              patch("vr_hotspotd.lifecycle.is_running", return_value=True), \
+             patch("vr_hotspotd.engine.lnxrouter_conf.parse_kv_file", return_value={"interface": "wlan1"}), \
              patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
             try:
                 res = lifecycle.start_hotspot()

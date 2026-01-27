@@ -2,8 +2,11 @@ const BASE = '';
 const STORE = (function () {
   try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); return localStorage; } catch { return sessionStorage; }
 })();
+const TOKEN_KEY = 'vr_hotspot_token';
+const LEGACY_TOKEN_KEY = 'vr_hotspot_api_token';
+const DEBUG_TOKEN = false;
 const LS = {
-  token: 'vr_hotspot_api_token',
+  token: TOKEN_KEY,
   privacy: 'vr_hotspot_privacy',
   showTelemetry: 'vr_hotspot_show_telemetry',
   auto: 'vr_hotspot_auto',
@@ -783,16 +786,70 @@ function wireDirtyTracking() {
 
 function cid() { return 'ui-' + Date.now() + '-' + Math.random().toString(16).slice(2); }
 
+function getLocalStorageSafe() {
+  try { return localStorage; } catch { return null; }
+}
+
+function getStoredToken() {
+  const ls = getLocalStorageSafe();
+  if (ls) return (ls.getItem(TOKEN_KEY) || '').trim();
+  try { return (STORE.getItem(TOKEN_KEY) || '').trim(); } catch { return ''; }
+}
+
+function setStoredToken(token) {
+  const val = (token || '').trim();
+  const ls = getLocalStorageSafe();
+  try {
+    if (ls) {
+      if (val) ls.setItem(TOKEN_KEY, val);
+      else ls.removeItem(TOKEN_KEY);
+    }
+  } catch { /* ignore */ }
+  if (!ls) {
+    try {
+      if (val) STORE.setItem(TOKEN_KEY, val);
+      else STORE.removeItem(TOKEN_KEY);
+    } catch { /* ignore */ }
+  }
+}
+
+function migrateLegacyToken() {
+  const current = getStoredToken();
+  if (current) return current;
+  const ls = getLocalStorageSafe();
+  let legacy = '';
+  if (ls) legacy = (ls.getItem(LEGACY_TOKEN_KEY) || '').trim();
+  if (!legacy) {
+    try { legacy = (STORE.getItem(LEGACY_TOKEN_KEY) || '').trim(); } catch { legacy = ''; }
+  }
+  if (legacy) {
+    setStoredToken(legacy);
+    try { if (ls) ls.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
+    try { STORE.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
+    return legacy;
+  }
+  return '';
+}
+
+function debugTokenLog(injected) {
+  if (!DEBUG_TOKEN) return;
+  const len = getStoredToken().length;
+  try {
+    console.log('[token]', { TOKEN_KEY, tokenLength: len, injected });
+  } catch { /* ignore */ }
+}
+
 function getToken() {
   const advEl = document.getElementById('apiToken');
   const basicEl = document.getElementById('apiTokenBasic');
   const adv = advEl ? (advEl.value || '').trim() : '';
   const basic = basicEl ? (basicEl.value || '').trim() : '';
-  return basic || adv || ((STORE.getItem(LS.token) || '').trim());
+  const stored = getStoredToken();
+  return basic || adv || stored;
 }
 function setToken(v) {
   const val = (v || '').trim();
-  try { STORE.setItem(LS.token, val); } catch { }
+  setStoredToken(val);
   const advEl = document.getElementById('apiToken');
   const basicEl = document.getElementById('apiTokenBasic');
   if (advEl && advEl.value !== val) advEl.value = val;
@@ -826,52 +883,6 @@ function renderHintTip(el, text) {
   tip.setAttribute('data-tip', tipText);
   tip.setAttribute('aria-label', tipText);
   el.appendChild(tip);
-}
-
-/**
- * Calls POST /v1/fix_nm to set the interface to unmanaged by NetworkManager.
- * @param {string} ifname - The interface name to fix
- * @param {HTMLElement|null} resultEl - Optional element to display result message
- * @param {HTMLButtonElement|null} btn - Optional button that triggered this action
- */
-async function fixNmControl(ifname, resultEl, btn) {
-  if (!ifname) {
-    safeText(resultEl, 'Error: No interface specified', 'var(--bad)');
-    return;
-  }
-
-  if (btn) {
-    try { btn.disabled = true; } catch { /* ignore */ }
-  }
-  safeText(resultEl, 'Fixing...', 'var(--text-secondary)');
-
-  try {
-    const r = await api('/v1/fix_nm', {
-      method: 'POST',
-      body: JSON.stringify({ ifname: ifname }),
-    });
-
-    if (r.ok && r.json && r.json.data && r.json.data.ok) {
-      safeText(resultEl, '✓ Fixed! You can now try Start again.', 'var(--good)');
-      setMsg('NetworkManager control fixed. You can now start the hotspot.');
-      // Refresh status
-      await refresh();
-    } else {
-      const errMsg = (r.json && r.json.data && r.json.data.error)
-        ? r.json.data.error
-        : (r.json && r.json.result_code) || `HTTP ${r.status}`;
-      safeText(resultEl, `✗ Failed: ${errMsg}`, 'var(--bad)');
-      setMsg(`Fix NM failed: ${errMsg}`, 'dangerText');
-    }
-  } catch (e) {
-    const errText = (e && e.message) ? e.message : String(e);
-    safeText(resultEl, `✗ Error: ${errText}`, 'var(--bad)');
-    setMsg(`Fix NM error: ${errText}`, 'dangerText');
-  } finally {
-    if (btn) {
-      try { btn.disabled = false; } catch { /* ignore */ }
-    }
-  }
 }
 
 function fmtTs(epoch) {
@@ -912,6 +923,109 @@ function formatOsLabel(platform) {
   const name = map[id] || (rawId ? rawId.charAt(0).toUpperCase() + rawId.slice(1) : '');
   if (name) return version ? `${name} ${version}` : name;
   return pretty || '';
+}
+
+function formatBandLabel(band) {
+  const raw = (band || '').toString().trim().toLowerCase();
+  if (!raw) return '--';
+  if (raw === '2.4ghz' || raw === '2.4') return '2.4 GHz';
+  if (raw === '5ghz' || raw === '5') return '5 GHz';
+  if (raw === '6ghz' || raw === '6') return '6 GHz';
+  return raw;
+}
+
+function setTextById(id, value, fallback = '--') {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const text = (value === null || value === undefined || value === '') ? fallback : String(value);
+  el.textContent = text;
+}
+
+function labelizeKey(key) {
+  return String(key || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function formatDebugValue(value) {
+  if (value === null || value === undefined) return '--';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '--';
+  if (typeof value === 'object') {
+    try {
+      const parts = Object.entries(value).map(([k, v]) => `${k}:${formatDebugValue(v)}`);
+      return parts.length ? parts.join(' | ') : '--';
+    } catch {
+      return '--';
+    }
+  }
+  return String(value);
+}
+
+function renderKvGrid(container, items, emptyLabel = 'No data') {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!items || items.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'small muted';
+    empty.textContent = emptyLabel;
+    container.appendChild(empty);
+    return;
+  }
+  for (const item of items) {
+    const wrap = document.createElement('div');
+    wrap.className = 'kv-item';
+    const label = document.createElement('div');
+    label.className = 'kv-label';
+    label.textContent = item.label;
+    const value = document.createElement('div');
+    value.className = 'kv-value';
+    value.textContent = item.value;
+    wrap.appendChild(label);
+    wrap.appendChild(value);
+    container.appendChild(wrap);
+  }
+}
+
+function renderBadges(container, items) {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!items || items.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'small muted';
+    empty.textContent = 'None';
+    container.appendChild(empty);
+    return;
+  }
+  for (const item of items) {
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.textContent = item;
+    container.appendChild(badge);
+  }
+}
+
+async function copyToClipboard(text) {
+  if (!text) return false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* ignore */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'absolute';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 async function refreshInfo() {
@@ -1021,6 +1135,62 @@ function renderTelemetry(t) {
   }
 
   updateCharts(t);
+}
+
+function updateDebugDetails(status) {
+  if (!status || typeof status !== 'object') return;
+
+  const band = formatBandLabel(status.selected_band || status.band_preference || '');
+  const width = status.selected_width_mhz ? `${status.selected_width_mhz} MHz` : '--';
+  const channel = (status.selected_channel !== null && status.selected_channel !== undefined)
+    ? String(status.selected_channel)
+    : '--';
+  const country = status.selected_country || '--';
+  const uplink = status.network_tuning && status.network_tuning.uplink_ifname
+    ? status.network_tuning.uplink_ifname
+    : '--';
+
+  setTextById('dbgAdapter', status.adapter || '--');
+  setTextById('dbgApInterface', status.ap_interface || '--');
+  setTextById('dbgBand', band);
+  setTextById('dbgWidth', width);
+  setTextById('dbgChannel', channel);
+  setTextById('dbgCountry', country);
+  setTextById('dbgUplink', uplink);
+
+  renderBadges(document.getElementById('dbgWarnings'), Array.isArray(status.warnings) ? status.warnings : []);
+
+  const summary = status.telemetry && status.telemetry.summary ? status.telemetry.summary : null;
+  const telemetryItems = summary
+    ? Object.keys(summary).sort().map((key) => ({
+        label: labelizeKey(key),
+        value: formatDebugValue(summary[key]),
+      }))
+    : [];
+  renderKvGrid(document.getElementById('dbgTelemetry'), telemetryItems, 'No telemetry summary');
+
+  const eng = status.engine || {};
+  setTextById('dbgEnginePid', eng.pid || '--');
+  let cmdText = '';
+  if (Array.isArray(eng.cmd)) cmdText = eng.cmd.join(' ');
+  else if (typeof eng.cmd === 'string') cmdText = eng.cmd;
+  setTextById('dbgEngineCmd', cmdText || '--');
+  const copyBtn = document.getElementById('btnCopyEngineCmd');
+  if (copyBtn) {
+    copyBtn.dataset.copyText = cmdText || '';
+    copyBtn.disabled = !cmdText;
+  }
+
+  const preflight = status.preflight && status.preflight.details ? status.preflight.details : {};
+  const preflightItems = [
+    { label: 'Hostapd', value: formatDebugValue(preflight.hostapd) },
+    { label: 'Regdom', value: formatDebugValue(preflight.regdom) },
+    { label: 'Rfkill', value: formatDebugValue(preflight.rfkill) },
+  ];
+  renderKvGrid(document.getElementById('dbgPreflight'), preflightItems);
+
+  const osLabel = formatOsLabel(status.platform);
+  setTextById('dbgPlatformOs', osLabel || '--');
 }
 
 // Chart Globals
@@ -1163,12 +1333,26 @@ function updateCharts(t) {
 }
 
 async function api(path, opts = {}) {
-  const headers = Object.assign({}, opts.headers || {}, { 'X-Correlation-Id': cid() });
+  const baseHeaders = {};
+  if (opts.headers) {
+    if (opts.headers instanceof Headers) {
+      opts.headers.forEach((value, key) => { baseHeaders[key] = value; });
+    } else {
+      Object.assign(baseHeaders, opts.headers);
+    }
+  }
+  const headerKeys = Object.keys(baseHeaders).reduce((acc, key) => {
+    acc[key.toLowerCase()] = key;
+    return acc;
+  }, {});
+  if (!headerKeys['x-correlation-id']) baseHeaders['X-Correlation-Id'] = cid();
   const tok = getToken();
-  if (tok) headers['X-Api-Token'] = tok;
-  if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const injected = !!(tok && !headerKeys['x-api-token']);
+  if (injected) baseHeaders['X-Api-Token'] = tok;
+  if (opts.body && !headerKeys['content-type']) baseHeaders['Content-Type'] = 'application/json';
+  debugTokenLog(injected);
 
-  const res = await fetch(BASE + path, Object.assign({}, opts, { headers }));
+  const res = await fetch(BASE + path, Object.assign({}, opts, { headers: baseHeaders }));
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { }
@@ -1373,27 +1557,6 @@ function updateBasicStatusMeta(state) {
     }
   }
 
-  // Show/hide Fix NM button for both basic and advanced UI
-  const isNmError = err === 'nm_interface_managed';
-  const nmIfname = isNmError && state.last_error_detail && state.last_error_detail.context
-    ? state.last_error_detail.context.interface
-    : null;
-
-  // Basic UI button
-  const fixNmBasic = document.getElementById('fixNmContainer');
-  const fixNmBtnBasic = document.getElementById('btnFixNmBasic');
-  if (fixNmBasic) {
-    fixNmBasic.style.display = (isNmError && nmIfname) ? '' : 'none';
-    if (fixNmBtnBasic) fixNmBtnBasic.dataset.ifname = nmIfname || '';
-  }
-
-  // Advanced UI button
-  const fixNmAdv = document.getElementById('fixNmContainerAdv');
-  const fixNmBtnAdv = document.getElementById('btnFixNmAdv');
-  if (fixNmAdv) {
-    fixNmAdv.style.display = (isNmError && nmIfname) ? '' : 'none';
-    if (fixNmBtnAdv) fixNmBtnAdv.dataset.ifname = nmIfname || '';
-  }
 }
 
 function syncCountrySelectFromInput() {
@@ -2044,8 +2207,10 @@ async function refresh() {
     effEl.style.display = eff ? '' : 'none';
   }
 
-  const rawStatusEl = document.getElementById('rawStatus');
+  const rawStatusEl = document.getElementById('rawStatusPre');
   if (rawStatusEl) rawStatusEl.textContent = JSON.stringify(st.json, null, 2);
+
+  updateDebugDetails(s);
 
   const eng = (s.engine || {});
   // Combine ap_logs_tail and stdout_tail
@@ -2206,26 +2371,32 @@ if (apiTokenBasic) {
 }
 
 const btnSaveTokenBasic = document.getElementById('btnSaveTokenBasic');
-if (btnSaveTokenBasic) btnSaveTokenBasic.addEventListener('click', () => {
+if (btnSaveTokenBasic) btnSaveTokenBasic.addEventListener('click', async () => {
   const tokenField = document.getElementById('apiTokenBasic');
-  if (tokenField) {
-    setToken(tokenField.value.trim());
-    setMsg('API token saved. Refreshing page...');
-    setTimeout(() => {
-      window.location.reload();
-    }, 500);
+  if (!tokenField) return;
+  const token = tokenField.value.trim();
+  setToken(token);
+  if (token) {
+    setMsg('API token saved.');
+    await refreshInfo();
+    await refresh();
+  } else {
+    setMsg('API token cleared.');
   }
 });
 
 const btnSaveToken = document.getElementById('btnSaveToken');
-if (btnSaveToken) btnSaveToken.addEventListener('click', () => {
+if (btnSaveToken) btnSaveToken.addEventListener('click', async () => {
   const tokenField = document.getElementById('apiToken');
-  if (tokenField) {
-    setToken(tokenField.value.trim());
-    setMsg('API token saved. Refreshing page...');
-    setTimeout(() => {
-      window.location.reload();
-    }, 500);
+  if (!tokenField) return;
+  const token = tokenField.value.trim();
+  setToken(token);
+  if (token) {
+    setMsg('API token saved.');
+    await refreshInfo();
+    await refresh();
+  } else {
+    setMsg('API token cleared.');
   }
 });
 
@@ -2273,7 +2444,7 @@ function wireTabs() {
 }
 
 function init() {
-  const tok = STORE.getItem(LS.token) || '';
+  const tok = migrateLegacyToken() || getStoredToken();
   if (tok) setToken(tok);
 
   const privacy = (STORE.getItem(LS.privacy) || '1') === '1';
@@ -2292,6 +2463,11 @@ function init() {
   const mode = loadUiMode();
   applyUiMode(mode, { skipAdapters: true });
   updateBasicVrHint();
+
+  if (tok) {
+    refreshInfo();
+    refresh();
+  }
 
   initCharts();
 
@@ -2320,6 +2496,27 @@ function init() {
     setMsg(r.json ? ('Restart: ' + r.json.result_code) : ('Restart failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
     await refresh();
   });
+
+  const btnToggleRawStatus = document.getElementById('btnToggleRawStatus');
+  if (btnToggleRawStatus) {
+    btnToggleRawStatus.addEventListener('click', () => {
+      const raw = document.getElementById('rawStatusPre');
+      if (!raw) return;
+      const visible = !raw.classList.contains('is-visible');
+      raw.classList.toggle('is-visible', visible);
+      btnToggleRawStatus.textContent = visible ? 'Hide raw status JSON' : 'Show raw status JSON';
+    });
+  }
+
+  const btnCopyEngineCmd = document.getElementById('btnCopyEngineCmd');
+  if (btnCopyEngineCmd) {
+    btnCopyEngineCmd.addEventListener('click', async () => {
+      const text = btnCopyEngineCmd.dataset.copyText || '';
+      if (!text) return;
+      const ok = await copyToClipboard(text);
+      setMsg(ok ? 'Command copied.' : 'Copy failed.', ok ? '' : 'dangerText');
+    });
+  }
   const btnStartBasic = document.getElementById('btnStartBasic');
   if (btnStartBasic) btnStartBasic.addEventListener('click', async () => {
     const fix = getBasicChannelFix();
@@ -2337,25 +2534,6 @@ function init() {
   if (btnRepairBasic) btnRepairBasic.addEventListener('click', () => {
     document.getElementById('btnRepair').click();
   });
-
-  // Fix NetworkManager Control buttons (null-safe: resultEl may be null)
-  const btnFixNmBasic = document.getElementById('btnFixNmBasic');
-  if (btnFixNmBasic) {
-    btnFixNmBasic.addEventListener('click', async () => {
-      const ifname = btnFixNmBasic.dataset.ifname || null;
-      const resultEl = document.getElementById('fixNmResult') || null;
-      await fixNmControl(ifname, resultEl, btnFixNmBasic);
-    });
-  }
-
-  const btnFixNmAdv = document.getElementById('btnFixNmAdv');
-  if (btnFixNmAdv) {
-    btnFixNmAdv.addEventListener('click', async () => {
-      const ifname = btnFixNmAdv.dataset.ifname || null;
-      const resultEl = document.getElementById('fixNmResultAdv') || null;
-      await fixNmControl(ifname, resultEl, btnFixNmAdv);
-    });
-  }
 
   async function saveConfigOnly() {
     const cfg = getForm();

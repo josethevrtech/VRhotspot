@@ -92,6 +92,7 @@ class TestBasicModeEnforcement(unittest.TestCase):
     @patch("vr_hotspotd.lifecycle.ensure_config_file")
     @patch("vr_hotspotd.lifecycle._repair_impl")
     @patch("vr_hotspotd.lifecycle.get_adapters")
+    @patch("vr_hotspotd.lifecycle._nm_set_unmanaged")
     @patch("vr_hotspotd.lifecycle._nm_gate_check")
     @patch("vr_hotspotd.os_release.read_os_release")
     @patch("vr_hotspotd.os_release.is_bazzite")
@@ -106,6 +107,7 @@ class TestBasicModeEnforcement(unittest.TestCase):
         mock_is_bazzite,
         mock_read_os_release,
         mock_nm_gate,
+        mock_nm_set_unmanaged,
         mock_get_adapters,
         mock_repair_impl,
         mock_ensure_config,
@@ -167,6 +169,7 @@ class TestNmPreStartGate(unittest.TestCase):
     @patch("vr_hotspotd.lifecycle.ensure_config_file")
     @patch("vr_hotspotd.lifecycle._repair_impl")
     @patch("vr_hotspotd.lifecycle.get_adapters")
+    @patch("vr_hotspotd.lifecycle._nm_set_unmanaged")
     @patch("vr_hotspotd.lifecycle._nm_gate_check")
     @patch("vr_hotspotd.os_release.read_os_release")
     @patch("vr_hotspotd.os_release.is_bazzite")
@@ -181,6 +184,7 @@ class TestNmPreStartGate(unittest.TestCase):
         mock_is_bazzite,
         mock_read_os_release,
         mock_nm_gate,
+        mock_nm_set_unmanaged,
         mock_get_adapters,
         mock_repair_impl,
         mock_ensure_config,
@@ -192,6 +196,7 @@ class TestNmPreStartGate(unittest.TestCase):
         mock_is_bazzite.return_value = False
         mock_read_os_release.return_value = {"ID": "cachyos"}
         mock_nm_gate.return_value = "nm_interface_managed"  # NM gate fails
+        mock_nm_set_unmanaged.return_value = (False, "not_root")
         
         mock_get_adapters.return_value = {
             "adapters": [
@@ -244,6 +249,9 @@ class TestNmPreStartGate(unittest.TestCase):
         self.assertEqual(detail.get("code"), "nm_interface_managed")
         self.assertEqual(detail.get("remediation"), wifi_probe.ERROR_REMEDIATIONS["nm_interface_managed"])
         self.assertEqual(detail.get("context", {}).get("interface"), "wlan1")
+        self.assertTrue(detail.get("remediation_attempted"), f"Expected remediation_attempted=True, got {detail}")
+        self.assertEqual(detail.get("remediation_error"), "not_root")
+        mock_nm_set_unmanaged.assert_called_with("wlan1")
 
     @patch("vr_hotspotd.lifecycle._nm_is_running")
     @patch("vr_hotspotd.lifecycle._nm_device_state")
@@ -276,6 +284,92 @@ class TestNmPreStartGate(unittest.TestCase):
         
         result = _nm_gate_check("wlan1")
         self.assertEqual(result, "nm_interface_managed")
+
+
+class TestNmAutoRemediation(unittest.TestCase):
+    """Test NetworkManager auto-remediation on start."""
+
+    @patch("vr_hotspotd.lifecycle.load_config")
+    @patch("vr_hotspotd.lifecycle.load_state")
+    @patch("vr_hotspotd.lifecycle.update_state")
+    @patch("vr_hotspotd.lifecycle.ensure_config_file")
+    @patch("vr_hotspotd.lifecycle._repair_impl")
+    @patch("vr_hotspotd.lifecycle.get_adapters")
+    @patch("vr_hotspotd.lifecycle._start_hotspot_5ghz_strict")
+    @patch("vr_hotspotd.lifecycle._nm_set_unmanaged")
+    @patch("vr_hotspotd.lifecycle._nm_gate_check")
+    @patch("vr_hotspotd.os_release.read_os_release")
+    @patch("vr_hotspotd.os_release.is_bazzite")
+    @patch("os.makedirs")
+    @patch("pathlib.Path.mkdir")
+    @patch("shutil.chown")
+    def test_nm_auto_remediation_applies_to_basic_and_non_basic(
+        self,
+        mock_chown,
+        mock_mkdir,
+        mock_makedirs,
+        mock_is_bazzite,
+        mock_read_os_release,
+        mock_nm_gate,
+        mock_nm_set_unmanaged,
+        mock_start_5ghz_strict,
+        mock_get_adapters,
+        mock_repair_impl,
+        mock_ensure_config,
+        mock_update_state,
+        mock_load_state,
+        mock_load_config,
+    ):
+        mock_is_bazzite.return_value = False
+        mock_read_os_release.return_value = {"ID": "cachyos"}
+
+        gate_calls = {"count": 0}
+
+        def gate_side_effect(*_args, **_kwargs):
+            gate_calls["count"] += 1
+            return "nm_interface_managed" if gate_calls["count"] % 2 == 1 else None
+
+        mock_nm_gate.side_effect = gate_side_effect
+        mock_nm_set_unmanaged.return_value = (True, None)
+
+        from vr_hotspotd.lifecycle import LifecycleResult
+
+        mock_start_5ghz_strict.return_value = LifecycleResult("started", {"phase": "running"})
+
+        mock_get_adapters.return_value = {
+            "adapters": [
+                {
+                    "ifname": "wlan1",
+                    "phy": "phy1",
+                    "bus": "usb",
+                    "supports_ap": True,
+                    "supports_5ghz": True,
+                    "supports_80mhz": True,
+                }
+            ],
+            "recommended": "wlan1",
+        }
+
+        mock_load_config.return_value = {
+            "wpa2_passphrase": "password123",
+            "band_preference": "5ghz",
+        }
+        mock_load_state.return_value = {"phase": "stopped"}
+        mock_update_state.return_value = {"phase": "starting"}
+
+        from vr_hotspotd import lifecycle
+
+        with patch("vr_hotspotd.lifecycle.wifi_probe.detect_firewall_backends", return_value={"selected_backend": "nftables"}), \
+             patch("vr_hotspotd.lifecycle.preflight.run", return_value={"errors": [], "warnings": [], "details": {}}), \
+             patch("vr_hotspotd.lifecycle.system_tuning.apply_pre", return_value=({}, [])):
+            res = lifecycle.start_hotspot()
+            self.assertEqual(res.code, "started")
+            res_basic = lifecycle.start_hotspot(basic_mode=True)
+            self.assertEqual(res_basic.code, "started")
+
+        self.assertEqual(mock_nm_set_unmanaged.call_count, 2)
+        for call in mock_nm_set_unmanaged.call_args_list:
+            self.assertEqual(call.args[0], "wlan1")
 
 
 class TestBasicModeFallbackBlocking(unittest.TestCase):
@@ -674,5 +768,3 @@ class TestStrictPathWidthFailure(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

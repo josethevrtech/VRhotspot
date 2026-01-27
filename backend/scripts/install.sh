@@ -56,6 +56,14 @@ log "Copying application files -> $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 cp -r "$BACKEND_SRC/../." "$INSTALL_DIR/"
 
+# Ensure Web UI assets are refreshed in the install directory.
+if [[ ! -d "$REPO_ROOT/assets" ]]; then
+  die "Assets directory not found at $REPO_ROOT/assets"
+fi
+log "Syncing Web UI assets -> $INSTALL_DIR/assets"
+install -d -m 755 "$INSTALL_DIR/assets"
+cp -a "$REPO_ROOT/assets/." "$INSTALL_DIR/assets/"
+
 # Ensure vendor binaries are executable if present
 if [[ -d "$INSTALL_DIR/backend/vendor/bin" ]]; then
   chmod +x "$INSTALL_DIR/backend/vendor/bin/"* 2>/dev/null || true
@@ -100,7 +108,7 @@ systemctl daemon-reload
 log "Enabling vr-hotspotd.service (daemon always enabled)"
 systemctl enable vr-hotspotd.service
 
-log "Starting vr-hotspotd.service"
+log "Starting vr-hotspotd.service (after asset sync)"
 systemctl restart vr-hotspotd.service
 
 if [[ "$FIX_AUTOSTART_CONFIG" == "1" ]]; then
