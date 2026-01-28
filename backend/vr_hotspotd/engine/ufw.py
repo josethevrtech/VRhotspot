@@ -87,7 +87,7 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
             or "could not find" in low
             or "could not find a matching rule" in low
             or "no matching" in low
-            or "not found" in low
+            or "rule not found" in low
         )
 
     if ap_ifname and "allow_in" in " ".join(rules):
