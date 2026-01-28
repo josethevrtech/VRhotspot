@@ -80,17 +80,27 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
     uplink_ifname = state.get("uplink_ifname")
     rules = state.get("rules") if isinstance(state.get("rules"), list) else []
 
+    def _is_missing_rule_error(output: str) -> bool:
+        low = (output or "").lower()
+        return (
+            "skipping" in low
+            or "could not find" in low
+            or "could not find a matching rule" in low
+            or "no matching" in low
+            or "not found" in low
+        )
+
     if ap_ifname and "allow_in" in " ".join(rules):
         ok, out = _run(["ufw", "delete", "allow", "in", "on", str(ap_ifname)])
-        if not ok:
+        if not ok and not _is_missing_rule_error(out):
             warnings.append(f"ufw_delete_allow_in_failed:{out[:120]}")
 
     if ap_ifname and uplink_ifname and "route_allow" in " ".join(rules):
         ok, out = _run(
             [
                 "ufw",
-                "delete",
                 "route",
+                "delete",
                 "allow",
                 "in",
                 "on",
@@ -100,7 +110,7 @@ def revert(state: Optional[Dict[str, object]]) -> List[str]:
                 str(uplink_ifname),
             ]
         )
-        if not ok:
+        if not ok and not _is_missing_rule_error(out):
             warnings.append(f"ufw_delete_route_allow_failed:{out[:120]}")
 
     return warnings
