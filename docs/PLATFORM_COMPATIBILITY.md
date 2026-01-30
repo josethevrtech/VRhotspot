@@ -9,6 +9,7 @@ This project targets multiple Linux distros (Bazzite, CachyOS, SteamOS, Arch, Fe
 - [ ] For SteamOS/CachyOS/Arch: do we keep the pacman-specific logic intact?
 - [ ] For Bazzite (rpm-ostree): do we avoid breaking vendor-bundle or live-layering logic?
 - [ ] If a fix is OS-specific, is it guarded by an OS check or feature flag?
+- [ ] For CachyOS: verify vendor hostapd/dnsmasq preference to avoid system package regressions.
 
 ## CI Smoke Checks
 
