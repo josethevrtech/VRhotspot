@@ -369,6 +369,20 @@ def _iface_is_up(ifname: str) -> bool:
     return "state UP" in text or "<UP" in text
 
 
+def _ensure_iface_up(ifname: str) -> bool:
+    if not ifname:
+        return False
+    if _iface_is_up(ifname):
+        return True
+    ip = shutil.which("ip") or "/usr/sbin/ip"
+    try:
+        subprocess.run([ip, "link", "set", "dev", ifname, "up"], capture_output=True, text=True, check=False)
+    except Exception:
+        return False
+    time.sleep(0.2)
+    return _iface_is_up(ifname)
+
+
 def _nmcli_path() -> Optional[str]:
     return shutil.which("nmcli")
 
@@ -870,7 +884,10 @@ def _attempt_start_candidate(
         return None, res, "ap_start_timed_out", None, latest_stdout, latest_stderr
 
     if not _iface_is_up(ap_info.ifname):
-        return None, res, "ap_start_timed_out", "iface_not_up", latest_stdout, latest_stderr
+        if _ensure_iface_up(ap_info.ifname):
+            log.info("ap_iface_brought_up", extra={"ap_interface": ap_info.ifname})
+        else:
+            return None, res, "ap_start_timed_out", "iface_not_up", latest_stdout, latest_stderr
 
     stable_s = min(2.0, max(1.0, ap_ready_timeout_s / 2.0))
     time.sleep(stable_s)
@@ -1469,7 +1486,7 @@ _HOSTAPD_DRIVER_ERROR_PATTERNS = (
     "nl80211: Failed to set interface",
 )
 
-_VIRT_AP_IFACE_RE = re.compile(r"^x\\d+(.+)$")
+_VIRT_AP_IFACE_RE = re.compile(r"^x\d+(.+)$")
 
 
 def _normalize_ap_adapter(preferred: Optional[str], inv: Optional[dict]) -> Optional[str]:
@@ -2250,6 +2267,9 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 if not nm_remediation_error:
                     nm_remediation_error = "still_managed"
                 raise RuntimeError(nm_gate_error)
+
+        if not _ensure_iface_up(ap_ifname):
+            log.warning("ap_iface_not_up_prestart", extra={"ap_interface": ap_ifname})
 
         if bp == "5ghz":
             if not a.get("supports_80mhz"):
