@@ -466,6 +466,7 @@ def main() -> int:
     ap.add_argument("--dtim-period", type=int, default=1)
     ap.add_argument("--short-guard-interval", action="store_true", default=True)
     ap.add_argument("--tx-power", type=int, default=None)
+    ap.add_argument("--strict-width", action="store_true")
     args = ap.parse_args()
 
     if len(args.passphrase) < 8:
@@ -553,8 +554,10 @@ def main() -> int:
     channel = int(args.channel) if args.channel is not None else (6 if band == "2.4ghz" else 36)
 
     mode = "full"
+    strict_width = bool(args.strict_width)
     hostapd_p: Optional[subprocess.Popen] = None
     early_rc: Optional[int] = None
+    early_lines: List[str] = []
 
     while True:
         _write_hostapd_conf(
@@ -591,9 +594,32 @@ def main() -> int:
             break
 
         lines = _collect_proc_output(hostapd_p)
+        early_lines = lines
         _emit_lines(lines)
+        if strict_width:
+            early_rc = hostapd_p.returncode or 1
+            if not early_lines:
+                _emit_lines(
+                    [
+                        f"hostapd_start_failed strict_width=1 mode={mode} rc={early_rc}",
+                        "hostapd_start_failed_reason=no_output",
+                    ]
+                )
+            else:
+                _emit_lines([f"hostapd_start_failed strict_width=1 mode={mode} rc={early_rc}"])
+            break
+
         if mode == "legacy" or not _should_retry_compat(lines):
             early_rc = hostapd_p.returncode or 1
+            if not early_lines:
+                _emit_lines(
+                    [
+                        f"hostapd_start_failed strict_width=0 mode={mode} rc={early_rc}",
+                        "hostapd_start_failed_reason=no_output",
+                    ]
+                )
+            else:
+                _emit_lines([f"hostapd_start_failed strict_width=0 mode={mode} rc={early_rc}"])
             break
 
         if mode == "full":

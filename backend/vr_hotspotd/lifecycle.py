@@ -369,6 +369,20 @@ def _iface_is_up(ifname: str) -> bool:
     return "state UP" in text or "<UP" in text
 
 
+def _ensure_iface_up(ifname: str) -> bool:
+    if not ifname:
+        return False
+    if _iface_is_up(ifname):
+        return True
+    ip = shutil.which("ip") or "/usr/sbin/ip"
+    try:
+        subprocess.run([ip, "link", "set", "dev", ifname, "up"], capture_output=True, text=True, check=False)
+    except Exception:
+        return False
+    time.sleep(0.2)
+    return _iface_is_up(ifname)
+
+
 def _nmcli_path() -> Optional[str]:
     return shutil.which("nmcli")
 
@@ -870,7 +884,10 @@ def _attempt_start_candidate(
         return None, res, "ap_start_timed_out", None, latest_stdout, latest_stderr
 
     if not _iface_is_up(ap_info.ifname):
-        return None, res, "ap_start_timed_out", "iface_not_up", latest_stdout, latest_stderr
+        if _ensure_iface_up(ap_info.ifname):
+            log.info("ap_iface_brought_up", extra={"ap_interface": ap_info.ifname})
+        else:
+            return None, res, "ap_start_timed_out", "iface_not_up", latest_stdout, latest_stderr
 
     stable_s = min(2.0, max(1.0, ap_ready_timeout_s / 2.0))
     time.sleep(stable_s)
@@ -1036,6 +1053,7 @@ def _start_hotspot_5ghz_strict(
         ch = candidate.get("primary_channel")
         center = candidate.get("center_channel")
         width_str = str(width_mhz)
+        strict_width = width_mhz >= 80
         if bridge_mode:
             return build_cmd_bridge(
                 ap_ifname=ap_ifname,
@@ -1078,6 +1096,7 @@ def _start_hotspot_5ghz_strict(
                 dtim_period=dtim_period,
                 short_guard_interval=short_guard_interval,
                 tx_power=tx_power,
+                strict_width=strict_width,
             )
         return build_cmd(
             ap_ifname=ap_ifname,
@@ -1469,7 +1488,7 @@ _HOSTAPD_DRIVER_ERROR_PATTERNS = (
     "nl80211: Failed to set interface",
 )
 
-_VIRT_AP_IFACE_RE = re.compile(r"^x\\d+(.+)$")
+_VIRT_AP_IFACE_RE = re.compile(r"^x\d+(.+)$")
 
 
 def _normalize_ap_adapter(preferred: Optional[str], inv: Optional[dict]) -> Optional[str]:
@@ -2251,6 +2270,9 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                     nm_remediation_error = "still_managed"
                 raise RuntimeError(nm_gate_error)
 
+        if not _ensure_iface_up(ap_ifname):
+            log.warning("ap_iface_not_up_prestart", extra={"ap_interface": ap_ifname})
+
         if bp == "5ghz":
             if not a.get("supports_80mhz"):
                 raise RuntimeError(f"adapter_lacks_80mhz_support_required_for_vr: {ap_ifname}")
@@ -2559,6 +2581,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 tx_power = None
 
         if use_hostapd_nat:
+            strict_width = bp == "5ghz" and str(channel_width) in ("auto", "80", "160")
             cmd1 = build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -2580,6 +2603,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 dtim_period=dtim_period,
                 short_guard_interval=short_guard_interval,
                 tx_power=tx_power,
+                strict_width=strict_width,
             )
         else:
             cmd1 = build_cmd(
@@ -2728,6 +2752,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 retry_tx_power = None
 
         if use_hostapd_nat:
+            strict_width = bp == "5ghz" and str(retry_channel_width) in ("auto", "80", "160")
             cmd_retry = build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -2749,6 +2774,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 dtim_period=retry_dtim_period,
                 short_guard_interval=retry_short_guard_interval,
                 tx_power=retry_tx_power,
+                strict_width=strict_width,
             )
         else:
             cmd_retry = build_cmd(
@@ -2870,6 +2896,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 retry_tx_power = None
 
         if use_hostapd_nat:
+            strict_width = bp == "5ghz" and str(retry_channel_width) in ("auto", "80", "160")
             cmd_retry = build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -2891,6 +2918,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 dtim_period=retry_dtim_period,
                 short_guard_interval=retry_short_guard_interval,
                 tx_power=retry_tx_power,
+                strict_width=strict_width,
             )
         else:
             cmd_retry = build_cmd(
@@ -3070,6 +3098,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         warnings.append(warning_tag)
 
         if use_hostapd_nat:
+            strict_width = band == "5ghz" and str(fallback_channel_width) in ("auto", "80", "160")
             cmd_fallback = build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -3091,6 +3120,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 dtim_period=fallback_dtim_period,
                 short_guard_interval=fallback_short_guard_interval,
                 tx_power=fallback_tx_power,
+                strict_width=strict_width,
             )
         else:
             cmd_fallback = build_cmd(
