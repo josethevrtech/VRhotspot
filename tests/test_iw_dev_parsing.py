@@ -1,3 +1,5 @@
+from typing import List
+
 import vr_hotspotd.lifecycle as lifecycle
 
 
@@ -160,9 +162,15 @@ phy#0
 
     orig_iw = lifecycle._iw_dev_dump
     orig_ready = lifecycle._hostapd_ready
+    orig_update = lifecycle.update_state
+    orig_iw_info = lifecycle._iw_dev_info
+    orig_infer = lifecycle._infer_ap_ifname_from_conf
     try:
         lifecycle._iw_dev_dump = fake_iw_dev_dump
         lifecycle._hostapd_ready = fake_hostapd_ready
+        lifecycle.update_state = lambda **_kwargs: {}
+        lifecycle._iw_dev_info = lambda *_args, **_kwargs: ""
+        lifecycle._infer_ap_ifname_from_conf = lambda *_args, **_kwargs: None
         ap = lifecycle._wait_for_ap_ready(
             target_phy=None,
             timeout_s=0.1,
@@ -177,6 +185,9 @@ phy#0
     finally:
         lifecycle._iw_dev_dump = orig_iw
         lifecycle._hostapd_ready = orig_ready
+        lifecycle.update_state = orig_update
+        lifecycle._iw_dev_info = orig_iw_info
+        lifecycle._infer_ap_ifname_from_conf = orig_infer
 
 
 def test_wait_for_ap_ready_with_expected_ifname_and_log():
@@ -199,11 +210,17 @@ def test_wait_for_ap_ready_with_expected_ifname_and_log():
     orig_ready = lifecycle._hostapd_ready
     orig_tails = lifecycle.get_tails
     orig_select = lifecycle._select_ap_from_iw
+    orig_update = lifecycle.update_state
+    orig_iw_info = lifecycle._iw_dev_info
+    orig_infer = lifecycle._infer_ap_ifname_from_conf
     try:
         lifecycle._iw_dev_dump = fake_iw_dev_dump
         lifecycle._hostapd_ready = fake_hostapd_ready
         lifecycle.get_tails = fake_get_tails
         lifecycle._select_ap_from_iw = lambda *_args, **_kwargs: None
+        lifecycle.update_state = lambda **_kwargs: {}
+        lifecycle._iw_dev_info = lambda *_args, **_kwargs: ""
+        lifecycle._infer_ap_ifname_from_conf = lambda *_args, **_kwargs: None
         ap = lifecycle._wait_for_ap_ready(
             target_phy="phy0",
             timeout_s=0.1,
@@ -226,6 +243,9 @@ def test_wait_for_ap_ready_with_expected_ifname_and_log():
         lifecycle._hostapd_ready = orig_ready
         lifecycle.get_tails = orig_tails
         lifecycle._select_ap_from_iw = orig_select
+        lifecycle.update_state = orig_update
+        lifecycle._iw_dev_info = orig_iw_info
+        lifecycle._infer_ap_ifname_from_conf = orig_infer
 
 
 def test_wait_for_ap_ready_with_expected_ifname_and_hostapd_ready():
@@ -255,11 +275,17 @@ phy#0
     orig_ready = lifecycle._hostapd_ready
     orig_tails = lifecycle.get_tails
     orig_select = lifecycle._select_ap_from_iw
+    orig_update = lifecycle.update_state
+    orig_iw_info = lifecycle._iw_dev_info
+    orig_infer = lifecycle._infer_ap_ifname_from_conf
     try:
         lifecycle._iw_dev_dump = fake_iw_dev_dump
         lifecycle._hostapd_ready = fake_hostapd_ready
         lifecycle.get_tails = fake_get_tails
         lifecycle._select_ap_from_iw = lambda *_args, **_kwargs: None
+        lifecycle.update_state = lambda **_kwargs: {}
+        lifecycle._iw_dev_info = lambda *_args, **_kwargs: ""
+        lifecycle._infer_ap_ifname_from_conf = lambda *_args, **_kwargs: None
         ap = lifecycle._wait_for_ap_ready(
             target_phy="phy0",
             timeout_s=0.1,
@@ -283,3 +309,111 @@ phy#0
         lifecycle._hostapd_ready = orig_ready
         lifecycle.get_tails = orig_tails
         lifecycle._select_ap_from_iw = orig_select
+        lifecycle.update_state = orig_update
+        lifecycle._iw_dev_info = orig_iw_info
+        lifecycle._infer_ap_ifname_from_conf = orig_infer
+
+
+def test_wait_for_ap_ready_with_stdout_ready_fallback():
+    calls = {"get_tails": []}
+
+    def fake_iw_dev_dump():
+        return ""
+
+    def fake_hostapd_ready(*_args, **_kwargs):
+        return False
+
+    def fake_get_tails():
+        calls["get_tails"].append(1)
+        return ["wlan0: AP-ENABLED"], ""
+
+    orig_iw = lifecycle._iw_dev_dump
+    orig_ready = lifecycle._hostapd_ready
+    orig_tails = lifecycle.get_tails
+    orig_select = lifecycle._select_ap_from_iw
+    orig_update = lifecycle.update_state
+    orig_iw_info = lifecycle._iw_dev_info
+    orig_infer = lifecycle._infer_ap_ifname_from_conf
+    try:
+        lifecycle._iw_dev_dump = fake_iw_dev_dump
+        lifecycle._hostapd_ready = fake_hostapd_ready
+        lifecycle.get_tails = fake_get_tails
+        lifecycle._select_ap_from_iw = lambda *_args, **_kwargs: None
+        lifecycle.update_state = lambda **_kwargs: {}
+        lifecycle._iw_dev_info = lambda *_args, **_kwargs: ""
+        lifecycle._infer_ap_ifname_from_conf = lambda *_args, **_kwargs: None
+        ap = lifecycle._wait_for_ap_ready(
+            target_phy="phy0",
+            timeout_s=0.1,
+            poll_s=0.01,
+            ssid="TestNet",
+            adapter_ifname="wlan0",
+            expected_ap_ifname=None,
+            capture=None,
+        )
+        assert ap is not None
+        assert ap.ifname == "wlan0"
+        assert len(calls["get_tails"]) > 0
+    finally:
+        lifecycle._iw_dev_dump = orig_iw
+        lifecycle._hostapd_ready = orig_ready
+        lifecycle.get_tails = orig_tails
+        lifecycle._select_ap_from_iw = orig_select
+        lifecycle.update_state = orig_update
+        lifecycle._iw_dev_info = orig_iw_info
+        lifecycle._infer_ap_ifname_from_conf = orig_infer
+
+
+def test_stdout_created_sets_ap_interface_state():
+    calls: List[dict] = []
+
+    def fake_iw_dev_dump():
+        return ""
+
+    def fake_hostapd_ready(*_args, **_kwargs):
+        return False
+
+    def fake_get_tails():
+        return ["x0wlan1 created"], ""
+
+    def fake_update_state(**kwargs):
+        calls.append(kwargs)
+        return kwargs
+
+    orig_iw = lifecycle._iw_dev_dump
+    orig_ready = lifecycle._hostapd_ready
+    orig_tails = lifecycle.get_tails
+    orig_select = lifecycle._select_ap_from_iw
+    orig_update = lifecycle.update_state
+    orig_iw_info = lifecycle._iw_dev_info
+    orig_sleep = lifecycle.time.sleep
+    orig_infer = lifecycle._infer_ap_ifname_from_conf
+    try:
+        lifecycle._iw_dev_dump = fake_iw_dev_dump
+        lifecycle._hostapd_ready = fake_hostapd_ready
+        lifecycle.get_tails = fake_get_tails
+        lifecycle._select_ap_from_iw = lambda *_args, **_kwargs: None
+        lifecycle.update_state = fake_update_state
+        lifecycle._iw_dev_info = lambda *_args, **_kwargs: ""
+        lifecycle.time.sleep = lambda *_args, **_kwargs: None
+        lifecycle._infer_ap_ifname_from_conf = lambda *_args, **_kwargs: None
+        ap = lifecycle._wait_for_ap_ready(
+            target_phy="phy0",
+            timeout_s=0.05,
+            poll_s=0.01,
+            ssid="TestNet",
+            adapter_ifname="wlan0",
+            expected_ap_ifname=None,
+            capture=None,
+        )
+        assert ap is None
+        assert any(call.get("ap_interface") == "x0wlan1" for call in calls)
+    finally:
+        lifecycle._iw_dev_dump = orig_iw
+        lifecycle._hostapd_ready = orig_ready
+        lifecycle.get_tails = orig_tails
+        lifecycle._select_ap_from_iw = orig_select
+        lifecycle.update_state = orig_update
+        lifecycle._iw_dev_info = orig_iw_info
+        lifecycle.time.sleep = orig_sleep
+        lifecycle._infer_ap_ifname_from_conf = orig_infer

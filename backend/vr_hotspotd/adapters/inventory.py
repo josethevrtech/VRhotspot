@@ -71,6 +71,7 @@ def _phy_supports_ap(phy: str) -> bool:
 
 
 _HE_IFTYPES_RE = re.compile(r"^\s*HE Iftypes:\s*(.+)$", re.IGNORECASE)
+_VIRT_IFACE_RE = re.compile(r"^x\d+.+$")
 
 
 def _he_iftypes_has_ap(iw_text: str) -> Optional[bool]:
@@ -380,12 +381,17 @@ def get_adapters():
     for d in devs:
         phy = d.get("phy")
         ifname = d.get("ifname")
+        if ifname and _VIRT_IFACE_RE.match(ifname):
+            # Skip virtual AP interfaces like x0wlan1; inventory should be physical adapters.
+            continue
 
         supports_ap = _phy_supports_ap(phy) if phy else False
         supports_wifi6 = _phy_supports_wifi6(phy) if phy else False
         supports_80mhz = _phy_supports_80mhz(phy) if phy else False
         band_caps = _phy_band_support(phy) if phy else {"supports_2ghz": False, "supports_5ghz": False, "supports_6ghz": False}
         bus_type = _detect_bus_type(ifname) if ifname else "unknown"
+        if bus_type == "virtual":
+            continue
 
         phy_reg = per_phy.get(phy, {})
         reg_country = phy_reg.get("country") or global_country or "unknown"

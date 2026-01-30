@@ -748,36 +748,73 @@ def _wait_for_ap_ready(
     capture: Optional[Any] = None,
 ) -> Optional[APReadyInfo]:
     deadline = time.time() + timeout_s
+    reported_ap_ifname: Optional[str] = None
 
     while time.time() < deadline:
+        stdout_lines: List[str] = []
+        stderr_lines: List[str] = []
+        stdout_ready = False
+        try:
+            stdout_lines, stderr_lines = get_tails()
+        except Exception:
+            if expected_ap_ifname:
+                return APReadyInfo(
+                    ifname=expected_ap_ifname,
+                    phy=target_phy,
+                    ssid=ssid,
+                    freq_mhz=None,
+                    channel=None,
+                    channel_width_mhz=None,
+                )
+        else:
+            if isinstance(stdout_lines, str):
+                stdout_lines = stdout_lines.splitlines()
+            if isinstance(stderr_lines, str):
+                stderr_lines = stderr_lines.splitlines()
+            combined_lines = list(stdout_lines) + list(stderr_lines)
+            stdout_ready = _stdout_has_ap_ready(combined_lines)
+            stdout_ifname = _stdout_extract_ap_ifname(combined_lines)
+            conf_ifname = None if stdout_ifname else _infer_ap_ifname_from_conf(adapter_ifname)
+            if stdout_ifname or conf_ifname:
+                discovered = stdout_ifname or conf_ifname
+                expected_ap_ifname = discovered
+                if discovered != reported_ap_ifname:
+                    update_state(ap_interface=discovered)
+                    reported_ap_ifname = discovered
+
         dump = _iw_dev_dump()
         ap = _select_ap_from_iw(dump, target_phy=target_phy, ssid=ssid)
-        if ap and _hostapd_ready(ap.ifname, adapter_ifname=adapter_ifname):
-            return ap
+        if ap:
+            if _hostapd_ready(ap.ifname, adapter_ifname=adapter_ifname):
+                return ap
+            if stdout_ready or _iw_interface_is_ap(ap.ifname):
+                if stdout_ready or _iface_is_up(ap.ifname):
+                    return ap
         if expected_ap_ifname:
-            try:
-                get_tails()
-            except Exception:
-                return APReadyInfo(
-                    ifname=expected_ap_ifname,
-                    phy=target_phy,
-                    ssid=ssid,
-                    freq_mhz=None,
-                    channel=None,
-                    channel_width_mhz=None,
-                )
             ap_expected = _select_ap_by_ifname(dump, expected_ap_ifname)
-            if ap_expected and _hostapd_ready(expected_ap_ifname, adapter_ifname=adapter_ifname):
-                return ap_expected
-            if _hostapd_ready(expected_ap_ifname, adapter_ifname=adapter_ifname):
-                return APReadyInfo(
-                    ifname=expected_ap_ifname,
-                    phy=target_phy,
-                    ssid=ssid,
-                    freq_mhz=None,
-                    channel=None,
-                    channel_width_mhz=None,
-                )
+            if ap_expected and (
+                _hostapd_ready(expected_ap_ifname, adapter_ifname=adapter_ifname)
+                or stdout_ready
+                or _iw_interface_is_ap(expected_ap_ifname)
+            ):
+                if stdout_ready or _iface_is_up(expected_ap_ifname) or _hostapd_ready(
+                    expected_ap_ifname, adapter_ifname=adapter_ifname
+                ):
+                    return ap_expected
+            if (
+                _hostapd_ready(expected_ap_ifname, adapter_ifname=adapter_ifname)
+                or stdout_ready
+                or _iw_interface_is_ap(expected_ap_ifname)
+            ):
+                if stdout_ready or _iface_is_up(expected_ap_ifname):
+                    return APReadyInfo(
+                        ifname=expected_ap_ifname,
+                        phy=target_phy,
+                        ssid=ssid,
+                        freq_mhz=None,
+                        channel=None,
+                        channel_width_mhz=None,
+                    )
 
         time.sleep(poll_s)
 
@@ -1432,6 +1469,24 @@ _HOSTAPD_DRIVER_ERROR_PATTERNS = (
     "nl80211: Failed to set interface",
 )
 
+_VIRT_AP_IFACE_RE = re.compile(r"^x\\d+(.+)$")
+
+
+def _normalize_ap_adapter(preferred: Optional[str], inv: Optional[dict]) -> Optional[str]:
+    if not preferred or not isinstance(preferred, str):
+        return preferred
+    m = _VIRT_AP_IFACE_RE.match(preferred.strip())
+    if not m:
+        return preferred.strip()
+    base = m.group(1).strip()
+    if not base:
+        return preferred.strip()
+    if os.path.exists(f"/sys/class/net/{base}"):
+        return base
+    if isinstance(inv, dict) and _get_adapter(inv, base):
+        return base
+    return preferred.strip()
+
 
 def _stdout_has_hostapd_driver_error(lines: List[str]) -> bool:
     for line in lines:
@@ -1446,6 +1501,71 @@ def _stdout_has_ap_enabled(lines: List[str], ifname: str) -> bool:
         return False
     needle = f"{ifname}: AP-ENABLED"
     return any(needle in line for line in lines)
+
+
+_STDOUT_AP_READY_PATTERNS = (
+    "AP-ENABLED",
+    "interface state HT_SCAN->ENABLED",
+)
+
+_STDOUT_CREATED_IFACE_RE = re.compile(r"\b([A-Za-z0-9._-]{1,15})\s+created\b")
+
+
+def _stdout_has_ap_ready(lines: List[str]) -> bool:
+    for line in lines:
+        for pattern in _STDOUT_AP_READY_PATTERNS:
+            if pattern in line:
+                return True
+    return False
+
+
+def _stdout_extract_ap_ifname(lines: List[str]) -> Optional[str]:
+    for raw in reversed(lines):
+        m = _STDOUT_CREATED_IFACE_RE.search(raw)
+        if m:
+            cand = m.group(1).strip()
+            if cand:
+                return cand
+    for raw in reversed(lines):
+        if any(pattern in raw for pattern in _STDOUT_AP_READY_PATTERNS):
+            if ":" in raw:
+                cand = raw.split(":", 1)[0].strip()
+                if cand:
+                    return cand
+    return None
+
+
+def _iw_interface_is_ap(ifname: str) -> bool:
+    if not ifname:
+        return False
+    try:
+        info = _iw_dev_info(ifname)
+    except Exception:
+        return False
+    for raw in info.splitlines():
+        if "type AP" in raw:
+            return True
+    return False
+
+
+def _infer_ap_ifname_from_conf(adapter_ifname: Optional[str]) -> Optional[str]:
+    if not adapter_ifname:
+        return None
+    conf_dir = _find_latest_conf_dir(adapter_ifname, None)
+    if not conf_dir:
+        return None
+    for reader in (
+        lnxrouter_conf.read_hostapd_conf_interface,
+        lnxrouter_conf.read_dnsmasq_conf_interface,
+        lnxrouter_conf.read_subn_iface,
+    ):
+        try:
+            ifname = reader(conf_dir)
+        except Exception:
+            ifname = None
+        if ifname:
+            return ifname
+    return None
 
 
 def _read_log_tail(path: Path, max_lines: int = 200) -> List[str]:
@@ -1915,7 +2035,7 @@ def _repair_impl(correlation_id: str = "repair"):
         inv = get_adapters()
         preferred = cfg.get("ap_adapter")
         if preferred and isinstance(preferred, str) and preferred.strip():
-            ap_ifname = preferred.strip()
+            ap_ifname = _normalize_ap_adapter(preferred.strip(), inv)
         else:
             ap_ifname = inv.get("recommended") or _select_ap_adapter(inv, cfg.get("band_preference", "5ghz"))
         target_phy = _get_adapter_phy(inv, ap_ifname)
@@ -2077,7 +2197,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
         preferred = cfg.get("ap_adapter")
         if preferred and isinstance(preferred, str) and preferred.strip():
-            ap_ifname = preferred.strip()
+            ap_ifname = _normalize_ap_adapter(preferred.strip(), inv)
         else:
             # [Added Logic] Prefer USB adapters for 5GHz if available to ensure better performance/AP support
 
@@ -2095,6 +2215,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                      ap_ifname = _select_ap_adapter(inv, bp)
             else:
                  ap_ifname = _select_ap_adapter(inv, bp)
+
+        ap_ifname = _normalize_ap_adapter(ap_ifname, inv)
 
         # Validate band capability if explicitly requested
         a = _get_adapter(inv, ap_ifname)
