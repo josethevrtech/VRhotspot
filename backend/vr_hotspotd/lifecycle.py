@@ -2268,6 +2268,9 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                     nm_remediation_error = "still_managed"
                 raise RuntimeError(nm_gate_error)
 
+        if not _ensure_iface_up(ap_ifname):
+            log.warning("ap_iface_not_up_prestart", extra={"ap_interface": ap_ifname})
+
         if bp == "5ghz":
             if not a.get("supports_80mhz"):
                 raise RuntimeError(f"adapter_lacks_80mhz_support_required_for_vr: {ap_ifname}")
