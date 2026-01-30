@@ -38,6 +38,7 @@ sudo bash backend/scripts/uninstall.sh
 - Keep diffs focused and avoid changing API routes or response envelopes.
 - Include relevant logs and system info in PRs and bug reports.
 - If you updated behavior or install paths, update README and docs accordingly.
+- When touching distro-specific logic, follow `docs/PLATFORM_COMPATIBILITY.md` and run `tools/ci/install_matrix_check.sh`.
 
 ## Bug reports
 Include:
