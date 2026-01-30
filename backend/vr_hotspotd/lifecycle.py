@@ -1486,7 +1486,7 @@ _HOSTAPD_DRIVER_ERROR_PATTERNS = (
     "nl80211: Failed to set interface",
 )
 
-_VIRT_AP_IFACE_RE = re.compile(r"^x\\d+(.+)$")
+_VIRT_AP_IFACE_RE = re.compile(r"^x\d+(.+)$")
 
 
 def _normalize_ap_adapter(preferred: Optional[str], inv: Optional[dict]) -> Optional[str]:
