@@ -219,7 +219,7 @@ def _prefer_vendor_for_platform() -> bool:
     tokens: List[str] = []
     for key in ("id", "id_like", "variant_id", "variant", "name"):
         tokens.extend(_split_tokens(info.get(key)))
-    return "cachyos" in tokens or "bazzite" in tokens
+    return "cachyos" in tokens
 
 
 def _build_engine_env() -> Dict[str, str]:
