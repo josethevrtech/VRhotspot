@@ -129,6 +129,39 @@ install_dependencies() {
                 fi
             fi
             [[ "$OS_ID" == "steamos" ]] && steamos-readonly disable || true
+            if [[ ! -r /etc/pacman.d/gnupg/pubring.gpg ]]; then
+                print_info "Initializing pacman keyring..."
+                install -d -m 755 /etc/pacman.d/gnupg
+                pacman-key --init
+                local keyrings=()
+                if [[ -d /usr/share/pacman/keyrings ]]; then
+                    local f base
+                    for f in /usr/share/pacman/keyrings/*.gpg; do
+                        [[ -e "$f" ]] || continue
+                        base=$(basename "$f" .gpg)
+                        base=${base%-trusted}
+                        base=${base%-revoked}
+                        keyrings+=("$base")
+                    done
+                fi
+                if [[ ${#keyrings[@]} -gt 0 ]]; then
+                    local uniq=()
+                    local k seen
+                    for k in "${keyrings[@]}"; do
+                        local found=0
+                        for seen in "${uniq[@]}"; do
+                            if [[ "$seen" == "$k" ]]; then
+                                found=1
+                                break
+                            fi
+                        done
+                        [[ "$found" -eq 0 ]] && uniq+=("$k")
+                    done
+                    pacman-key --populate "${uniq[@]}"
+                else
+                    pacman-key --populate
+                fi
+            fi
             pacman -Sy --noconfirm --needed "${deps[@]}"
             [[ "$OS_ID" == "steamos" ]] && steamos-readonly enable || true
             ;;
