@@ -598,15 +598,6 @@ def main() -> int:
         _emit_lines(lines)
         if strict_width:
             early_rc = hostapd_p.returncode or 1
-            if not early_lines:
-                _emit_lines(
-                    [
-                        f"hostapd_start_failed strict_width=1 mode={mode} rc={early_rc}",
-                        "hostapd_start_failed_reason=no_output",
-                    ]
-                )
-            else:
-                _emit_lines([f"hostapd_start_failed strict_width=1 mode={mode} rc={early_rc}"])
             break
 
         if mode == "legacy" or not _should_retry_compat(lines):
