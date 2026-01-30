@@ -1053,6 +1053,7 @@ def _start_hotspot_5ghz_strict(
         ch = candidate.get("primary_channel")
         center = candidate.get("center_channel")
         width_str = str(width_mhz)
+        strict_width = width_mhz >= 80
         if bridge_mode:
             return build_cmd_bridge(
                 ap_ifname=ap_ifname,
@@ -1095,6 +1096,7 @@ def _start_hotspot_5ghz_strict(
                 dtim_period=dtim_period,
                 short_guard_interval=short_guard_interval,
                 tx_power=tx_power,
+                strict_width=strict_width,
             )
         return build_cmd(
             ap_ifname=ap_ifname,
@@ -2579,6 +2581,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 tx_power = None
 
         if use_hostapd_nat:
+            strict_width = bp == "5ghz" and str(channel_width) in ("auto", "80", "160")
             cmd1 = build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -2600,6 +2603,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 dtim_period=dtim_period,
                 short_guard_interval=short_guard_interval,
                 tx_power=tx_power,
+                strict_width=strict_width,
             )
         else:
             cmd1 = build_cmd(
@@ -2748,6 +2752,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 retry_tx_power = None
 
         if use_hostapd_nat:
+            strict_width = bp == "5ghz" and str(retry_channel_width) in ("auto", "80", "160")
             cmd_retry = build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -2769,6 +2774,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 dtim_period=retry_dtim_period,
                 short_guard_interval=retry_short_guard_interval,
                 tx_power=retry_tx_power,
+                strict_width=strict_width,
             )
         else:
             cmd_retry = build_cmd(
@@ -2890,6 +2896,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 retry_tx_power = None
 
         if use_hostapd_nat:
+            strict_width = bp == "5ghz" and str(retry_channel_width) in ("auto", "80", "160")
             cmd_retry = build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -2911,6 +2918,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 dtim_period=retry_dtim_period,
                 short_guard_interval=retry_short_guard_interval,
                 tx_power=retry_tx_power,
+                strict_width=strict_width,
             )
         else:
             cmd_retry = build_cmd(
@@ -3090,6 +3098,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         warnings.append(warning_tag)
 
         if use_hostapd_nat:
+            strict_width = band == "5ghz" and str(fallback_channel_width) in ("auto", "80", "160")
             cmd_fallback = build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -3111,6 +3120,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 dtim_period=fallback_dtim_period,
                 short_guard_interval=fallback_short_guard_interval,
                 tx_power=fallback_tx_power,
+                strict_width=strict_width,
             )
         else:
             cmd_fallback = build_cmd(
