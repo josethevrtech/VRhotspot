@@ -72,6 +72,9 @@ def apply_platform_overrides(
             warnings.append("platform_bazzite_no_virt_may_fail")
         else:
             warnings.append("platform_bazzite_prefer_virt")
+        if not cfg.get("allow_fallback_40mhz", False):
+            overrides["allow_fallback_40mhz"] = True
+            warnings.append("platform_bazzite_allow_fallback_40mhz")
 
     if not overrides:
         return cfg, warnings
