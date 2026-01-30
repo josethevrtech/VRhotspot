@@ -2127,6 +2127,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
     cfg = load_config()
     cfg = _apply_start_overrides(cfg, overrides)
+    allow_fallback_40mhz = bool(cfg.get("allow_fallback_40mhz", False))
     allow_dfs_channels = bool(cfg.get("allow_dfs_channels", False))
     firewall_probe = wifi_probe.detect_firewall_backends()
     firewall_backend = firewall_probe.get("selected_backend") or "unknown"
@@ -2136,7 +2137,6 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         cfg, platform_warnings = os_release.apply_platform_overrides(cfg, platform_info)
     except Exception as e:
         platform_warnings = [f"platform_overrides_failed:{e}"]
-    allow_fallback_40mhz = bool(cfg.get("allow_fallback_40mhz", False))
     use_hostapd_nat = os_release.is_bazzite(platform_info)
     if use_hostapd_nat:
         platform_warnings.append("platform_bazzite_use_hostapd_nat")
