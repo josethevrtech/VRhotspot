@@ -595,6 +595,45 @@ label {
   overflow: visible;
 }
 
+.stability-banner {
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 238, 0, 0.06);
+  border: 1px solid rgba(255, 238, 0, 0.25);
+  margin-bottom: 12px;
+}
+
+.stability-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--warning);
+}
+
+.stability-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: grid;
+  gap: 4px;
+}
+
+.stability-item {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stability-item.missing {
+  color: var(--warning);
+}
+
+.stability-item.info {
+  color: var(--text-main);
+}
+
 .hint.tip-only {
   display: inline-flex;
   align-items: center;
