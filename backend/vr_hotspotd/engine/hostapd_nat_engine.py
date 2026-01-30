@@ -339,6 +339,19 @@ def _write_hostapd_conf(
                 return center
         return None
 
+    def _ht40_capab_5ghz(primary_channel: int) -> Optional[str]:
+        plus = {
+            36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157
+        }
+        minus = {
+            40, 48, 56, 64, 104, 112, 120, 128, 136, 144, 153, 161
+        }
+        if primary_channel in plus:
+            return "HT40+"
+        if primary_channel in minus:
+            return "HT40-"
+        return None
+
     if compat:
         beacon_interval = 100
         dtim_period = 2
@@ -370,12 +383,19 @@ def _write_hostapd_conf(
             if not reduced:
                 lines.append("ieee80211ac=1")
             if short_guard_interval:
-                lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
+                ht_caps = ["SHORT-GI-20", "SHORT-GI-40"]
+                if (not reduced) and chwidth >= 2:
+                    ht40 = _ht40_capab_5ghz(int(channel))
+                    if ht40:
+                        ht_caps.append(ht40)
+                    lines.append("require_ht=1")
+                lines.append(f"ht_capab=[{']['.join(ht_caps)}]")
                 if (not reduced) and chwidth >= 2:
                     vht_caps = ["SHORT-GI-80"]
                     if chwidth >= 3:
                         vht_caps.append("SHORT-GI-160")
                     lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
+                    lines.append("require_vht=1")
             if (not reduced) and chwidth >= 2:
                 seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
                 if seg0 is not None:
