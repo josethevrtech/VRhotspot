@@ -92,9 +92,13 @@ cleanup_previous_install() {
 # --- Installation Steps ---
 detect_os() {
     print_step "Detecting Operating System..."
-    if [ -f /etc/os-release ]; then
+    if [ -n "${VR_HOTSPOT_OS_ID:-}" ]; then
+        OS_ID="${VR_HOTSPOT_OS_ID}"
+        OS_NAME="${VR_HOTSPOT_OS_NAME:-$OS_ID}"
+    elif [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_ID="$ID"
+        OS_NAME="$NAME"
     else
         print_error "Cannot detect OS (/etc/os-release not found)."
         exit 1
@@ -109,7 +113,41 @@ detect_os() {
             exit 1
             ;;
     esac
-    print_success "Detected $NAME ($PKG_MANAGER)."
+    print_success "Detected $OS_NAME ($PKG_MANAGER)."
+}
+
+calculate_dependency_list() {
+    DEPENDENCIES=()
+    case "$PKG_MANAGER" in
+        pacman)
+            DEPENDENCIES=(python python-pip iw iproute2)
+            if [[ "$OS_ID" != "steamos" ]]; then
+                DEPENDENCIES+=("iptables")
+            fi
+            ;;
+        apt)
+            DEPENDENCIES=(python3 python3-pip python3-venv iw iproute2 iptables)
+            ;;
+        dnf)
+            DEPENDENCIES=(python3 python3-pip iw iproute iptables)
+            ;;
+        rpm-ostree)
+            DEPENDENCIES=(python3 python3-pip iw iproute iptables)
+            local script_dir vendor_bundle force_vendor
+            script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+            vendor_bundle=0
+            if [ "$OS_ID" = "bazzite" ] && [ -x "$script_dir/backend/vendor/bin/bazzite/hostapd" ]; then
+                vendor_bundle=1
+            fi
+            force_vendor=0
+            case "$(echo "${VR_HOTSPOT_FORCE_VENDOR_BIN:-}" | tr '[:upper:]' '[:lower:]')" in
+                1|true|yes|on) force_vendor=1 ;;
+            esac
+            if [ "$vendor_bundle" -eq 0 ] && [ "$force_vendor" -eq 0 ]; then
+                DEPENDENCIES+=("hostapd" "dnsmasq")
+            fi
+            ;;
+    esac
 }
 
 install_dependencies() {
@@ -213,6 +251,11 @@ install_dependencies() {
             ;;
     esac
     print_success "Dependencies installed."
+}
+
+print_dependency_summary() {
+    calculate_dependency_list
+    print_info "Dependency plan for ${OS_NAME:-$OS_ID}: ${DEPENDENCIES[*]}"
 }
 
 get_source_files() {
@@ -348,10 +391,33 @@ show_completion() {
 
 # --- Main Execution ---
 main() {
+    CHECK_ONLY=0
+    SKIP_CLEAR=0
+    for arg in "$@"; do
+        case "$arg" in
+            --check-os)
+                CHECK_ONLY=1
+                ;;
+            --no-clear)
+                SKIP_CLEAR=1
+                ;;
+            *)
+                ;;
+        esac
+    done
+
     [ -t 1 ] && INTERACTIVE=1 || INTERACTIVE=0
     
-    clear
+    if [ "$SKIP_CLEAR" -eq 0 ]; then
+        clear
+    fi
     print_header
+
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        detect_os
+        print_dependency_summary
+        return 0
+    fi
     
     check_root
     cleanup_previous_install

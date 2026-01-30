@@ -42,3 +42,12 @@ jobs:
 
       - name: Shellcheck
         run: shellcheck backend/scripts/*.sh
+
+  install-matrix-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify OS detection matrix
+        run: tools/ci/install_matrix_check.sh
