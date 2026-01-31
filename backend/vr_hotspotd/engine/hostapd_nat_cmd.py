@@ -24,6 +24,7 @@ def build_cmd_nat(
     dtim_period: int = 1,
     short_guard_interval: bool = True,
     tx_power: Optional[int] = None,
+    strict_width: bool = False,
 ) -> List[str]:
     cmd: List[str] = [
         sys.executable,
@@ -78,5 +79,8 @@ def build_cmd_nat(
         cmd += ["--short-guard-interval"]
     if tx_power is not None:
         cmd += ["--tx-power", str(tx_power)]
+
+    if strict_width:
+        cmd += ["--strict-width"]
 
     return cmd

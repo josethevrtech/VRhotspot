@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Callable, Deque, Dict, List, Optional, Tuple
 
 from . import firewalld  # SteamOS: firewalld owns nftables
+from vr_hotspotd import os_release
 from vr_hotspotd.vendor_paths import resolve_vendor_required, vendor_bin_dirs, vendor_lib_dirs
 
 ENGINE_STDOUT_MAX_LINES = 200
@@ -207,6 +208,20 @@ def _which_in_path(exe: str, path: str) -> Optional[str]:
     return None
 
 
+def _split_tokens(value: Optional[str]) -> List[str]:
+    if not value:
+        return []
+    return [item.strip().lower() for item in value.replace(",", " ").split() if item.strip()]
+
+
+def _prefer_vendor_for_platform() -> bool:
+    info = os_release.read_os_release()
+    tokens: List[str] = []
+    for key in ("id", "id_like", "variant_id", "variant", "name"):
+        tokens.extend(_split_tokens(info.get(key)))
+    return "cachyos" in tokens or "bazzite" in tokens
+
+
 def _build_engine_env() -> Dict[str, str]:
     """
     Environment for lnxrouter execution.
@@ -250,6 +265,7 @@ def _build_engine_env() -> Dict[str, str]:
     vendor_dnsmasq_ok = bool(vendor_dnsmasq)
     force_vendor_effective = force_vendor or strict_vendor
 
+    prefer_vendor_platform = _prefer_vendor_for_platform()
     prefer_vendor = False
     if force_system:
         prefer_vendor = False
@@ -257,7 +273,7 @@ def _build_engine_env() -> Dict[str, str]:
         prefer_vendor = True
     else:
         # Prefer OS-specific vendor bundles when present (e.g., bazzite/hostapd).
-        prefer_vendor = bool(vendor_profile)
+        prefer_vendor = bool(vendor_profile) or prefer_vendor_platform
 
     vendor_bin_path = ":".join(str(p) for p in vendor_bins if p)
     if prefer_vendor and (vendor_hostapd_ok or vendor_dnsmasq_ok):
@@ -391,6 +407,7 @@ def _build_engine_env() -> Dict[str, str]:
 
     selection_result = {
         "vendor_profile": vendor_profile,
+        "prefer_vendor_platform": prefer_vendor_platform,
         "force_vendor": force_vendor_effective,
         "force_system": force_system,
         "vendor_hostapd": vendor_hostapd,

@@ -1193,6 +1193,57 @@ function updateDebugDetails(status) {
   setTextById('dbgPlatformOs', osLabel || '--');
 }
 
+function updateStabilityChecklist(status) {
+  const banner = document.getElementById('bazziteStabilityChecklist');
+  const list = document.getElementById('bazziteStabilityList');
+  if (!banner || !list) return;
+
+  const osId = status && status.platform && status.platform.os
+    ? (status.platform.os.id || '').toLowerCase()
+    : '';
+  if (osId !== 'bazzite') {
+    banner.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+
+  const cfg = lastCfg || {};
+  const items = [
+    { label: 'Disable Wi-Fi power save', ok: !!cfg.wifi_power_save_disable },
+    { label: 'Disable USB autosuspend', ok: !!cfg.usb_autosuspend_disable },
+    { label: 'CPU performance mode', ok: !!cfg.cpu_governor_performance },
+    { label: 'Enable sysctl tuning', ok: !!cfg.sysctl_tuning },
+    { label: 'Enable interrupt coalescing', ok: !!cfg.interrupt_coalescing },
+  ];
+
+  const nmActive = !!(status && status.platform && status.platform.integration
+    && status.platform.integration.network_manager
+    && status.platform.integration.network_manager.active);
+  if (nmActive) {
+    items.push({ label: 'NetworkManager active: ensure AP interface is unmanaged', info: true });
+  }
+
+  const firewalldActive = !!(status && status.platform && status.platform.integration
+    && status.platform.integration.firewall && status.platform.integration.firewall.firewalld
+    && status.platform.integration.firewall.firewalld.active);
+  if (firewalldActive) {
+    items.push({ label: 'firewalld active: DSCP/QoS marking may be skipped', info: true });
+  }
+
+  list.innerHTML = '';
+  for (const item of items) {
+    const li = document.createElement('li');
+    const prefix = item.info ? 'ℹ' : (item.ok ? '✓' : '⚠');
+    li.textContent = `${prefix} ${item.label}`;
+    li.className = 'stability-item';
+    if (item.info) li.classList.add('info');
+    else if (!item.ok) li.classList.add('missing');
+    list.appendChild(li);
+  }
+
+  banner.style.display = '';
+}
+
 // Chart Globals
 let rssiChartRef = null;
 let rateChartRef = null;
@@ -2211,6 +2262,7 @@ async function refresh() {
   if (rawStatusEl) rawStatusEl.textContent = JSON.stringify(st.json, null, 2);
 
   updateDebugDetails(s);
+  updateStabilityChecklist(s);
 
   const eng = (s.engine || {});
   // Combine ap_logs_tail and stdout_tail
