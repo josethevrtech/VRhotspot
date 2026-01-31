@@ -339,6 +339,19 @@ def _write_hostapd_conf(
                 return center
         return None
 
+    def _ht40_capab_5ghz(primary_channel: int) -> Optional[str]:
+        plus = {
+            36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157
+        }
+        minus = {
+            40, 48, 56, 64, 104, 112, 120, 128, 136, 144, 153, 161
+        }
+        if primary_channel in plus:
+            return "HT40+"
+        if primary_channel in minus:
+            return "HT40-"
+        return None
+
     if compat:
         beacon_interval = 100
         dtim_period = 2
@@ -370,12 +383,19 @@ def _write_hostapd_conf(
             if not reduced:
                 lines.append("ieee80211ac=1")
             if short_guard_interval:
-                lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
+                ht_caps = ["SHORT-GI-20", "SHORT-GI-40"]
+                if (not reduced) and chwidth >= 2:
+                    ht40 = _ht40_capab_5ghz(int(channel))
+                    if ht40:
+                        ht_caps.append(ht40)
+                    lines.append("require_ht=1")
+                lines.append(f"ht_capab=[{']['.join(ht_caps)}]")
                 if (not reduced) and chwidth >= 2:
                     vht_caps = ["SHORT-GI-80"]
                     if chwidth >= 3:
                         vht_caps.append("SHORT-GI-160")
                     lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
+                    lines.append("require_vht=1")
             if (not reduced) and chwidth >= 2:
                 seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
                 if seg0 is not None:
@@ -466,6 +486,7 @@ def main() -> int:
     ap.add_argument("--dtim-period", type=int, default=1)
     ap.add_argument("--short-guard-interval", action="store_true", default=True)
     ap.add_argument("--tx-power", type=int, default=None)
+    ap.add_argument("--strict-width", action="store_true")
     args = ap.parse_args()
 
     if len(args.passphrase) < 8:
@@ -553,8 +574,10 @@ def main() -> int:
     channel = int(args.channel) if args.channel is not None else (6 if band == "2.4ghz" else 36)
 
     mode = "full"
+    strict_width = bool(args.strict_width)
     hostapd_p: Optional[subprocess.Popen] = None
     early_rc: Optional[int] = None
+    early_lines: List[str] = []
 
     while True:
         _write_hostapd_conf(
@@ -591,9 +614,32 @@ def main() -> int:
             break
 
         lines = _collect_proc_output(hostapd_p)
+        early_lines = lines
         _emit_lines(lines)
+        if strict_width:
+            early_rc = hostapd_p.returncode or 1
+            if not early_lines:
+                _emit_lines(
+                    [
+                        f"hostapd_start_failed strict_width=1 mode={mode} rc={early_rc}",
+                        "hostapd_start_failed_reason=no_output",
+                    ]
+                )
+            else:
+                _emit_lines([f"hostapd_start_failed strict_width=1 mode={mode} rc={early_rc}"])
+            break
+
         if mode == "legacy" or not _should_retry_compat(lines):
             early_rc = hostapd_p.returncode or 1
+            if not early_lines:
+                _emit_lines(
+                    [
+                        f"hostapd_start_failed strict_width=0 mode={mode} rc={early_rc}",
+                        "hostapd_start_failed_reason=no_output",
+                    ]
+                )
+            else:
+                _emit_lines([f"hostapd_start_failed strict_width=0 mode={mode} rc={early_rc}"])
             break
 
         if mode == "full":
