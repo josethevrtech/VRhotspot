@@ -95,10 +95,12 @@ detect_os() {
     if [ -n "${VR_HOTSPOT_OS_ID:-}" ]; then
         OS_ID="${VR_HOTSPOT_OS_ID}"
         OS_NAME="${VR_HOTSPOT_OS_NAME:-$OS_ID}"
+        OS_ID_LIKE="${VR_HOTSPOT_OS_ID_LIKE:-}"
     elif [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_ID="$ID"
         OS_NAME="$NAME"
+        OS_ID_LIKE="${ID_LIKE:-}"
     else
         print_error "Cannot detect OS (/etc/os-release not found)."
         exit 1
@@ -353,6 +355,44 @@ install_daemon() {
     print_success "Daemon installation complete."
 }
 
+enable_firewalld_uplink_forwarding() {
+    if ! command -v firewall-cmd >/dev/null 2>&1; then
+        print_info "firewalld not installed; skipping uplink forwarding setup"
+        return 0
+    fi
+    if ! firewall-cmd --state >/dev/null 2>&1; then
+        print_info "firewalld not running; skipping uplink forwarding setup"
+        return 0
+    fi
+
+    local uplink
+    uplink="$(ip route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
+    if [[ -z "$uplink" ]]; then
+        print_info "No default route interface detected; skipping uplink forwarding setup"
+        return 0
+    fi
+
+    local zone
+    zone="$(firewall-cmd --get-zone-of-interface="$uplink" 2>/dev/null | head -n1 | tr -d '\r')"
+    if [[ -z "$zone" ]]; then
+        zone="$(firewall-cmd --get-default-zone 2>/dev/null | head -n1 | tr -d '\r')"
+    fi
+    if [[ -z "$zone" ]]; then
+        print_warning "Unable to determine firewalld zone for uplink $uplink; skipping"
+        return 0
+    fi
+
+    print_info "Ensuring firewalld forwarding for uplink $uplink (zone=$zone)"
+    firewall-cmd --zone "$zone" --add-masquerade &>/dev/null || \
+        print_warning "Failed to enable masquerade for zone $zone (runtime)"
+    firewall-cmd --zone "$zone" --add-forward &>/dev/null || \
+        print_warning "Failed to enable forward for zone $zone (runtime)"
+    firewall-cmd --permanent --zone "$zone" --add-masquerade &>/dev/null || \
+        print_warning "Failed to enable masquerade for zone $zone (permanent)"
+    firewall-cmd --permanent --zone "$zone" --add-forward &>/dev/null || \
+        print_warning "Failed to enable forward for zone $zone (permanent)"
+}
+
 show_completion() {
     local primary_ip
     primary_ip=$(ip route get 1.1.1.1 | awk -F"src " '{print $2}' | awk '{print $1}')
@@ -435,6 +475,9 @@ main() {
     get_source_files
     configure_install
     install_daemon
+    if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID_LIKE" == *"fedora"* ]]; then
+        enable_firewalld_uplink_forwarding
+    fi
     
     show_completion
 

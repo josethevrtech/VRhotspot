@@ -71,8 +71,12 @@ fi
 
 # Ensure Bazzite prefers bundled hostapd/dnsmasq (system hostapd has been unstable on some installs).
 OS_ID=""
+OS_ID_LIKE=""
 if [[ -r /etc/os-release ]]; then
-  OS_ID="$(. /etc/os-release && echo "${ID:-}")"
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  OS_ID="${ID:-}"
+  OS_ID_LIKE="${ID_LIKE:-}"
 fi
 if [[ "$OS_ID" == "bazzite" ]]; then
   log "Bazzite detected: enforcing bundled vendor binaries in /etc/vr-hotspot/env"
@@ -83,6 +87,48 @@ if [[ "$OS_ID" == "bazzite" ]]; then
   else
     echo "VR_HOTSPOT_FORCE_VENDOR_BIN=1" >> /etc/vr-hotspot/env
   fi
+fi
+
+enable_firewalld_uplink_forwarding() {
+  if ! command -v firewall-cmd >/dev/null 2>&1; then
+    log "firewalld not installed; skipping uplink forwarding setup"
+    return 0
+  fi
+  if ! firewall-cmd --state >/dev/null 2>&1; then
+    log "firewalld not running; skipping uplink forwarding setup"
+    return 0
+  fi
+
+  local uplink
+  uplink="$(ip route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
+  if [[ -z "$uplink" ]]; then
+    log "no default route interface detected; skipping uplink forwarding setup"
+    return 0
+  fi
+
+  local zone
+  zone="$(firewall-cmd --get-zone-of-interface="$uplink" 2>/dev/null | head -n1 | tr -d '\r')"
+  if [[ -z "$zone" ]]; then
+    zone="$(firewall-cmd --get-default-zone 2>/dev/null | head -n1 | tr -d '\r')"
+  fi
+  if [[ -z "$zone" ]]; then
+    log "unable to determine firewalld zone for uplink $uplink; skipping"
+    return 0
+  fi
+
+  log "Ensuring firewalld forwarding for uplink $uplink (zone=$zone)"
+  firewall-cmd --zone "$zone" --add-masquerade >/dev/null 2>&1 || \
+    log "Warning: failed to enable masquerade for zone $zone (runtime)"
+  firewall-cmd --zone "$zone" --add-forward >/dev/null 2>&1 || \
+    log "Warning: failed to enable forward for zone $zone (runtime)"
+  firewall-cmd --permanent --zone "$zone" --add-masquerade >/dev/null 2>&1 || \
+    log "Warning: failed to enable masquerade for zone $zone (permanent)"
+  firewall-cmd --permanent --zone "$zone" --add-forward >/dev/null 2>&1 || \
+    log "Warning: failed to enable forward for zone $zone (permanent)"
+}
+
+if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID_LIKE" == *"fedora"* ]]; then
+  enable_firewalld_uplink_forwarding
 fi
 
 # Create Python virtual environment
