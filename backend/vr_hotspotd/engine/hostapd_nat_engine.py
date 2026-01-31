@@ -8,9 +8,33 @@ import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 from typing import Optional, List, Tuple
 
+from vr_hotspotd import os_release
+
 _CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
+
+
+def _is_bazzite() -> bool:
+    try:
+        return os_release.is_bazzite()
+    except Exception:
+        return False
+
+
+def _write_pidfile(path: Path, pid: int) -> None:
+    try:
+        path.write_text(f"{pid}\n", encoding="utf-8")
+    except Exception as exc:
+        print(f"pidfile_write_failed: {path} err={exc}")
+
+
+def _remove_pidfile(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"pidfile_remove_failed: {path} err={exc}")
 
 
 def _run(cmd: List[str], check: bool = True) -> Tuple[int, str]:
@@ -549,6 +573,9 @@ def main() -> int:
 
     hostapd_conf = os.path.join(tmpdir, "hostapd.conf")
     dnsmasq_conf = os.path.join(tmpdir, "dnsmasq.conf")
+    bazzite = _is_bazzite()
+    hostapd_pid_path = Path(tmpdir) / "hostapd.pid"
+    dnsmasq_pid_path = Path(tmpdir) / "dnsmasq.pid"
 
     created_virt = False
     ap_iface = args.ap_ifname
@@ -642,6 +669,10 @@ def main() -> int:
         _iface_down(ap_iface)
         _flush_ip(ap_iface)
         _iface_up(ap_iface)
+
+    if bazzite and hostapd_p and hostapd_p.poll() is None:
+        _write_pidfile(hostapd_pid_path, hostapd_p.pid)
+        print(f"pidfile_written: {hostapd_pid_path}")
     dnsmasq_p: Optional[subprocess.Popen] = None
     nat_rules: List[List[str]] = []
 
@@ -687,6 +718,9 @@ def main() -> int:
             dnsmasq_p = subprocess.Popen(
                 dnsmasq_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
             )
+            if bazzite and dnsmasq_p and dnsmasq_p.poll() is None:
+                _write_pidfile(dnsmasq_pid_path, dnsmasq_p.pid)
+                print(f"pidfile_written: {dnsmasq_pid_path}")
 
             while True:
                 if hostapd_p.poll() is not None or (dnsmasq_p and dnsmasq_p.poll() is not None):
@@ -732,6 +766,10 @@ def main() -> int:
 
         if nm_marked_unmanaged:
             _nm_set_managed(nm_marked_unmanaged, True)
+
+        if bazzite:
+            _remove_pidfile(hostapd_pid_path)
+            _remove_pidfile(dnsmasq_pid_path)
 
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)

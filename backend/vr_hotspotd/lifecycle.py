@@ -1694,12 +1694,24 @@ def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[
     ap_interface = state.get("ap_interface") if isinstance(state, dict) else None
     engine_pid = state.get("engine", {}).get("pid") if isinstance(state, dict) else None
     expect_dns = not bool(cfg.get("bridge_mode", False))
+    bazzite = os_release.is_bazzite()
 
     conf_dir = _find_latest_conf_dir(adapter_ifname, ap_interface)
     if conf_dir:
-        if not _hostapd_pid_running(conf_dir):
+        hostapd_ok = _hostapd_pid_running(conf_dir)
+        dnsmasq_ok = (not expect_dns) or _dnsmasq_pid_running(conf_dir)
+
+        if bazzite:
+            if not hostapd_ok and ap_interface:
+                hostapd_ok = _hostapd_ready(ap_interface, adapter_ifname=adapter_ifname)
+            if not hostapd_ok and engine_pid and _pid_running(engine_pid):
+                hostapd_ok = any(_pid_is_hostapd(pid) for pid in _child_pids(engine_pid))
+            if expect_dns and not dnsmasq_ok and engine_pid and _pid_running(engine_pid):
+                dnsmasq_ok = any(_pid_is_dnsmasq(pid) for pid in _child_pids(engine_pid))
+
+        if not hostapd_ok:
             return "hostapd_exited"
-        if expect_dns and not _dnsmasq_pid_running(conf_dir):
+        if expect_dns and not dnsmasq_ok:
             return "dnsmasq_exited"
         # Check connection quality if monitoring is enabled
         if bool(cfg.get("connection_quality_monitoring", True)):
