@@ -69,6 +69,22 @@ if [[ -d "$INSTALL_DIR/backend/vendor/bin" ]]; then
   chmod +x "$INSTALL_DIR/backend/vendor/bin/"* 2>/dev/null || true
 fi
 
+# Ensure Bazzite prefers bundled hostapd/dnsmasq (system hostapd has been unstable on some installs).
+OS_ID=""
+if [[ -r /etc/os-release ]]; then
+  OS_ID="$(. /etc/os-release && echo "${ID:-}")"
+fi
+if [[ "$OS_ID" == "bazzite" ]]; then
+  log "Bazzite detected: enforcing bundled vendor binaries in /etc/vr-hotspot/env"
+  install -d -m 755 /etc/vr-hotspot
+  touch /etc/vr-hotspot/env
+  if grep -q "^VR_HOTSPOT_FORCE_VENDOR_BIN=" /etc/vr-hotspot/env; then
+    sed -i 's/^VR_HOTSPOT_FORCE_VENDOR_BIN=.*/VR_HOTSPOT_FORCE_VENDOR_BIN=1/' /etc/vr-hotspot/env
+  else
+    echo "VR_HOTSPOT_FORCE_VENDOR_BIN=1" >> /etc/vr-hotspot/env
+  fi
+fi
+
 # Create Python virtual environment
 log "Creating Python virtual environment at $VENV_DIR..."
 python3 -m venv "$VENV_DIR"
