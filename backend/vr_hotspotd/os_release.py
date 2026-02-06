@@ -56,6 +56,16 @@ def is_bazzite(info: Optional[Dict[str, str]] = None) -> bool:
     return "bazzite" in tokens
 
 
+def is_cachyos(info: Optional[Dict[str, str]] = None) -> bool:
+    info = info or read_os_release()
+    if not info:
+        return False
+    tokens: List[str] = []
+    for key in ("id", "id_like", "variant_id", "variant", "name"):
+        tokens.extend(_split_like(info.get(key)))
+    return "cachyos" in tokens
+
+
 def apply_platform_overrides(
     cfg: Dict[str, Any],
     info: Optional[Dict[str, str]] = None,
@@ -72,6 +82,17 @@ def apply_platform_overrides(
             warnings.append("platform_bazzite_no_virt_may_fail")
         else:
             warnings.append("platform_bazzite_prefer_virt")
+
+    # CachyOS: some adapters take longer to report AP-ready on first start.
+    # If timeout is at/below default, bump it to reduce false timeouts.
+    if is_cachyos(info):
+        try:
+            timeout_s = float(cfg.get("ap_ready_timeout_s", 0.0))
+        except Exception:
+            timeout_s = 0.0
+        if timeout_s <= 6.0:
+            overrides["ap_ready_timeout_s"] = 12.0
+            warnings.append("platform_cachyos_increased_ap_ready_timeout")
 
     if not overrides:
         return cfg, warnings

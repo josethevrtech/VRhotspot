@@ -763,6 +763,8 @@ def _wait_for_ap_ready(
 ) -> Optional[APReadyInfo]:
     deadline = time.time() + timeout_s
     reported_ap_ifname: Optional[str] = None
+    extended = False
+    grace_s = max(3.0, min(8.0, float(timeout_s)))
 
     while time.time() < deadline:
         stdout_lines: List[str] = []
@@ -795,10 +797,33 @@ def _wait_for_ap_ready(
                 if discovered != reported_ap_ifname:
                     update_state(ap_interface=discovered)
                     reported_ap_ifname = discovered
+                if not extended:
+                    # We saw AP readiness signals but it may take a bit longer for iw/ctrl to catch up.
+                    deadline = max(deadline, time.time() + grace_s)
+                    extended = True
+                    log.info(
+                        "ap_ready_grace_extended",
+                        extra={"grace_s": grace_s, "reason": "stdout_ready_signal"},
+                    )
+            elif stdout_ready and not extended:
+                deadline = max(deadline, time.time() + grace_s)
+                extended = True
+                log.info(
+                    "ap_ready_grace_extended",
+                    extra={"grace_s": grace_s, "reason": "stdout_ready_no_ifname"},
+                )
 
         dump = _iw_dev_dump()
         ap = _select_ap_from_iw(dump, target_phy=target_phy, ssid=ssid)
         if ap:
+            if not extended:
+                # AP interface is visible; allow a bit more time for hostapd_cli to respond.
+                deadline = max(deadline, time.time() + grace_s)
+                extended = True
+                log.info(
+                    "ap_ready_grace_extended",
+                    extra={"grace_s": grace_s, "reason": "ap_iface_visible"},
+                )
             if _hostapd_ready(ap.ifname, adapter_ifname=adapter_ifname):
                 return ap
             if stdout_ready or _iw_interface_is_ap(ap.ifname):
@@ -881,6 +906,34 @@ def _attempt_start_candidate(
             latest_stderr = res.stderr_tail
         if latest_stdout or latest_stderr:
             update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
+        # If logs indicate AP is coming up, wait a bit longer before failing.
+        try:
+            out_lines = latest_stdout
+            err_lines = latest_stderr
+            if isinstance(out_lines, str):
+                out_lines = out_lines.splitlines()
+            if isinstance(err_lines, str):
+                err_lines = err_lines.splitlines()
+            combined = list(out_lines or []) + list(err_lines or [])
+            ready_hint = _stdout_has_ap_ready(combined) or _stdout_extract_ap_ifname(combined)
+        except Exception:
+            ready_hint = False
+
+        if ready_hint and is_running():
+            extra_wait_s = max(4.0, min(12.0, float(ap_ready_timeout_s)))
+            log.info(
+                "ap_ready_retry_wait",
+                extra={"extra_wait_s": extra_wait_s, "reason": "stdout_ready_hint"},
+            )
+            ap_info = _wait_for_ap_ready(
+                target_phy,
+                extra_wait_s,
+                ssid=ssid,
+                adapter_ifname=adapter_ifname,
+                expected_ap_ifname=expected_ap_ifname,
+            )
+            if ap_info:
+                return ap_info, res, None, None, latest_stdout, latest_stderr
         return None, res, "ap_start_timed_out", None, latest_stdout, latest_stderr
 
     if not _iface_is_up(ap_info.ifname):
