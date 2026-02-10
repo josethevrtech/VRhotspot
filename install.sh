@@ -44,6 +44,30 @@ interactive_read() {
     fi
 }
 
+prompt_yes_no() {
+    local prompt="$1"
+    local default_answer="$2"
+    local reply normalized
+    while true; do
+        interactive_read -r -p "$prompt" reply || true
+        if [[ -z "$reply" ]]; then
+            reply="$default_answer"
+        fi
+        normalized="$(echo "$reply" | tr '[:upper:]' '[:lower:]')"
+        case "$normalized" in
+            y|yes)
+                return 0
+                ;;
+            n|no)
+                return 1
+                ;;
+            *)
+                print_warning "Please answer 'y' or 'n'."
+                ;;
+        esac
+    done
+}
+
 # --- Pre-flight & Cleanup ---
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -61,9 +85,7 @@ cleanup_previous_install() {
 
     print_warning "Existing $APP_NAME installation detected."
     if [ "$INTERACTIVE" -eq 1 ]; then
-        interactive_read -p "Perform a full cleanup of the previous version? (Y/n) " -n 1 -r REPLY || true
-        echo
-        if [[ "$REPLY" =~ ^[Nn]$ ]]; then
+        if ! prompt_yes_no "Perform a full cleanup of the previous version? (Y/n) " "y"; then
             print_error "Cannot proceed with an existing installation. Aborting."
             exit 1
         fi
@@ -280,11 +302,17 @@ get_source_files() {
 configure_install() {
     print_step "Configuring installation..."
     if [ "$INTERACTIVE" -eq 1 ]; then
-        interactive_read -p "Enable hotspot autostart at boot? (y/N) " -n 1 -r || true; echo
-        [[ "$REPLY" =~ ^[Yy]$ ]] && ENABLE_AUTOSTART="y" || ENABLE_AUTOSTART="n"
+        if prompt_yes_no "Enable hotspot autostart at boot? (y/N) " "n"; then
+            ENABLE_AUTOSTART="y"
+        else
+            ENABLE_AUTOSTART="n"
+        fi
 
-        interactive_read -p "Enable remote access? (NOT for public networks) (y/N) " -n 1 -r || true; echo
-        [[ "$REPLY" =~ ^[Yy]$ ]] && ENABLE_REMOTE="y" || ENABLE_REMOTE="n"
+        if prompt_yes_no "Enable remote access? (NOT for public networks) (y/N) " "n"; then
+            ENABLE_REMOTE="y"
+        else
+            ENABLE_REMOTE="n"
+        fi
     else
         print_info "Using defaults: autostart disabled, remote access disabled."
         ENABLE_AUTOSTART="n"
@@ -463,8 +491,7 @@ main() {
     cleanup_previous_install
     
     if [ "$INTERACTIVE" -eq 1 ]; then
-        interactive_read -p "Continue with installation? (Y/n) " -n 1 -r || true; echo
-        if [[ "$REPLY" =~ ^[Nn]$ ]]; then
+        if ! prompt_yes_no "Continue with installation? (Y/n) " "y"; then
             print_info "Installation cancelled."
             exit 0
         fi

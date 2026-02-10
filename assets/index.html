@@ -66,19 +66,14 @@
               style="display:none; font-family:monospace; margin-top:12px; padding:8px; background:var(--bg-subtle); border-radius:4px; font-size:11px;">
             </div>
 
-            <div class="action-group mt-12">
-              <button class="btn primary lg" id="btnStartBasic">Start</button>
+            <div class="action-group mt-12 basic-status-actions">
+              <button class="btn primary" id="btnStartBasic">Start</button>
               <button class="btn danger" id="btnStopBasic">Stop</button>
               <button class="btn secondary" id="btnRepairBasic">Repair</button>
+              <button class="btn secondary" id="btnRefreshBasic" title="Refresh" aria-label="Refresh">Refresh</button>
             </div>
 
-            <div class="control-row mt-12">
-              <button class="btn icon-btn" id="btnRefreshBasic" title="Refresh"><svg width="16" height="16"
-                  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M23 4v6h-6" />
-                  <path d="M1 20v-6h6" />
-                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 1 20.49 15" />
-                </svg></button>
+            <div class="control-row mt-12 basic-refresh-controls">
               <label class="tog" title="Auto refresh">
                 <input type="checkbox" id="autoRefreshBasic" /> Auto
               </label>
@@ -114,9 +109,7 @@
             <h2>Quick Setup</h2>
           </div>
           <div class="card-body">
-            <div id="basicInfoBanner" class="info-banner" style="display:none">Basic mode hides advanced details.</div>
             <div id="basicChannelBanner" class="info-banner warn" style="display:none"></div>
-            <div id="basicVrRequirementsBanner" class="hint tip-only"></div>
             <div id="basicQuickFields" class="form-stack"></div>
             <div class="action-group mt-12">
               <button class="btn primary" id="btnSaveConfigBasic">Save Config</button>
@@ -139,12 +132,13 @@
                 <button id="btnRevealPassBasic" class="btn icon-only" title="Show">👁</button>
               </div>
             </div>
-            <div class="action-group mt-12 wrap-btns">
+            <div class="action-group mt-12 wrap-btns basic-connect-actions">
               <button class="btn secondary" id="btnCopySsid">Copy SSID</button>
               <button class="btn secondary" id="btnCopyPass">Copy Pass</button>
               <button class="btn secondary" id="btnShowQrBasic">QR Code</button>
+              <button class="btn primary" id="btnSavePassBasic" title="Save passphrase"
+                aria-label="Save passphrase">Save passphrase</button>
             </div>
-            <button class="btn primary mt-8 full-width" id="btnSavePassBasic">Update Passphrase</button>
             <div class="small mt-6 faded" id="copyHint"></div>
           </div>
         </div>
@@ -206,12 +200,27 @@
                 <div id="statusLastError" class="small mt-6 error-text"></div>
                 <div id="statusErrorDetail" class="small mt-6 error-text"></div>
               </div>
-              <div class="hero-actions">
-                <button class="btn primary lg" id="btnStart">Start Hotspot</button>
-                <button class="btn danger lg" id="btnStop">Stop Hotspot</button>
-                <button class="btn secondary" id="btnRestart">Restart Service</button>
-                <button class="btn secondary" id="btnRepair">Repair Network</button>
+              <div class="hero-controls">
+                <div class="hero-actions">
+                  <button class="btn primary lg" id="btnStart">Start Hotspot</button>
+                  <button class="btn danger lg" id="btnStop">Stop Hotspot</button>
+                  <button class="btn secondary" id="btnRestart">Restart Service</button>
+                  <button class="btn secondary" id="btnRepair">Repair Network</button>
+                </div>
+                <div class="control-row hero-quick-controls">
+                  <button class="btn secondary" id="btnRefresh" title="Refresh">Refresh</button>
+                  <label class="tog" title="Auto refresh">
+                    <input type="checkbox" id="autoRefresh" /> Auto
+                  </label>
+                  <select id="refreshEvery" class="mini-select">
+                    <option value="2000">2s</option>
+                    <option value="3000">3s</option>
+                    <option value="5000">5s</option>
+                  </select>
+                </div>
               </div>
+              <div id="msg" class="small mt-10 hero-feedback"></div>
+              <div id="dirty" class="small mt-6 warning-text hero-feedback"></div>
             </div>
 
             <div class="card debug-details">
@@ -310,22 +319,6 @@
               </div>
             </div>
 
-            <div class="card quick-controls">
-              <h2>Quick Actions</h2>
-              <div class="control-row">
-                <button class="btn icon-btn" id="btnRefresh" title="Refresh">↻ Refresh</button>
-                <label class="tog" title="Auto refresh">
-                  <input type="checkbox" id="autoRefresh" /> Auto
-                </label>
-                <select id="refreshEvery" class="mini-select">
-                  <option value="2000">2s</option>
-                  <option value="3000">3s</option>
-                  <option value="5000">5s</option>
-                </select>
-              </div>
-              <div id="msg" class="small mt-10"></div>
-              <div id="dirty" class="small mt-6 warning-text"></div>
-            </div>
           </div>
         </div>
 
@@ -370,7 +363,10 @@
               </div>
 
               <div class="form-group" data-field="band_preference">
-                <label for="band_preference">Band Preference</label>
+                <div class="field-label-with-tip">
+                  <label for="band_preference">Band Preference</label>
+                  <span id="bandPreferenceTip" class="hint tip-only"></span>
+                </div>
                 <select id="band_preference">
                   <option value="6ghz">6ghz (Wi-Fi 6E)</option>
                   <option value="5ghz">5ghz</option>
@@ -380,12 +376,14 @@
               </div>
 
               <div class="form-group" data-field="ap_security">
-                <label for="ap_security">Security</label>
+                <div class="field-label-with-tip">
+                  <label for="ap_security">Security</label>
+                  <span id="secHint" class="hint tip-only"></span>
+                </div>
                 <select id="ap_security">
                   <option value="wpa2">WPA2 (PSK)</option>
                   <option value="wpa3_sae">WPA3 (SAE)</option>
                 </select>
-                <div class="hint" id="secHint"></div>
               </div>
 
               <div class="form-group" id="fivegBox" data-field="channel_5g">
@@ -470,7 +468,10 @@
               </div>
 
               <div class="form-group" data-field="ap_adapter">
-                <label for="ap_adapter">Wi-Fi Adapter</label>
+                <div class="field-label-with-tip">
+                  <label for="ap_adapter">Wi-Fi Adapter</label>
+                  <span id="adapterLabelTip" class="hint tip-only"></span>
+                </div>
                 <select id="ap_adapter"></select>
                 <div class="row mt-8">
                   <button class="btn sm" id="btnUseRecommended">Recommended</button>

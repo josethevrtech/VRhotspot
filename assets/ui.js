@@ -68,6 +68,10 @@ const BASIC_FIELD_KEYS = Object.keys(FIELD_VISIBILITY).filter((key) => FIELD_VIS
 const BASIC_FIELD_KEYS_FALLBACK = BASIC_FIELD_KEYS.length ? BASIC_FIELD_KEYS : BASIC_QUICK_FIELDS.concat(BASIC_CONNECT_FIELDS);
 const FIELD_HOMES = new Map();
 let bandOptionsCache = null;
+const FLOATING_TIP_LAYER_ID = 'floatingTipLayer';
+let floatingTipLayer = null;
+let activeTipTarget = null;
+let floatingTipWired = false;
 
 function readUiMode() {
   const raw = (STORE.getItem(UI_MODE_KEY) || '').trim().toLowerCase();
@@ -656,8 +660,15 @@ function applyUiMode(mode, opts = {}) {
 
   // Update Adapter Label
   const adapterLbl = document.querySelector('label[for="ap_adapter"]');
+  const adapterTip = document.getElementById('adapterLabelTip');
   if (adapterLbl) {
     adapterLbl.textContent = (mode === 'basic') ? 'USB WiFi Adapter' : 'AP adapter';
+  }
+  if (adapterTip) {
+    const tipText = (mode === 'basic')
+      ? 'Basic mode lists USB adapters only. Use Recommended to auto-select the best detected USB adapter.'
+      : 'Select the interface that will run AP mode. Recommended chooses the best detected adapter.';
+    renderHintTip(adapterTip, tipText);
   }
 
   // Reload adapters to apply filtering and renaming rules
@@ -882,7 +893,120 @@ function renderHintTip(el, text) {
   tip.textContent = 'ⓘ';
   tip.setAttribute('data-tip', tipText);
   tip.setAttribute('aria-label', tipText);
+  tip.setAttribute('tabindex', '0');
   el.appendChild(tip);
+}
+
+function ensureFloatingTipLayer() {
+  if (floatingTipLayer && floatingTipLayer.isConnected) return floatingTipLayer;
+  const existing = document.getElementById(FLOATING_TIP_LAYER_ID);
+  if (existing) {
+    floatingTipLayer = existing;
+    return floatingTipLayer;
+  }
+  const layer = document.createElement('div');
+  layer.id = FLOATING_TIP_LAYER_ID;
+  layer.className = 'floating-tip-layer';
+  layer.setAttribute('role', 'tooltip');
+  layer.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(layer);
+  floatingTipLayer = layer;
+  return floatingTipLayer;
+}
+
+function positionFloatingTipLayer(target) {
+  const layer = ensureFloatingTipLayer();
+  if (!layer || !target) return;
+  if (!target.isConnected) {
+    hideFloatingTipFor();
+    return;
+  }
+  const gap = 8;
+  const pad = 8;
+  const rect = target.getBoundingClientRect();
+  const width = layer.offsetWidth;
+  const height = layer.offsetHeight;
+
+  let left = rect.left + (rect.width / 2) - (width / 2);
+  left = Math.max(pad, Math.min(left, window.innerWidth - width - pad));
+
+  let top = rect.bottom + gap;
+  if (top + height + pad > window.innerHeight) {
+    top = rect.top - height - gap;
+  }
+  if (top < pad) top = pad;
+
+  layer.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+}
+
+function showFloatingTipFor(target) {
+  if (!target) return;
+  const tipText = (target.getAttribute('data-tip') || target.getAttribute('aria-label') || '').trim();
+  if (!tipText) return;
+
+  const layer = ensureFloatingTipLayer();
+  if (!layer) return;
+  activeTipTarget = target;
+  layer.textContent = tipText;
+  layer.setAttribute('aria-hidden', 'false');
+  layer.classList.add('is-visible');
+  positionFloatingTipLayer(target);
+}
+
+function hideFloatingTipFor(target) {
+  if (target && activeTipTarget && target !== activeTipTarget) return;
+  const layer = ensureFloatingTipLayer();
+  if (!layer) return;
+  activeTipTarget = null;
+  layer.classList.remove('is-visible');
+  layer.setAttribute('aria-hidden', 'true');
+  layer.style.transform = 'translate(-200vw, -200vh)';
+}
+
+function wireFloatingTips() {
+  if (floatingTipWired) return;
+  floatingTipWired = true;
+  ensureFloatingTipLayer();
+
+  document.addEventListener('pointerover', (ev) => {
+    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    if (!target) return;
+    showFloatingTipFor(target);
+  }, true);
+
+  document.addEventListener('pointerout', (ev) => {
+    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    if (!target) return;
+    const related = ev.relatedTarget;
+    if (related instanceof Node && target.contains(related)) return;
+    hideFloatingTipFor(target);
+  }, true);
+
+  document.addEventListener('focusin', (ev) => {
+    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    if (!target) return;
+    showFloatingTipFor(target);
+  }, true);
+
+  document.addEventListener('focusout', (ev) => {
+    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    if (!target) return;
+    hideFloatingTipFor(target);
+  }, true);
+
+  window.addEventListener('resize', () => {
+    if (!activeTipTarget) return;
+    positionFloatingTipLayer(activeTipTarget);
+  });
+
+  window.addEventListener('scroll', () => {
+    if (!activeTipTarget) return;
+    positionFloatingTipLayer(activeTipTarget);
+  }, true);
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') hideFloatingTipFor();
+  });
 }
 
 function fmtTs(epoch) {
@@ -1059,9 +1183,46 @@ function fmtMbps(v) {
   return (v === null || v === undefined) ? '--' : fmtNum(v, 1);
 }
 
-function updateBasicVrHint() {
-  const vrHint = document.getElementById('basicVrRequirementsBanner');
-  renderHintTip(vrHint, 'VR Mode: Requires 5 GHz + 80 MHz (VHT80). Anything less is a failure state.');
+function toFiniteNumberOrNull(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function resolveTelemetryTrafficMbps(t) {
+  const summary = (t && t.summary && typeof t.summary === 'object') ? t.summary : {};
+  let tx = toFiniteNumberOrNull(summary.tx_mbps_total);
+  let rx = toFiniteNumberOrNull(summary.rx_mbps_total);
+
+  if (tx !== null && rx !== null) return { tx, rx };
+
+  const clients = Array.isArray(t && t.clients) ? t.clients : [];
+  let txSum = 0;
+  let rxSum = 0;
+  let txSeen = false;
+  let rxSeen = false;
+  for (const c of clients) {
+    const cTx = toFiniteNumberOrNull(c && c.tx_mbps);
+    const cRx = toFiniteNumberOrNull(c && c.rx_mbps);
+    if (cTx !== null) {
+      txSum += cTx;
+      txSeen = true;
+    }
+    if (cRx !== null) {
+      rxSum += cRx;
+      rxSeen = true;
+    }
+  }
+
+  if (tx === null && txSeen) tx = txSum;
+  if (rx === null && rxSeen) rx = rxSum;
+
+  return { tx, rx };
+}
+
+function fmtTrafficMbpsOrNA(v) {
+  const n = toFiniteNumberOrNull(v);
+  return n === null ? 'N/A' : `${fmtNum(n, 1)} Mbps`;
 }
 
 function renderTelemetry(t) {
@@ -1125,9 +1286,10 @@ function renderTelemetry(t) {
     const basicC = document.getElementById('basicTelemetryContainer');
     if (basicC) {
       const summary = t.summary || {};
+      const traffic = resolveTelemetryTrafficMbps(t);
       basicC.innerHTML = `
         <div>Clients: ${summary.client_count || 0}</div>
-        <div>Traffic: TX ${summary.tx_mbps_total || 0} Mbps / RX ${summary.rx_mbps_total || 0} Mbps</div>
+        <div>Traffic: TX ${fmtTrafficMbpsOrNA(traffic.tx)} / RX ${fmtTrafficMbpsOrNA(traffic.rx)}</div>
       `;
     }
     // Advanced charts
@@ -1627,10 +1789,15 @@ function enforceBandRules() {
   const secEl = document.getElementById('ap_security');
   const secHint = document.getElementById('secHint');
   const bandHint = document.getElementById('bandHint');
+  const bandPreferenceTip = document.getElementById('bandPreferenceTip');
 
   const band = resolveBandPref(sel.value);
   const is6 = (band === '6ghz');
   const is5 = (band === '5ghz');
+
+  if (bandPreferenceTip) {
+    renderHintTip(bandPreferenceTip, '5 GHz: best default for VR streaming on most adapters.');
+  }
 
   if (g6Box) g6Box.style.display = is6 ? 'block' : 'none';
   if (g5Box) g5Box.style.display = is5 ? 'block' : 'none';
@@ -1640,13 +1807,17 @@ function enforceBandRules() {
     secEl.value = 'wpa3_sae';
     secEl.disabled = true;
     if (g6Box) g6Box.style.display = '';
-    bandHint.innerHTML = "<strong>6 GHz:</strong> requires a 6 GHz-capable adapter and a correct Country. WPA3-SAE is enforced.";
+    if (bandHint) {
+      bandHint.innerHTML = "<strong>6 GHz:</strong> requires a 6 GHz-capable adapter and a correct Country. WPA3-SAE is enforced.";
+    }
     renderHintTip(secHint, "Locked: 6 GHz requires WPA3 (SAE).");
   } else {
     secEl.disabled = false;
     if (g6Box) g6Box.style.display = 'none';
-    if (band === '5ghz') bandHint.innerHTML = "<strong>5 GHz:</strong> best default for VR streaming on most adapters.";
-    else bandHint.innerHTML = "<strong>2.4 GHz:</strong> compatibility/fallback band (higher latency / more interference).";
+    if (bandHint) {
+      if (band === '5ghz') bandHint.innerHTML = '';
+      else bandHint.innerHTML = "<strong>2.4 GHz:</strong> compatibility/fallback band (higher latency / more interference).";
+    }
     renderHintTip(secHint, "WPA2 (PSK) is typical. WPA3 (SAE) may be supported but depends on driver + clients.");
   }
   applyFieldVisibility(getUiMode());
@@ -2422,9 +2593,8 @@ if (apiTokenBasic) {
   });
 }
 
-const btnSaveTokenBasic = document.getElementById('btnSaveTokenBasic');
-if (btnSaveTokenBasic) btnSaveTokenBasic.addEventListener('click', async () => {
-  const tokenField = document.getElementById('apiTokenBasic');
+async function saveApiTokenAndReload(tokenFieldId) {
+  const tokenField = document.getElementById(tokenFieldId);
   if (!tokenField) return;
   const token = tokenField.value.trim();
   setToken(token);
@@ -2432,24 +2602,36 @@ if (btnSaveTokenBasic) btnSaveTokenBasic.addEventListener('click', async () => {
     setMsg('API token saved.');
     await refreshInfo();
     await refresh();
+    window.location.reload();
   } else {
     setMsg('API token cleared.');
   }
+}
+
+function wireTokenEnterSubmit(inputEl, submitFn) {
+  if (!inputEl || typeof submitFn !== 'function') return;
+  inputEl.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    submitFn();
+  });
+}
+
+const btnSaveTokenBasic = document.getElementById('btnSaveTokenBasic');
+if (btnSaveTokenBasic) btnSaveTokenBasic.addEventListener('click', async () => {
+  await saveApiTokenAndReload('apiTokenBasic');
 });
 
 const btnSaveToken = document.getElementById('btnSaveToken');
 if (btnSaveToken) btnSaveToken.addEventListener('click', async () => {
-  const tokenField = document.getElementById('apiToken');
-  if (!tokenField) return;
-  const token = tokenField.value.trim();
-  setToken(token);
-  if (token) {
-    setMsg('API token saved.');
-    await refreshInfo();
-    await refresh();
-  } else {
-    setMsg('API token cleared.');
-  }
+  await saveApiTokenAndReload('apiToken');
+});
+
+wireTokenEnterSubmit(document.getElementById('apiToken'), () => {
+  saveApiTokenAndReload('apiToken');
+});
+wireTokenEnterSubmit(document.getElementById('apiTokenBasic'), () => {
+  saveApiTokenAndReload('apiTokenBasic');
 });
 
 document.getElementById('autoRefresh').addEventListener('change', applyAutoRefresh);
@@ -2496,6 +2678,8 @@ function wireTabs() {
 }
 
 function init() {
+  wireFloatingTips();
+
   const tok = migrateLegacyToken() || getStoredToken();
   if (tok) setToken(tok);
 
@@ -2514,7 +2698,6 @@ function init() {
 
   const mode = loadUiMode();
   applyUiMode(mode, { skipAdapters: true });
-  updateBasicVrHint();
 
   if (tok) {
     refreshInfo();
@@ -2725,26 +2908,39 @@ function wireQr() {
   const rawDiv = document.getElementById('qrSsidRaw');
   if (!modal || !place) return;
 
-  function showQr() {
-    // Gather SSID and Passphrase
+  async function resolvePassphraseForQr() {
+    const typedPass = getPassphraseValue();
+    if (typedPass) return { passphrase: typedPass, source: 'typed' };
+
+    const r = await api('/v1/config/reveal_passphrase', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+    if (r.ok && r.json && r.json.data && typeof r.json.data.wpa2_passphrase === 'string' && r.json.data.wpa2_passphrase) {
+      return { passphrase: r.json.data.wpa2_passphrase, source: 'saved' };
+    }
+
+    const resultCode = (r.json && r.json.result_code) ? r.json.result_code : `HTTP ${r.status}`;
+    return { passphrase: '', source: 'error', code: resultCode };
+  }
+
+  async function showQr() {
+    // Gather SSID and passphrase
     let ssid = document.getElementById('ssid').value.trim();
-    let pass = getPassphraseValue();
 
     // If empty in UI, try fallback to saved config
     if (!ssid && lastCfg && lastCfg.ssid) ssid = lastCfg.ssid;
-
-    // QR only works if the passphrase is currently in the UI (typed or revealed).
 
     if (!ssid) {
       setMsg('SSID is missing', 'dangerText');
       return;
     }
 
-    // For WPA2/3, we need a password.
-    // If the input is empty, and we have a saved password, we are stuck. 
-    // We'll warn the user.
+    const passLookup = await resolvePassphraseForQr();
+    const pass = (passLookup.passphrase || '').trim();
     if (!pass) {
-      setMsg('Enter passphrase to generate QR code', 'dangerText');
+      if (passLookup.code === 'passphrase_not_set') {
+        setMsg('Save a passphrase to generate a QR code.', 'dangerText');
+      } else {
+        setMsg(`Unable to load saved passphrase for QR code (${passLookup.code || 'error'}).`, 'dangerText');
+      }
       const { advanced, basic } = getPassphraseInputs();
       const focusEl = (getUiMode() === 'basic' ? basic : advanced) || advanced || basic;
       if (focusEl) focusEl.focus();

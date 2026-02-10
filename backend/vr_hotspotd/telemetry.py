@@ -47,6 +47,8 @@ def get_snapshot(
     clients_out = []
     rssis = []
     tx_rates = []
+    tx_mbps_values = []
+    rx_mbps_values = []
     loss_pcts = []
     quality_scores = []
 
@@ -79,6 +81,10 @@ def get_snapshot(
         rx_bps = (d_rx_bytes * 8 / dt) if (dt and d_rx_bytes is not None) else None  # bits per second
         tx_mbps = (tx_bps / 1_000_000) if tx_bps is not None else None
         rx_mbps = (rx_bps / 1_000_000) if rx_bps is not None else None
+        if isinstance(tx_mbps, (int, float)):
+            tx_mbps_values.append(float(tx_mbps))
+        if isinstance(rx_mbps, (int, float)):
+            rx_mbps_values.append(float(rx_mbps))
 
         rssi = client.get("signal_dbm")
         tx_rate = client.get("tx_bitrate_mbps")
@@ -152,6 +158,8 @@ def get_snapshot(
         "rssi_min_dbm": min(rssis) if rssis else None,
         "tx_bitrate_avg_mbps": (sum(tx_rates) / len(tx_rates)) if tx_rates else None,
         "tx_bitrate_max_mbps": max(tx_rates) if tx_rates else None,
+        "tx_mbps_total": (sum(tx_mbps_values) if tx_mbps_values else None),
+        "rx_mbps_total": (sum(rx_mbps_values) if rx_mbps_values else None),
         "loss_pct_avg": (sum(loss_pcts) / len(loss_pcts)) if loss_pcts else None,
         "quality_score_avg": (sum(quality_scores) / len(quality_scores)) if quality_scores else None,
         "quality_score_min": min(quality_scores) if quality_scores else None,
