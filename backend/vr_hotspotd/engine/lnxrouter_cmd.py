@@ -13,6 +13,17 @@ def _lnxrouter_path() -> str:
     return os.path.join(fallback, "lnxrouter")
 
 
+def _auto_virt_name(ap_ifname: str) -> Optional[str]:
+    """
+    linux-router may fail virtual AP creation when the parent iface name is long
+    unless --virt-name is explicitly provided.
+    """
+    base = str(ap_ifname or "").strip()
+    if not base or len(base) <= 13:
+        return None
+    return f"x0{base}"[:15]
+
+
 def build_cmd(
     *,
     ap_ifname: str,
@@ -91,6 +102,12 @@ def build_cmd(
     # Fixed channel
     if channel is not None:
         cmd += ["-c", str(int(channel))]
+
+    # For long adapter names, force a deterministic virtual interface name.
+    if not no_virt:
+        virt_name = _auto_virt_name(ap_ifname)
+        if virt_name:
+            cmd += ["--virt-name", virt_name]
 
     # Disable virtual interface
     if no_virt:

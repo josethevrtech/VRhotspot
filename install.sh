@@ -150,7 +150,7 @@ calculate_dependency_list() {
             fi
             ;;
         apt)
-            DEPENDENCIES=(python3 python3-pip python3-venv iw iproute2 iptables)
+            DEPENDENCIES=(python3 python3-pip python3-venv iw iproute2 iptables hostapd dnsmasq)
             ;;
         dnf)
             DEPENDENCIES=(python3 python3-pip iw iproute iptables)
@@ -229,7 +229,7 @@ install_dependencies() {
             ;;
         apt)
             apt-get update -qq
-            apt-get install -y python3 python3-pip python3-venv iw iproute2 iptables
+            apt-get install -y python3 python3-pip python3-venv iw iproute2 iptables hostapd dnsmasq
             ;;
         dnf)
             dnf install -y python3 python3-pip iw iproute iptables

@@ -88,3 +88,31 @@ def test_lnxrouter_cmd_no_virt_uses_adapter_ifname():
     )
     assert "wlan0" in cmd
     assert "--no-virt" in cmd
+
+
+def test_lnxrouter_cmd_sets_virt_name_for_long_interface_names():
+    cmd = build_cmd(
+        ap_ifname="wlx7419f816af4c",
+        ssid="TestSSID",
+        passphrase="password123",
+        band_preference="5ghz",
+        country="US",
+        channel=36,
+        no_virt=False,
+    )
+    assert "--virt-name" in cmd
+    assert cmd[cmd.index("--virt-name") + 1] == "x0wlx7419f816af"
+
+
+def test_lnxrouter_cmd_does_not_set_virt_name_when_no_virt_enabled():
+    cmd = build_cmd(
+        ap_ifname="wlx7419f816af4c",
+        ssid="TestSSID",
+        passphrase="password123",
+        band_preference="5ghz",
+        country="US",
+        channel=36,
+        no_virt=True,
+    )
+    assert "--virt-name" not in cmd
+

@@ -179,12 +179,17 @@ def _merge_head_tail(
     count: int,
     max_lines: int,
 ) -> List[str]:
-    if count <= 0:
-        return []
     tail_list = list(tail)
-    if count <= max_lines:
-        return tail_list
     head_list = list(head)
+    if count <= 0:
+        # Count only tracks process stream lines; supervisor notes can still exist in tail.
+        return tail_list or head_list
+    if count <= max_lines:
+        return tail_list or head_list
+    if not head_list:
+        return tail_list
+    if not tail_list:
+        return head_list
     overlap = (max_lines * 2) - count
     if overlap > 0:
         tail_list = tail_list[overlap:] if overlap < len(tail_list) else []
