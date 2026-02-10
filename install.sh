@@ -129,7 +129,7 @@ detect_os() {
     fi
     case "$OS_ID" in
         steamos|cachyos|arch) PKG_MANAGER="pacman" ;;
-        ubuntu|debian) PKG_MANAGER="apt" ;;
+        ubuntu|debian|pop) PKG_MANAGER="apt" ;;
         fedora) PKG_MANAGER="dnf" ;;
         bazzite) PKG_MANAGER="rpm-ostree" ;;
         *)
