@@ -417,3 +417,18 @@ def test_stdout_created_sets_ap_interface_state():
         lifecycle._iw_dev_info = orig_iw_info
         lifecycle.time.sleep = orig_sleep
         lifecycle._infer_ap_ifname_from_conf = orig_infer
+
+
+def test_lnxrouter_expected_ifname_long_iface_virtual_mode():
+    expected = lifecycle._lnxrouter_expected_ifname("wlx7419f816af4c", no_virt=False)
+    assert expected == "x0wlx7419f816af"
+
+
+def test_lnxrouter_expected_ifname_short_iface_virtual_mode_unknown():
+    expected = lifecycle._lnxrouter_expected_ifname("wlan0", no_virt=False)
+    assert expected is None
+
+
+def test_lnxrouter_expected_ifname_no_virt_uses_adapter():
+    expected = lifecycle._lnxrouter_expected_ifname("wlx7419f816af4c", no_virt=True)
+    assert expected == "wlx7419f816af4c"

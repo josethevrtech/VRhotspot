@@ -66,6 +66,16 @@ def is_cachyos(info: Optional[Dict[str, str]] = None) -> bool:
     return "cachyos" in tokens
 
 
+def is_pop_os(info: Optional[Dict[str, str]] = None) -> bool:
+    info = info or read_os_release()
+    if not info:
+        return False
+    tokens: List[str] = []
+    for key in ("id", "id_like", "variant_id", "variant", "name"):
+        tokens.extend(_split_like(info.get(key)))
+    return "pop" in tokens
+
+
 def apply_platform_overrides(
     cfg: Dict[str, Any],
     info: Optional[Dict[str, str]] = None,
@@ -93,6 +103,16 @@ def apply_platform_overrides(
         if timeout_s <= 6.0:
             overrides["ap_ready_timeout_s"] = 12.0
             warnings.append("platform_cachyos_increased_ap_ready_timeout")
+
+    # Pop!_OS often needs a longer warm-up for AP readiness when using lnxrouter.
+    if is_pop_os(info):
+        try:
+            timeout_s = float(cfg.get("ap_ready_timeout_s", 0.0))
+        except Exception:
+            timeout_s = 0.0
+        if timeout_s <= 8.0:
+            overrides["ap_ready_timeout_s"] = max(float(overrides.get("ap_ready_timeout_s", 0.0)), 14.0)
+            warnings.append("platform_pop_increased_ap_ready_timeout")
 
     if not overrides:
         return cfg, warnings

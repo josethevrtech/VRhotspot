@@ -70,6 +70,24 @@ def _virt_ap_ifname(base: str) -> str:
     return cand[:15]
 
 
+def _lnxrouter_expected_ifname(ap_ifname: str, *, no_virt: bool) -> Optional[str]:
+    """
+    Best-effort expected AP interface naming for linux-router mode.
+
+    linux-router auto-picks virtual interface names unless --virt-name is set.
+    We only predict deterministic names where we control it:
+    - no_virt=True => AP uses the adapter ifname
+    - long ifnames (>13) => build_cmd injects --virt-name x0<ifname>[:15]
+    """
+    if not ap_ifname:
+        return None
+    if no_virt:
+        return ap_ifname
+    if len(ap_ifname) > 13:
+        return _virt_ap_ifname(ap_ifname)
+    return None
+
+
 class LifecycleResult:
     def __init__(self, code, state):
         self.code = code
@@ -1100,7 +1118,7 @@ def _start_hotspot_5ghz_strict(
     def _expected_ifname(no_virt: bool) -> Optional[str]:
         if use_hostapd_nat or bridge_mode:
             return ap_ifname if no_virt else _virt_ap_ifname(ap_ifname)
-        return None
+        return _lnxrouter_expected_ifname(ap_ifname, no_virt=no_virt)
 
     def _build_cmd_for_candidate(candidate: Dict[str, Any], no_virt: bool, width_mhz: int) -> List[str]:
         ch = candidate.get("primary_channel")
@@ -2704,6 +2722,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     expected_ap_ifname = None
     if use_hostapd_nat:
         expected_ap_ifname = ap_ifname if optimized_no_virt else _virt_ap_ifname(ap_ifname)
+    else:
+        expected_ap_ifname = _lnxrouter_expected_ifname(ap_ifname, no_virt=optimized_no_virt)
 
     ap_info = None
     start_failure_reason = None
@@ -2873,7 +2893,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
         ap_info_retry = None
         if res_retry.ok:
-            retry_expected_ifname = _virt_ap_ifname(ap_ifname) if use_hostapd_nat else None
+            retry_expected_ifname = _virt_ap_ifname(ap_ifname) if use_hostapd_nat else _lnxrouter_expected_ifname(ap_ifname, no_virt=False)
             ap_info_retry = _wait_for_ap_ready(
                 target_phy,
                 ap_ready_timeout_s,
@@ -3017,7 +3037,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
         ap_info_retry = None
         if res_retry.ok:
-            retry_expected_ifname = ap_ifname if use_hostapd_nat else None
+            retry_expected_ifname = ap_ifname if use_hostapd_nat else _lnxrouter_expected_ifname(ap_ifname, no_virt=True)
             ap_info_retry = _wait_for_ap_ready(
                 target_phy,
                 ap_ready_timeout_s,
@@ -3226,6 +3246,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             fallback_expected_ifname = None
             if use_hostapd_nat:
                 fallback_expected_ifname = ap_ifname if no_virt else _virt_ap_ifname(ap_ifname)
+            else:
+                fallback_expected_ifname = _lnxrouter_expected_ifname(ap_ifname, no_virt=no_virt)
             ap_info_fallback = _wait_for_ap_ready(
                 target_phy,
                 ap_ready_timeout_s,
