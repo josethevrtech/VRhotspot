@@ -384,6 +384,7 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
     @patch("vr_hotspotd.lifecycle._nm_gate_check")
     @patch("vr_hotspotd.lifecycle._start_hotspot_5ghz_strict")
     @patch("vr_hotspotd.os_release.read_os_release")
+    @patch("vr_hotspotd.os_release.is_cachyos")
     @patch("vr_hotspotd.os_release.is_bazzite")
     @patch("os.makedirs")
     @patch("pathlib.Path.mkdir")
@@ -394,6 +395,7 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
         mock_mkdir,
         mock_makedirs,
         mock_is_bazzite,
+        mock_is_cachyos,
         mock_read_os_release,
         mock_5ghz_strict,
         mock_nm_gate,
@@ -406,6 +408,7 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
     ):
         """Basic Mode should disable 40MHz fallback even if config allows it."""
         mock_is_bazzite.return_value = False
+        mock_is_cachyos.return_value = True
         mock_read_os_release.return_value = {"ID": "cachyos"}
         mock_nm_gate.return_value = None  # NM gate passes
         
@@ -450,6 +453,11 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
             call_kwargs.get("allow_fallback_40mhz", True),
             f"Basic Mode should have set allow_fallback_40mhz=False, got: {call_kwargs}"
         )
+        self.assertGreater(
+            float(call_kwargs.get("iface_up_grace_s", 0.0)),
+            0.0,
+            f"CachyOS should enable iface_up_grace_s, got: {call_kwargs}",
+        )
 
     @patch("vr_hotspotd.lifecycle.load_config")
     @patch("vr_hotspotd.lifecycle.load_state")
@@ -460,6 +468,7 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
     @patch("vr_hotspotd.lifecycle._nm_gate_check")
     @patch("vr_hotspotd.lifecycle._start_hotspot_5ghz_strict")
     @patch("vr_hotspotd.os_release.read_os_release")
+    @patch("vr_hotspotd.os_release.is_cachyos")
     @patch("vr_hotspotd.os_release.is_bazzite")
     @patch("os.makedirs")
     @patch("pathlib.Path.mkdir")
@@ -470,6 +479,7 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
         mock_mkdir,
         mock_makedirs,
         mock_is_bazzite,
+        mock_is_cachyos,
         mock_read_os_release,
         mock_5ghz_strict,
         mock_nm_gate,
@@ -482,6 +492,7 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
     ):
         """Non-Basic Mode (basic_mode=False) should preserve allow_fallback_40mhz=True from config."""
         mock_is_bazzite.return_value = False
+        mock_is_cachyos.return_value = True
         mock_read_os_release.return_value = {"ID": "cachyos"}
         mock_nm_gate.return_value = None
         
@@ -525,6 +536,86 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
         self.assertTrue(
             call_kwargs.get("allow_fallback_40mhz", False),
             f"Non-Basic Mode should preserve allow_fallback_40mhz=True, got: {call_kwargs}"
+        )
+        self.assertGreater(
+            float(call_kwargs.get("iface_up_grace_s", 0.0)),
+            0.0,
+            f"CachyOS should enable iface_up_grace_s, got: {call_kwargs}",
+        )
+
+    @patch("vr_hotspotd.lifecycle.load_config")
+    @patch("vr_hotspotd.lifecycle.load_state")
+    @patch("vr_hotspotd.lifecycle.update_state")
+    @patch("vr_hotspotd.lifecycle.ensure_config_file")
+    @patch("vr_hotspotd.lifecycle._repair_impl")
+    @patch("vr_hotspotd.lifecycle.get_adapters")
+    @patch("vr_hotspotd.lifecycle._nm_gate_check")
+    @patch("vr_hotspotd.lifecycle._start_hotspot_5ghz_strict")
+    @patch("vr_hotspotd.os_release.read_os_release")
+    @patch("vr_hotspotd.os_release.is_cachyos")
+    @patch("vr_hotspotd.os_release.is_bazzite")
+    @patch("os.makedirs")
+    @patch("pathlib.Path.mkdir")
+    @patch("shutil.chown")
+    def test_non_cachyos_keeps_iface_up_grace_disabled(
+        self,
+        mock_chown,
+        mock_mkdir,
+        mock_makedirs,
+        mock_is_bazzite,
+        mock_is_cachyos,
+        mock_read_os_release,
+        mock_5ghz_strict,
+        mock_nm_gate,
+        mock_get_adapters,
+        mock_repair_impl,
+        mock_ensure_config,
+        mock_update_state,
+        mock_load_state,
+        mock_load_config
+    ):
+        """Non-CachyOS should keep interface-up grace disabled."""
+        mock_is_bazzite.return_value = False
+        mock_is_cachyos.return_value = False
+        mock_read_os_release.return_value = {"ID": "arch"}
+        mock_nm_gate.return_value = None
+
+        from vr_hotspotd.lifecycle import LifecycleResult
+        mock_5ghz_strict.return_value = LifecycleResult("started", {"phase": "running"})
+
+        mock_get_adapters.return_value = {
+            "adapters": [
+                {
+                    "ifname": "wlan1",
+                    "phy": "phy1",
+                    "bus": "usb",
+                    "supports_ap": True,
+                    "supports_5ghz": True,
+                    "supports_80mhz": True
+                }
+            ],
+            "recommended": "wlan1"
+        }
+        mock_load_config.return_value = {
+            "wpa2_passphrase": "password123",
+            "band_preference": "5ghz",
+        }
+        mock_load_state.return_value = {"phase": "stopped"}
+        mock_update_state.return_value = {"phase": "starting"}
+
+        from vr_hotspotd import lifecycle
+
+        with patch("vr_hotspotd.lifecycle.wifi_probe.detect_firewall_backends", return_value={"selected_backend": "nftables"}), \
+             patch("vr_hotspotd.lifecycle.preflight.run", return_value={"errors": [], "warnings": [], "details": {}}), \
+             patch("vr_hotspotd.lifecycle.system_tuning.apply_pre", return_value=({}, [])):
+            lifecycle.start_hotspot()
+
+        self.assertTrue(mock_5ghz_strict.called, "_start_hotspot_5ghz_strict should have been called")
+        call_kwargs = mock_5ghz_strict.call_args.kwargs
+        self.assertEqual(
+            float(call_kwargs.get("iface_up_grace_s", 0.0)),
+            0.0,
+            f"Non-CachyOS should keep iface_up_grace_s=0.0, got: {call_kwargs}",
         )
 
 
@@ -582,6 +673,59 @@ class TestPostStartWidthCheck(unittest.TestCase):
             self.assertIsNone(ap_info, "ap_info should be None when width check fails")
             self.assertEqual(failure_code, "hostapd_started_but_width_not_80")
             self.assertIn("width_mismatch:40", failure_detail)
+
+    def test_attempt_start_candidate_iface_up_grace_allows_recovery(self):
+        """iface_up_grace_s should allow transient not-up AP interfaces to recover."""
+        from vr_hotspotd.lifecycle import _attempt_start_candidate, APReadyInfo
+        from unittest.mock import MagicMock, patch
+
+        mock_res = MagicMock()
+        mock_res.ok = True
+        mock_res.pid = 123
+        mock_res.cmd = ["cmd"]
+        mock_res.started_ts = 123456
+        mock_res.exit_code = None
+        mock_res.error = None
+        mock_res.stdout_tail = []
+        mock_res.stderr_tail = []
+
+        mock_ap = APReadyInfo(
+            ifname="wlan1",
+            phy="phy1",
+            ssid="TestSSID",
+            freq_mhz=5180,
+            channel=36,
+            channel_width_mhz=80,
+        )
+
+        with patch("vr_hotspotd.lifecycle.start_engine", return_value=mock_res), \
+             patch("vr_hotspotd.lifecycle.update_state"), \
+             patch("vr_hotspotd.lifecycle._wait_for_ap_ready", return_value=mock_ap), \
+             patch("vr_hotspotd.lifecycle._iface_is_up", return_value=False), \
+             patch("vr_hotspotd.lifecycle._ensure_iface_up_with_grace", return_value=True) as mock_iface_grace, \
+             patch("vr_hotspotd.lifecycle.is_running", return_value=True), \
+             patch("vr_hotspotd.lifecycle._parse_iw_dev_info", return_value={"channel_width_mhz": 80}), \
+             patch("vr_hotspotd.lifecycle._iw_dev_info", return_value=""), \
+             patch("vr_hotspotd.lifecycle._nm_interference_reason", return_value=None), \
+             patch("vr_hotspotd.lifecycle.time.sleep"):
+
+            ap_info, _, failure_code, failure_detail, _, _ = _attempt_start_candidate(
+                cmd=["test"],
+                firewalld_cfg={},
+                target_phy="phy1",
+                ap_ready_timeout_s=5.0,
+                ssid="TestSSID",
+                adapter_ifname="wlan1",
+                expected_ap_ifname="wlan1",
+                require_band="5ghz",
+                require_width_mhz=80,
+                iface_up_grace_s=3.0,
+            )
+
+            self.assertIsNotNone(ap_info, "ap_info should be available after iface_up_grace recovery")
+            self.assertIsNone(failure_code)
+            self.assertIsNone(failure_detail)
+            mock_iface_grace.assert_called_once_with("wlan1", grace_s=3.0)
 
 
 class TestWidthRegexParsing(unittest.TestCase):

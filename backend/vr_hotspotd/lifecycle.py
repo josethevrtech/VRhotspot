@@ -401,6 +401,47 @@ def _ensure_iface_up(ifname: str) -> bool:
     return _iface_is_up(ifname)
 
 
+def _ensure_iface_up_with_grace(
+    ifname: str,
+    *,
+    grace_s: float = 0.0,
+    poll_s: float = 0.25,
+) -> bool:
+    """
+    Ensure interface is UP, optionally allowing a short settle window.
+
+    Some drivers transiently report AP readiness before link state is reflected.
+    """
+    if not ifname:
+        return False
+    if _iface_is_up(ifname):
+        return True
+    if _ensure_iface_up(ifname):
+        return True
+
+    try:
+        grace = max(0.0, float(grace_s))
+    except Exception:
+        grace = 0.0
+    if grace <= 0.0:
+        return False
+
+    try:
+        interval = max(0.1, float(poll_s))
+    except Exception:
+        interval = 0.25
+
+    deadline = time.time() + grace
+    while time.time() < deadline:
+        if _iface_is_up(ifname):
+            return True
+        if not is_running():
+            break
+        _ensure_iface_up(ifname)
+        time.sleep(interval)
+    return _iface_is_up(ifname)
+
+
 def _nmcli_path() -> Optional[str]:
     return shutil.which("nmcli")
 
@@ -889,6 +930,7 @@ def _attempt_start_candidate(
     expected_ap_ifname: Optional[str],
     require_band: Optional[str],
     require_width_mhz: Optional[int],
+    iface_up_grace_s: float = 0.0,
 ) -> Tuple[Optional[APReadyInfo], Optional[object], Optional[str], Optional[str], List[str], List[str]]:
     res = start_engine(cmd, firewalld_cfg=firewalld_cfg)
     update_state(
@@ -955,8 +997,13 @@ def _attempt_start_candidate(
         return None, res, "ap_start_timed_out", None, latest_stdout, latest_stderr
 
     if not _iface_is_up(ap_info.ifname):
-        if _ensure_iface_up(ap_info.ifname):
-            log.info("ap_iface_brought_up", extra={"ap_interface": ap_info.ifname})
+        if _ensure_iface_up_with_grace(ap_info.ifname, grace_s=iface_up_grace_s):
+            event = "ap_iface_brought_up"
+            extra: Dict[str, object] = {"ap_interface": ap_info.ifname}
+            if iface_up_grace_s > 0:
+                event = "ap_iface_brought_up_with_grace"
+                extra["grace_s"] = iface_up_grace_s
+            log.info(event, extra=extra)
         else:
             return None, res, "ap_start_timed_out", "iface_not_up", latest_stdout, latest_stderr
 
@@ -1026,6 +1073,7 @@ def _start_hotspot_5ghz_strict(
     enforced_channel_5g: Optional[int],
     allow_fallback_40mhz: bool,
     allow_dfs_channels: bool,
+    iface_up_grace_s: float = 0.0,
 ) -> LifecycleResult:
     attempts: List[Dict[str, Any]] = []
     preferred_primary_channel: Optional[int] = None
@@ -1209,6 +1257,7 @@ def _start_hotspot_5ghz_strict(
             expected_ap_ifname=_expected_ifname(optimized_no_virt),
             require_band="5ghz",
             require_width_mhz=80,
+            iface_up_grace_s=iface_up_grace_s,
         )
         if ap_info:
             attempts.append({"candidate": candidate, "failure_reason": None, "no_virt": optimized_no_virt})
@@ -1243,6 +1292,7 @@ def _start_hotspot_5ghz_strict(
                 expected_ap_ifname=_expected_ifname(retry_no_virt),
                 require_band="5ghz",
                 require_width_mhz=80,
+                iface_up_grace_s=iface_up_grace_s,
             )
             if ap_info_retry:
                 attempts.append({"candidate": candidate, "failure_reason": None, "no_virt": retry_no_virt})
@@ -1286,6 +1336,7 @@ def _start_hotspot_5ghz_strict(
                 expected_ap_ifname=_expected_ifname(optimized_no_virt),
                 require_band="5ghz",
                 require_width_mhz=40,
+                iface_up_grace_s=iface_up_grace_s,
             )
             if ap_info:
                 attempts.append({"candidate": candidate, "failure_reason": None, "no_virt": optimized_no_virt})
@@ -2222,6 +2273,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         cfg, platform_warnings = os_release.apply_platform_overrides(cfg, platform_info)
     except Exception as e:
         platform_warnings = [f"platform_overrides_failed:{e}"]
+    platform_is_cachyos = os_release.is_cachyos(platform_info)
     use_hostapd_nat = os_release.is_bazzite(platform_info)
     if use_hostapd_nat:
         platform_warnings.append("platform_bazzite_use_hostapd_nat")
@@ -2245,6 +2297,10 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     country = cfg.get("country")
     band_pref = cfg.get("band_preference", "5ghz")
     ap_ready_timeout_s = float(cfg.get("ap_ready_timeout_s", 6.0))
+    iface_up_grace_s = 0.0
+    if platform_is_cachyos:
+        iface_up_grace_s = min(6.0, max(2.0, ap_ready_timeout_s / 2.0))
+        platform_warnings.append("platform_cachyos_iface_up_grace")
     optimized_no_virt = bool(cfg.get("optimized_no_virt", False))
     debug = bool(cfg.get("debug", False))
     enable_internet = bool(cfg.get("enable_internet", True))
@@ -2521,6 +2577,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             enforced_channel_5g=enforced_channel_5g,
             allow_fallback_40mhz=allow_fallback_40mhz,
             allow_dfs_channels=allow_dfs_channels,
+            iface_up_grace_s=iface_up_grace_s,
         )
 
     # Attempt 1: requested band
