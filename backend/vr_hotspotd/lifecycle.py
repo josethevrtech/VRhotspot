@@ -1091,6 +1091,7 @@ def _start_hotspot_5ghz_strict(
     allow_dfs_channels: bool,
     iface_up_grace_s: float = 0.0,
     ap_ready_nohint_retry_s: float = 0.0,
+    pop_timeout_retry_no_virt: bool = False,
 ) -> LifecycleResult:
     attempts: List[Dict[str, Any]] = []
     preferred_primary_channel: Optional[int] = None
@@ -1294,6 +1295,53 @@ def _start_hotspot_5ghz_strict(
         )
         last_failure_code = failure_code
         last_failure_detail = failure_detail
+
+        pop_timeout_retry = (
+            pop_timeout_retry_no_virt
+            and (not bridge_mode)
+            and (not optimized_no_virt)
+            and failure_code == "ap_start_timed_out"
+            and not failure_detail
+        )
+        if pop_timeout_retry:
+            start_warnings.append("platform_pop_timeout_retry_no_virt")
+            _cleanup_attempt()
+            retry_no_virt = True
+            cmd_retry = _build_cmd_for_candidate(candidate, retry_no_virt, 80)
+            ap_info_retry, res_retry, failure_code, failure_detail, out_tail, err_tail = _attempt_start_candidate(
+                cmd=cmd_retry,
+                firewalld_cfg=fw_cfg,
+                target_phy=target_phy,
+                ap_ready_timeout_s=ap_ready_timeout_s,
+                ssid=ssid,
+                adapter_ifname=ap_ifname,
+                expected_ap_ifname=_expected_ifname(retry_no_virt),
+                require_band="5ghz",
+                require_width_mhz=80,
+                iface_up_grace_s=iface_up_grace_s,
+                ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
+            )
+            if ap_info_retry:
+                attempts.append({"candidate": candidate, "failure_reason": None, "no_virt": retry_no_virt})
+                ap_info_final = ap_info_retry
+                res_final = res_retry
+                selected_candidate = candidate
+                start_warnings.append("platform_pop_timeout_retry_no_virt_used")
+                break
+
+            attempts.append(
+                {
+                    "candidate": candidate,
+                    "failure_reason": failure_code,
+                    "failure_detail": failure_detail,
+                    "no_virt": retry_no_virt,
+                }
+            )
+            last_failure_code = failure_code
+            last_failure_detail = failure_detail
+            _cleanup_attempt()
+            continue
+
         driver_error = _stdout_has_hostapd_driver_error(out_tail or [])
         if driver_error and (not bridge_mode):
             start_warnings.append("optimized_no_virt_retry_with_virt" if optimized_no_virt else "optimized_virt_retry_with_no_virt")
@@ -2604,6 +2652,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             allow_dfs_channels=allow_dfs_channels,
             iface_up_grace_s=iface_up_grace_s,
             ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
+            pop_timeout_retry_no_virt=platform_is_pop,
         )
 
     # Attempt 1: requested band

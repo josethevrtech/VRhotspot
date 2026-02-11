@@ -631,6 +631,10 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
             0.0,
             f"Non-Pop should keep ap_ready_nohint_retry_s=0.0, got: {call_kwargs}",
         )
+        self.assertFalse(
+            bool(call_kwargs.get("pop_timeout_retry_no_virt", False)),
+            f"Non-Pop should keep pop_timeout_retry_no_virt disabled, got: {call_kwargs}",
+        )
 
     @patch("vr_hotspotd.lifecycle.load_config")
     @patch("vr_hotspotd.lifecycle.load_state")
@@ -709,6 +713,10 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
             float(call_kwargs.get("ap_ready_nohint_retry_s", 0.0)),
             0.0,
             f"Pop should set ap_ready_nohint_retry_s>0, got: {call_kwargs}",
+        )
+        self.assertTrue(
+            bool(call_kwargs.get("pop_timeout_retry_no_virt", False)),
+            f"Pop should enable pop_timeout_retry_no_virt, got: {call_kwargs}",
         )
 
 
