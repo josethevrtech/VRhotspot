@@ -931,6 +931,7 @@ def _attempt_start_candidate(
     require_band: Optional[str],
     require_width_mhz: Optional[int],
     iface_up_grace_s: float = 0.0,
+    ap_ready_nohint_retry_s: float = 0.0,
 ) -> Tuple[Optional[APReadyInfo], Optional[object], Optional[str], Optional[str], List[str], List[str]]:
     res = start_engine(cmd, firewalld_cfg=firewalld_cfg)
     update_state(
@@ -984,6 +985,21 @@ def _attempt_start_candidate(
             log.info(
                 "ap_ready_retry_wait",
                 extra={"extra_wait_s": extra_wait_s, "reason": "stdout_ready_hint"},
+            )
+            ap_info = _wait_for_ap_ready(
+                target_phy,
+                extra_wait_s,
+                ssid=ssid,
+                adapter_ifname=adapter_ifname,
+                expected_ap_ifname=expected_ap_ifname,
+            )
+            if ap_info:
+                return ap_info, res, None, None, latest_stdout, latest_stderr
+        if ap_ready_nohint_retry_s > 0 and is_running():
+            extra_wait_s = max(2.0, float(ap_ready_nohint_retry_s))
+            log.info(
+                "ap_ready_retry_wait",
+                extra={"extra_wait_s": extra_wait_s, "reason": "platform_nohint_retry"},
             )
             ap_info = _wait_for_ap_ready(
                 target_phy,
@@ -1074,6 +1090,7 @@ def _start_hotspot_5ghz_strict(
     allow_fallback_40mhz: bool,
     allow_dfs_channels: bool,
     iface_up_grace_s: float = 0.0,
+    ap_ready_nohint_retry_s: float = 0.0,
 ) -> LifecycleResult:
     attempts: List[Dict[str, Any]] = []
     preferred_primary_channel: Optional[int] = None
@@ -1258,6 +1275,7 @@ def _start_hotspot_5ghz_strict(
             require_band="5ghz",
             require_width_mhz=80,
             iface_up_grace_s=iface_up_grace_s,
+            ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
         )
         if ap_info:
             attempts.append({"candidate": candidate, "failure_reason": None, "no_virt": optimized_no_virt})
@@ -1293,6 +1311,7 @@ def _start_hotspot_5ghz_strict(
                 require_band="5ghz",
                 require_width_mhz=80,
                 iface_up_grace_s=iface_up_grace_s,
+                ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
             )
             if ap_info_retry:
                 attempts.append({"candidate": candidate, "failure_reason": None, "no_virt": retry_no_virt})
@@ -1337,6 +1356,7 @@ def _start_hotspot_5ghz_strict(
                 require_band="5ghz",
                 require_width_mhz=40,
                 iface_up_grace_s=iface_up_grace_s,
+                ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
             )
             if ap_info:
                 attempts.append({"candidate": candidate, "failure_reason": None, "no_virt": optimized_no_virt})
@@ -2274,6 +2294,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     except Exception as e:
         platform_warnings = [f"platform_overrides_failed:{e}"]
     platform_is_cachyos = os_release.is_cachyos(platform_info)
+    platform_is_pop = os_release.is_pop_os(platform_info)
     use_hostapd_nat = os_release.is_bazzite(platform_info)
     if use_hostapd_nat:
         platform_warnings.append("platform_bazzite_use_hostapd_nat")
@@ -2298,9 +2319,13 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     band_pref = cfg.get("band_preference", "5ghz")
     ap_ready_timeout_s = float(cfg.get("ap_ready_timeout_s", 6.0))
     iface_up_grace_s = 0.0
+    ap_ready_nohint_retry_s = 0.0
     if platform_is_cachyos:
         iface_up_grace_s = min(6.0, max(2.0, ap_ready_timeout_s / 2.0))
         platform_warnings.append("platform_cachyos_iface_up_grace")
+    if platform_is_pop:
+        ap_ready_nohint_retry_s = min(12.0, max(6.0, ap_ready_timeout_s / 2.0))
+        platform_warnings.append("platform_pop_ap_ready_nohint_retry")
     optimized_no_virt = bool(cfg.get("optimized_no_virt", False))
     debug = bool(cfg.get("debug", False))
     enable_internet = bool(cfg.get("enable_internet", True))
@@ -2578,6 +2603,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             allow_fallback_40mhz=allow_fallback_40mhz,
             allow_dfs_channels=allow_dfs_channels,
             iface_up_grace_s=iface_up_grace_s,
+            ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
         )
 
     # Attempt 1: requested band
