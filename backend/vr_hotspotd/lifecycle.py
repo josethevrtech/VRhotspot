@@ -1957,7 +1957,15 @@ def _start_hotspot_5ghz_strict(
                 if prep_loop_warnings:
                     start_warnings.extend(prep_loop_warnings)
 
-        if pop_timeout_retry_no_virt and not _iface_exists(ap_ifname):
+        # In hostapd_nat virtual-first mode, keep the original iface for the
+        # initial no-virt retry and only reselect after explicit parent-missing
+        # evidence from that retry path.
+        prestart_missing_reselect = (
+            pop_timeout_retry_no_virt
+            and (not _iface_exists(ap_ifname))
+            and (optimized_no_virt or (not use_hostapd_nat))
+        )
+        if prestart_missing_reselect:
             start_warnings.append("ap_iface_missing_prestart")
             old_ifname = ap_ifname
             ap_ifname, inv, adapter_now, reselect_warnings = _maybe_reselect_ap_after_prestart_failure(
