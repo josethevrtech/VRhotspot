@@ -27,7 +27,7 @@ print_header() {
     echo -e "${CYAN}${BOLD}"
     echo "╔══════════════════════════════════════════════════════════════════╗"
     echo "║            $APP_NAME - Enhanced Interactive Installer             ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "╚══════════════════════════════════════════════════════════════════╝${NC}"
 }
 
 print_step() { echo -e "${BLUE}${BOLD}▶ $1${NC}"; }
@@ -66,6 +66,99 @@ prompt_yes_no() {
                 ;;
         esac
     done
+}
+
+_fix_apt_code_repo_signedby_conflict() {
+    local marker="packages.microsoft.com/repos/code"
+    local ts
+    ts="$(date +%s)"
+    local -a hits=()
+    local f
+
+    if [ -f /etc/apt/sources.list ] && grep -Eq "^[[:space:]]*deb(-src)?[[:space:]].*${marker}" /etc/apt/sources.list; then
+        hits+=("/etc/apt/sources.list")
+    fi
+
+    shopt -s nullglob
+    for f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$f" ] || continue
+        if [ "${f##*.}" = "list" ]; then
+            if grep -Eq "^[[:space:]]*deb(-src)?[[:space:]].*${marker}" "$f"; then
+                hits+=("$f")
+            fi
+        else
+            if grep -Eq "^[[:space:]]*URIs:[[:space:]]*https?://packages.microsoft.com/repos/code" "$f"; then
+                hits+=("$f")
+            fi
+        fi
+    done
+    shopt -u nullglob
+
+    if [ "${#hits[@]}" -le 1 ]; then
+        return 1
+    fi
+
+    print_warning "Detected duplicate VS Code apt source entries with different Signed-By values."
+    print_info "Keeping: ${hits[0]}"
+
+    local keep
+    keep="${hits[0]}"
+    local changed=0
+    for f in "${hits[@]}"; do
+        if [ "$f" = "$keep" ]; then
+            continue
+        fi
+
+        cp -a "$f" "${f}.vrhotspot.bak.${ts}" || true
+        if [ "$f" = "/etc/apt/sources.list" ] || [ "${f##*.}" = "list" ]; then
+            sed -i -E \
+                '/^[[:space:]]*deb(-src)?[[:space:]].*packages\.microsoft\.com\/repos\/code/s/^/# disabled-by-vr-hotspot /' \
+                "$f"
+            print_info "Commented conflicting entry in $f (backup: ${f}.vrhotspot.bak.${ts})"
+        else
+            if grep -Eiq '^[[:space:]]*Enabled:' "$f"; then
+                sed -i -E 's/^[[:space:]]*Enabled:[[:space:]]*.*/Enabled: no/I' "$f"
+            else
+                # Deb822 source file without Enabled key: prepend a global disable flag.
+                local tmpf
+                tmpf="$(mktemp)"
+                {
+                    echo "Enabled: no"
+                    cat "$f"
+                } >"$tmpf"
+                mv "$tmpf" "$f"
+            fi
+            print_info "Disabled conflicting source in-place: $f (backup: ${f}.vrhotspot.bak.${ts})"
+        fi
+        changed=1
+    done
+
+    [ "$changed" -eq 1 ]
+}
+
+_apt_update_with_retry() {
+    local log_file
+    log_file="$(mktemp)"
+    if apt-get update -qq >"$log_file" 2>&1; then
+        rm -f "$log_file"
+        return 0
+    fi
+
+    if grep -q "Conflicting values set for option Signed-By" "$log_file" && \
+       grep -q "packages.microsoft.com/repos/code" "$log_file"; then
+        print_warning "apt update failed due to VS Code repo Signed-By conflict."
+        if _fix_apt_code_repo_signedby_conflict; then
+            print_info "Retrying apt update after source cleanup..."
+            if apt-get update -qq; then
+                rm -f "$log_file"
+                return 0
+            fi
+        fi
+    fi
+
+    cat "$log_file" >&2
+    rm -f "$log_file"
+    return 1
 }
 
 # --- Pre-flight & Cleanup ---
@@ -228,7 +321,7 @@ install_dependencies() {
             [[ "$OS_ID" == "steamos" ]] && steamos-readonly enable || true
             ;;
         apt)
-            apt-get update -qq
+            _apt_update_with_retry
             apt-get install -y python3 python3-pip python3-venv iw iproute2 iptables hostapd dnsmasq
             ;;
         dnf)
@@ -351,6 +444,8 @@ configure_install() {
         echo "VR_HOTSPOTD_API_TOKEN=$API_TOKEN"
         echo "VR_HOTSPOTD_HOST=$BIND_IP"
         echo "VR_HOTSPOTD_PORT=8732"
+        # Pop!_OS stability: keep destructive WiFi driver reload recovery disabled by default.
+        echo "VR_HOTSPOTD_ENABLE_DRIVER_RELOAD_RECOVERY=0"
     } > "$ENV_FILE"
     if [ "$OS_ID" = "bazzite" ]; then
         echo "VR_HOTSPOT_VENDOR_PROFILE=bazzite" >> "$ENV_FILE"

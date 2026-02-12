@@ -35,6 +35,20 @@ def _iptables_path() -> Optional[str]:
     return shutil.which("iptables")
 
 
+def _iptables_cmd(ipt: str, action: str, rule: List[str]) -> List[str]:
+    cmd: List[str] = [ipt]
+    if len(rule) >= 2 and rule[0] == "-t":
+        # iptables syntax requires table selection before action:
+        #   iptables -t mangle -A POSTROUTING ...
+        cmd.extend(rule[:2])
+        cmd.append(action)
+        cmd.extend(rule[2:])
+        return cmd
+    cmd.append(action)
+    cmd.extend(rule)
+    return cmd
+
+
 def _apply_qdisc(ap_ifname: str, kind: str, priority: Optional[str] = None) -> Tuple[Optional[Dict[str, str]], List[str]]:
     warnings: List[str] = []
     tc = _tc_path()
@@ -77,23 +91,17 @@ def _iptables_add_unique(rule: List[str]) -> Tuple[bool, str]:
     ipt = _iptables_path()
     if not ipt:
         return False, "iptables_not_found"
-    check_rule = rule[:]
-    check_rule.insert(1, "-C")
-    ok, _out = _run([ipt] + check_rule)
+    ok, _out = _run(_iptables_cmd(ipt, "-C", rule))
     if ok:
         return True, "exists"
-    add_rule = rule[:]
-    add_rule.insert(1, "-A")
-    return _run([ipt] + add_rule)
+    return _run(_iptables_cmd(ipt, "-A", rule))
 
 
 def _iptables_del(rule: List[str]) -> None:
     ipt = _iptables_path()
     if not ipt:
         return
-    del_rule = rule[:]
-    del_rule.insert(1, "-D")
-    _run([ipt] + del_rule)
+    _run(_iptables_cmd(ipt, "-D", rule))
 
 
 def _dscp_rule(ap_ifname: str, dscp: str) -> List[str]:

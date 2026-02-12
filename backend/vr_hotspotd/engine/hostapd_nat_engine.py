@@ -1,7 +1,9 @@
 import argparse
+import hashlib
 import ipaddress
 import os
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -14,11 +16,19 @@ from typing import Optional, List, Tuple
 from vr_hotspotd import os_release
 
 _CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
+_CMD_TIMEOUT_S = 4.0
 
 
 def _is_bazzite() -> bool:
     try:
         return os_release.is_bazzite()
+    except Exception:
+        return False
+
+
+def _is_pop_os() -> bool:
+    try:
+        return os_release.is_pop_os()
     except Exception:
         return False
 
@@ -37,8 +47,12 @@ def _remove_pidfile(path: Path) -> None:
         print(f"pidfile_remove_failed: {path} err={exc}")
 
 
-def _run(cmd: List[str], check: bool = True) -> Tuple[int, str]:
-    p = subprocess.run(cmd, capture_output=True, text=True)
+def _run(cmd: List[str], check: bool = True, timeout_s: float = _CMD_TIMEOUT_S) -> Tuple[int, str]:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired as exc:
+        out = (exc.stdout or "") + ("\n" + exc.stderr if exc.stderr else "")
+        raise RuntimeError(f"cmd_timeout cmd={' '.join(cmd)} out={out.strip()}") from exc
     out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
     if check and p.returncode != 0:
         raise RuntimeError(f"cmd_failed rc={p.returncode} cmd={' '.join(cmd)} out={out.strip()}")
@@ -100,6 +114,71 @@ def _mk_virt_name(base: str) -> str:
     return cand[:15]
 
 
+def _is_iface_name_conflict_text(text: object) -> bool:
+    low = str(text or "").lower()
+    return ("name not unique on network" in low) or ("file exists" in low)
+
+
+def _is_iface_name_conflict_exc(exc: Exception) -> bool:
+    return _is_iface_name_conflict_text(exc)
+
+
+def _virt_name_candidates(parent_if: str, preferred: Optional[str] = None) -> List[str]:
+    token = re.sub(r"[^A-Za-z0-9]", "", str(parent_if or ""))
+    if not token:
+        token = "ap"
+    digest = hashlib.sha1(token.encode("utf-8")).hexdigest()
+    raw: List[str] = []
+    if preferred:
+        raw.append(preferred)
+    raw.append(_mk_virt_name(parent_if))
+    for i in range(0, 8):
+        raw.append(f"x{digest[i]}{token}")
+    for i in range(0, 10):
+        raw.append(f"x{i}{token}")
+    out: List[str] = []
+    seen = set()
+    for cand in raw:
+        norm = re.sub(r"[^A-Za-z0-9_.-]", "", str(cand or ""))[:15]
+        if len(norm) < 2:
+            continue
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return out
+
+
+def _create_virtual_ap_iface_with_fallback(parent_if: str, preferred_if: Optional[str] = None) -> str:
+    last_exc: Optional[Exception] = None
+    tried: List[str] = []
+    for virt_if in _virt_name_candidates(parent_if, preferred=preferred_if):
+        tried.append(virt_if)
+        # Best-effort stale cleanup before creation attempt.
+        _delete_iface(virt_if)
+        try:
+            _create_virtual_ap_iface(parent_if, virt_if)
+            return virt_if
+        except Exception as exc:
+            last_exc = exc
+            if _is_iface_name_conflict_exc(exc):
+                _delete_iface(virt_if)
+                try:
+                    _create_virtual_ap_iface(parent_if, virt_if)
+                    return virt_if
+                except Exception as exc_retry:
+                    last_exc = exc_retry
+                    if _is_iface_name_conflict_exc(exc_retry):
+                        continue
+                    raise
+            if _is_iface_name_conflict_exc(exc):
+                continue
+            raise
+    raise RuntimeError(
+        f"virtual_iface_create_failed parent={parent_if} tried={','.join(tried)} err={last_exc}"
+    )
+
+
 def _create_virtual_ap_iface(parent_if: str, virt_if: str) -> None:
     iw = shutil.which("iw") or "/usr/sbin/iw"
     _run([iw, "dev", parent_if, "interface", "add", virt_if, "type", "__ap"], check=True)
@@ -113,6 +192,114 @@ def _delete_iface(ifname: str) -> None:
 def _iface_up(ifname: str) -> None:
     ip = shutil.which("ip") or "/usr/sbin/ip"
     _run([ip, "link", "set", ifname, "up"], check=True)
+
+
+def _iface_disconnect(ifname: str) -> None:
+    iw = shutil.which("iw") or "/usr/sbin/iw"
+    subprocess.run([iw, "dev", ifname, "disconnect"], check=False, capture_output=True, text=True)
+
+
+def _remove_p2p_dev_ifaces(parent_if: str) -> List[str]:
+    removed: List[str] = []
+    if not parent_if:
+        return removed
+    iw = shutil.which("iw") or "/usr/sbin/iw"
+    try:
+        _, out = _run([iw, "dev"], check=False)
+    except Exception:
+        return removed
+
+    candidates: List[str] = []
+    for raw in out.splitlines():
+        line = raw.strip()
+        if not line.startswith("Interface "):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        ifname = parts[1].strip()
+        if not ifname:
+            continue
+        if ifname == f"p2p-dev-{parent_if}" or (ifname.startswith("p2p-dev-") and ifname.endswith(parent_if)):
+            candidates.append(ifname)
+
+    for ifname in sorted(set(candidates)):
+        p = subprocess.run([iw, "dev", ifname, "del"], check=False, capture_output=True, text=True)
+        if p.returncode == 0:
+            removed.append(ifname)
+            print(f"p2p_iface_removed iface={ifname}")
+        else:
+            err = (p.stderr or p.stdout or "").strip()
+            if err:
+                print(f"p2p_iface_remove_failed iface={ifname} err={err}")
+    return removed
+
+
+def _set_iface_type_ap(ifname: str) -> bool:
+    iw = shutil.which("iw") or "/usr/sbin/iw"
+    p = subprocess.run(
+        [iw, "dev", ifname, "set", "type", "__ap"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if p.returncode == 0:
+        print(f"iface_type_set_ap iface={ifname}")
+        return True
+    err = (p.stderr or p.stdout or "").strip()
+    if err:
+        print(f"iface_type_set_ap_failed iface={ifname} err={err}")
+    return False
+
+
+def _set_iface_type_managed(ifname: str) -> bool:
+    iw = shutil.which("iw") or "/usr/sbin/iw"
+    p = subprocess.run(
+        [iw, "dev", ifname, "set", "type", "managed"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if p.returncode == 0:
+        print(f"iface_type_set_managed iface={ifname}")
+        return True
+    err = (p.stderr or p.stdout or "").strip()
+    if err:
+        print(f"iface_type_set_managed_failed iface={ifname} err={err}")
+    return False
+
+
+def _iface_up_with_recovery(ifname: str, *, no_virt: bool = False) -> None:
+    last_exc: Optional[Exception] = None
+    max_attempts = 6
+    for attempt in range(max_attempts):
+        try:
+            _iface_up(ifname)
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= (max_attempts - 1):
+                break
+            # Best-effort release sequence for adapters still held by managed mode/supplicant.
+            print(f"iface_up_retry iface={ifname} attempt={attempt + 1}/{max_attempts} reason={exc}")
+            _rfkill_unblock_wifi()
+            if _is_nm_running() and _nm_knows(ifname):
+                _nm_disconnect(ifname)
+                _nm_set_managed(ifname, False)
+            _nm_disconnect(ifname)
+            _remove_p2p_dev_ifaces(ifname)
+            _iface_disconnect(ifname)
+            _iface_down(ifname)
+            if no_virt:
+                _set_iface_type_managed(ifname)
+                time.sleep(0.05)
+                _set_iface_type_ap(ifname)
+            _flush_ip(ifname)
+            # Busy nl80211 transitions can take a moment to settle on Pop!/MT7921U.
+            time.sleep(0.35 + (0.25 * attempt))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"iface_up_failed:{ifname}")
 
 
 def _iface_down(ifname: str) -> None:
@@ -579,102 +766,12 @@ def main() -> int:
 
     created_virt = False
     ap_iface = args.ap_ifname
-
-    if not args.no_virt:
-        virt = _mk_virt_name(args.ap_ifname)
-        _create_virtual_ap_iface(args.ap_ifname, virt)
-        created_virt = True
-        ap_iface = virt
-
     nm_marked_unmanaged: Optional[str] = None
-    if _is_nm_running() and _nm_knows(ap_iface):
-        _nm_disconnect(ap_iface)
-        if _nm_set_managed(ap_iface, False):
-            nm_marked_unmanaged = ap_iface
-
-    _rfkill_unblock_wifi()
-
-    _iface_down(ap_iface)
-    _flush_ip(ap_iface)
-    _iface_up(ap_iface)
-
-    channel = int(args.channel) if args.channel is not None else (6 if band == "2.4ghz" else 36)
-
-    mode = "full"
-    strict_width = bool(args.strict_width)
     hostapd_p: Optional[subprocess.Popen] = None
-    early_rc: Optional[int] = None
-    early_lines: List[str] = []
-
-    while True:
-        _write_hostapd_conf(
-            path=hostapd_conf,
-            ifname=ap_iface,
-            ssid=args.ssid,
-            passphrase=args.passphrase,
-            country=args.country,
-            band=band,
-            channel=channel,
-            ap_security=str(args.ap_security).strip().lower(),
-            wifi6=bool(args.wifi6),
-            channel_width=args.channel_width,
-            beacon_interval=args.beacon_interval,
-            dtim_period=args.dtim_period,
-            short_guard_interval=args.short_guard_interval,
-            tx_power=args.tx_power,
-            mode=mode,
-        )
-        _ensure_ctrl_interface_dir(hostapd_conf)
-        hostapd_cmd = [hostapd, hostapd_conf]
-
-        if args.debug:
-            hostapd_cmd = [hostapd, "-dd", hostapd_conf]
-
-        hostapd_p = subprocess.Popen(
-            hostapd_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        time.sleep(0.6)
-        if hostapd_p.poll() is None:
-            break
-
-        lines = _collect_proc_output(hostapd_p)
-        early_lines = lines
-        _emit_lines(lines)
-        if strict_width:
-            early_rc = hostapd_p.returncode or 1
-            break
-
-        if mode == "legacy" or not _should_retry_compat(lines):
-            early_rc = hostapd_p.returncode or 1
-            if not early_lines:
-                _emit_lines(
-                    [
-                        f"hostapd_start_failed strict_width=0 mode={mode} rc={early_rc}",
-                        "hostapd_start_failed_reason=no_output",
-                    ]
-                )
-            else:
-                _emit_lines([f"hostapd_start_failed strict_width=0 mode={mode} rc={early_rc}"])
-            break
-
-        if mode == "full":
-            print("hostapd_compat_retry: reduced config")
-            mode = "reduced"
-        else:
-            print("hostapd_compat_retry: legacy config")
-            mode = "legacy"
-        _iface_down(ap_iface)
-        _flush_ip(ap_iface)
-        _iface_up(ap_iface)
-
-    if bazzite and hostapd_p and hostapd_p.poll() is None:
-        _write_pidfile(hostapd_pid_path, hostapd_p.pid)
-        print(f"pidfile_written: {hostapd_pid_path}")
     dnsmasq_p: Optional[subprocess.Popen] = None
     nat_rules: List[List[str]] = []
+    early_rc: Optional[int] = None
+    early_lines: List[str] = []
 
     stopping = False
 
@@ -694,8 +791,149 @@ def main() -> int:
     def _on_sigterm(_signum, _frame):
         _stop_children()
 
-    signal.signal(signal.SIGTERM, _on_sigterm)
-    signal.signal(signal.SIGINT, _on_sigterm)
+    try:
+        _remove_p2p_dev_ifaces(args.ap_ifname)
+        if not args.no_virt:
+            virt = _create_virtual_ap_iface_with_fallback(args.ap_ifname, _mk_virt_name(args.ap_ifname))
+            created_virt = True
+            ap_iface = virt
+
+        if _is_nm_running() and _nm_knows(ap_iface):
+            _nm_disconnect(ap_iface)
+            if _nm_set_managed(ap_iface, False):
+                nm_marked_unmanaged = ap_iface
+
+        _rfkill_unblock_wifi()
+
+        def _prepare_ap_iface_for_start() -> None:
+            nonlocal ap_iface, nm_marked_unmanaged
+            _iface_down(ap_iface)
+            _flush_ip(ap_iface)
+            if args.no_virt:
+                _set_iface_type_ap(ap_iface)
+            try:
+                _iface_up_with_recovery(ap_iface, no_virt=bool(args.no_virt))
+            except Exception as exc:
+                if created_virt and (not args.no_virt) and _is_iface_name_conflict_exc(exc):
+                    print(f"virt_iface_name_conflict_recreate iface={ap_iface} err={exc}")
+                    _delete_iface(ap_iface)
+                    ap_iface = _create_virtual_ap_iface_with_fallback(args.ap_ifname)
+                    if _is_nm_running() and _nm_knows(ap_iface):
+                        _nm_disconnect(ap_iface)
+                        if _nm_set_managed(ap_iface, False):
+                            nm_marked_unmanaged = ap_iface
+                    _iface_down(ap_iface)
+                    _flush_ip(ap_iface)
+                    _iface_up_with_recovery(ap_iface, no_virt=False)
+                    return
+                raise
+
+        _prepare_ap_iface_for_start()
+
+        channel = int(args.channel) if args.channel is not None else (6 if band == "2.4ghz" else 36)
+
+        mode = "full"
+        strict_width = bool(args.strict_width)
+
+        while True:
+            _write_hostapd_conf(
+                path=hostapd_conf,
+                ifname=ap_iface,
+                ssid=args.ssid,
+                passphrase=args.passphrase,
+                country=args.country,
+                band=band,
+                channel=channel,
+                ap_security=str(args.ap_security).strip().lower(),
+                wifi6=bool(args.wifi6),
+                channel_width=args.channel_width,
+                beacon_interval=args.beacon_interval,
+                dtim_period=args.dtim_period,
+                short_guard_interval=args.short_guard_interval,
+                tx_power=args.tx_power,
+                mode=mode,
+            )
+            _ensure_ctrl_interface_dir(hostapd_conf)
+            hostapd_cmd = [hostapd, hostapd_conf]
+
+            if args.debug:
+                hostapd_cmd = [hostapd, "-dd", hostapd_conf]
+
+            hostapd_p = subprocess.Popen(
+                hostapd_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            time.sleep(0.6)
+            if hostapd_p.poll() is None:
+                break
+
+            lines = _collect_proc_output(hostapd_p)
+            early_lines = lines
+            _emit_lines(lines)
+            if strict_width:
+                early_rc = hostapd_p.returncode or 1
+                break
+
+            if mode == "legacy" or not _should_retry_compat(lines):
+                early_rc = hostapd_p.returncode or 1
+                if not early_lines:
+                    _emit_lines(
+                        [
+                            f"hostapd_start_failed strict_width=0 mode={mode} rc={early_rc}",
+                            "hostapd_start_failed_reason=no_output",
+                        ]
+                    )
+                else:
+                    _emit_lines([f"hostapd_start_failed strict_width=0 mode={mode} rc={early_rc}"])
+                break
+
+            if mode == "full":
+                print("hostapd_compat_retry: reduced config")
+                mode = "reduced"
+            else:
+                print("hostapd_compat_retry: legacy config")
+                mode = "legacy"
+            _prepare_ap_iface_for_start()
+
+        if bazzite and hostapd_p and hostapd_p.poll() is None:
+            _write_pidfile(hostapd_pid_path, hostapd_p.pid)
+            print(f"pidfile_written: {hostapd_pid_path}")
+
+        signal.signal(signal.SIGTERM, _on_sigterm)
+        signal.signal(signal.SIGINT, _on_sigterm)
+    except Exception:
+        _stop_children()
+        for p in (hostapd_p, dnsmasq_p):
+            if not p:
+                continue
+            try:
+                p.wait(timeout=0.5)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
+        try:
+            ip = shutil.which("ip") or "/usr/sbin/ip"
+            subprocess.run([ip, "addr", "flush", "dev", ap_iface], check=False, capture_output=True, text=True)
+        except Exception:
+            pass
+        if created_virt:
+            _delete_iface(ap_iface)
+        elif args.no_virt:
+            _set_iface_type_managed(ap_iface)
+        if nm_marked_unmanaged:
+            _nm_set_managed(nm_marked_unmanaged, True)
+        if bazzite:
+            _remove_pidfile(hostapd_pid_path)
+            _remove_pidfile(dnsmasq_pid_path)
+        try:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+        raise
 
     try:
         if hostapd_p is None:
@@ -726,15 +964,20 @@ def main() -> int:
                 if hostapd_p.poll() is not None or (dnsmasq_p and dnsmasq_p.poll() is not None):
                     break
 
-                for p in (hostapd_p, dnsmasq_p):
-                    if not p or not p.stdout:
-                        continue
-                    line = p.stdout.readline()
+                streams = [p.stdout for p in (hostapd_p, dnsmasq_p) if p and p.stdout]
+                if not streams:
+                    time.sleep(0.1)
+                    continue
+
+                ready, _, _ = select.select(streams, [], [], 0.2)
+                for stream in ready:
+                    try:
+                        line = stream.readline()
+                    except Exception:
+                        line = ""
                     if line:
                         sys.stdout.write(line)
                         sys.stdout.flush()
-
-                time.sleep(0.05)
     finally:
         _stop_children()
         for p in (hostapd_p, dnsmasq_p):
@@ -763,6 +1006,8 @@ def main() -> int:
 
         if created_virt:
             _delete_iface(ap_iface)
+        elif args.no_virt:
+            _set_iface_type_managed(ap_iface)
 
         if nm_marked_unmanaged:
             _nm_set_managed(nm_marked_unmanaged, True)

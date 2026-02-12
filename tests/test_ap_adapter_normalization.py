@@ -13,3 +13,14 @@ def test_normalize_ap_adapter_maps_virtual_to_physical():
 def test_normalize_ap_adapter_keeps_unknown_virtual():
     inv = {"adapters": [{"ifname": "wlan1", "supports_ap": True}]}
     assert lifecycle._normalize_ap_adapter("x0missing", inv) == "x0missing"
+
+
+def test_normalize_ap_adapter_falls_back_to_recommended_when_stale_ifname():
+    inv = {
+        "adapters": [
+            {"ifname": "wlxNEW123456789", "supports_ap": True, "bus": "usb"},
+        ],
+        "recommended": "wlxNEW123456789",
+    }
+    with patch("vr_hotspotd.lifecycle.os.path.exists", return_value=False):
+        assert lifecycle._normalize_ap_adapter("wlxOLD123456789", inv) == "wlxNEW123456789"

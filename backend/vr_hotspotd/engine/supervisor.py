@@ -236,6 +236,10 @@ def _build_engine_env() -> Dict[str, str]:
       - Otherwise prefer system hostapd + dnsmasq when available.
     """
     env = os.environ.copy()
+    # Ensure Python-based engines flush logs immediately so early exits are
+    # visible to lifecycle classifiers (critical for Pop!_OS recovery paths).
+    env["PYTHONUNBUFFERED"] = "1"
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     vendor_bins = vendor_bin_dirs()
     vendor_resolved, vendor_lib_dir, vendor_profile, vendor_missing = resolve_vendor_required(
         ["hostapd", "dnsmasq"]

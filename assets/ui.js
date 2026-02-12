@@ -341,6 +341,7 @@ let cfgJustSaved = false;
 let passphraseDirty = false;
 let lastCfg = null;
 let lastAdapters = null;
+let lastStatus = null;
 
 const CFG_IDS = [
   "ssid", "wpa2_passphrase", "band_preference", "ap_security", "channel_6g", "country", "country_sel",
@@ -1356,25 +1357,32 @@ function updateDebugDetails(status) {
 }
 
 function updateStabilityChecklist(status) {
-  const banner = document.getElementById('bazziteStabilityChecklist');
-  const list = document.getElementById('bazziteStabilityList');
-  if (!banner || !list) return;
+  const banner = document.getElementById('platformStabilityChecklist');
+  const title = document.getElementById('platformStabilityTitle');
+  const list = document.getElementById('platformStabilityList');
+  if (!banner || !list || !title) return;
 
   const osId = status && status.platform && status.platform.os
     ? (status.platform.os.id || '').toLowerCase()
     : '';
-  if (osId !== 'bazzite') {
+  const isProMode = (getUiMode() === 'advanced');
+  const supported = (osId === 'bazzite' || osId === 'pop');
+  if (!isProMode || !supported) {
     banner.style.display = 'none';
     list.innerHTML = '';
     return;
   }
 
+  const platformLabel = (osId === 'pop') ? 'Pop!_OS' : 'Bazzite';
+  title.textContent = `${platformLabel} Pro Optimization Checklist`;
+
   const cfg = lastCfg || {};
   const items = [
+    { label: 'Disable virtualization (no-virt mode)', ok: !!cfg.optimized_no_virt },
     { label: 'Disable Wi-Fi power save', ok: !!cfg.wifi_power_save_disable },
     { label: 'Disable USB autosuspend', ok: !!cfg.usb_autosuspend_disable },
     { label: 'CPU performance mode', ok: !!cfg.cpu_governor_performance },
-    { label: 'Enable sysctl tuning', ok: !!cfg.sysctl_tuning },
+    { label: 'Enable systemd/sysctl tuning', ok: !!cfg.sysctl_tuning },
     { label: 'Enable interrupt coalescing', ok: !!cfg.interrupt_coalescing },
   ];
 
@@ -1404,6 +1412,11 @@ function updateStabilityChecklist(status) {
   }
 
   banner.style.display = '';
+}
+
+function getCurrentPlatformOsId() {
+  const os = lastStatus && lastStatus.platform && lastStatus.platform.os ? lastStatus.platform.os : null;
+  return os && os.id ? String(os.id).toLowerCase() : '';
 }
 
 // Chart Globals
@@ -1581,27 +1594,157 @@ function setMsg(text, kind = '') {
   }
 }
 
+let actionInFlight = false;
+let refreshRequestSeq = 0;
+
+function setActionControlsDisabled(disabled) {
+  const ids = [
+    'btnStart',
+    'btnStop',
+    'btnRepair',
+    'btnRestart',
+    'btnStartBasic',
+    'btnStopBasic',
+    'btnRepairBasic',
+  ];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !!disabled;
+  }
+}
+
+async function withActionLock(action) {
+  if (actionInFlight) return null;
+  actionInFlight = true;
+  setActionControlsDisabled(true);
+  try {
+    return await action();
+  } finally {
+    actionInFlight = false;
+    setActionControlsDisabled(false);
+  }
+}
+
+function stateIsRunning(state) {
+  return !!(state && (state.running || state.phase === 'running'));
+}
+
+function startResultLooksSuccessful(resp) {
+  if (!resp || !resp.ok || !resp.json) return false;
+  const code = String(resp.json.result_code || '').toLowerCase();
+  if (code === 'started' || code === 'already_running' || code === 'started_with_fallback') return true;
+  return stateIsRunning(resp.json.data || {});
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForRunningStatus(timeoutMs = 12000, intervalMs = 1000) {
+  const timeout = Math.max(0, Number(timeoutMs) || 0);
+  const interval = Math.max(250, Number(intervalMs) || 1000);
+  const deadline = Date.now() + timeout;
+  let lastState = null;
+  while (Date.now() <= deadline) {
+    const st = await api('/v1/status');
+    if (st.ok && st.json && st.json.data) {
+      lastState = st.json.data;
+      if (stateIsRunning(lastState)) return { running: true, state: lastState };
+    }
+    if (Date.now() >= deadline) break;
+    await sleep(interval);
+  }
+  return { running: false, state: lastState };
+}
+
 async function startHotspot(overrides, label) {
-  const prefix = label ? `Starting (${label})...` : 'Starting...';
-  setMsg(prefix);
-  const opts = { method: 'POST' };
+  await withActionLock(async () => {
+    const prefix = label ? `Starting (${label})...` : 'Starting...';
+    setMsg(prefix);
+    const payload = {};
+    if (overrides) payload.overrides = overrides;
 
-  // Build request body with basic_mode flag
-  const payload = {};
-  if (overrides) payload.overrides = overrides;
+    // Send basic_mode: true when UI is in Basic Mode for VR-optimized enforcement.
+    if (getUiMode() === 'basic') {
+      payload.basic_mode = true;
+    }
 
-  // Send basic_mode: true when UI is in Basic Mode for VR-optimized enforcement
-  if (getUiMode() === 'basic') {
-    payload.basic_mode = true;
-  }
+    const runStart = async () => {
+      const opts = { method: 'POST' };
+      if (Object.keys(payload).length > 0) opts.body = JSON.stringify(payload);
+      return api('/v1/start', opts);
+    };
 
-  if (Object.keys(payload).length > 0) {
-    opts.body = JSON.stringify(payload);
-  }
+    const first = await runStart();
+    const firstCode = (first.json && first.json.result_code) ? first.json.result_code : `HTTP ${first.status}`;
 
-  const r = await api('/v1/start', opts);
-  setMsg(r.json ? ('Start: ' + r.json.result_code) : ('Start failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
-  await refresh();
+    if (startResultLooksSuccessful(first)) {
+      setMsg(`Start: ${firstCode}`);
+      await refresh();
+      return;
+    }
+
+    const recovered = await waitForRunningStatus(10000, 1000);
+    if (recovered.running) {
+      setMsg(`Start recovered: running (${firstCode})`);
+      await refresh();
+      return;
+    }
+
+    setMsg(`Start failed (${firstCode}). Attempting automatic repair + retry...`, 'dangerText');
+    const repairRes = await api('/v1/repair', { method: 'POST' });
+    const repairCode = (repairRes.json && repairRes.json.result_code) ? repairRes.json.result_code : `HTTP ${repairRes.status}`;
+    if (!repairRes.ok) {
+      setMsg(`Start failed (${firstCode}); repair failed (${repairCode}).`, 'dangerText');
+      await refresh();
+      return;
+    }
+
+    const retry = await runStart();
+    const retryCode = (retry.json && retry.json.result_code) ? retry.json.result_code : `HTTP ${retry.status}`;
+    if (startResultLooksSuccessful(retry)) {
+      setMsg(`Start recovered after repair: ${retryCode}`);
+      await refresh();
+      return;
+    }
+
+    const recoveredAfterRepair = await waitForRunningStatus(12000, 1000);
+    if (recoveredAfterRepair.running) {
+      setMsg(`Start recovered after repair: running (${retryCode})`);
+      await refresh();
+      return;
+    }
+
+    setMsg(`Start failed: ${retryCode}`, 'dangerText');
+    await refresh();
+  });
+}
+
+async function stopHotspot() {
+  await withActionLock(async () => {
+    setMsg('Stopping...');
+    const r = await api('/v1/stop', { method: 'POST' });
+    setMsg(r.json ? ('Stop: ' + r.json.result_code) : ('Stop failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
+    await refresh();
+  });
+}
+
+async function repairHotspot() {
+  await withActionLock(async () => {
+    setMsg('Repairing...');
+    const r = await api('/v1/repair', { method: 'POST' });
+    setMsg(r.json ? ('Repair: ' + r.json.result_code) : ('Repair failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
+    await refresh();
+  });
+}
+
+async function restartHotspot() {
+  await withActionLock(async () => {
+    setMsg('Restarting...');
+    const r = await api('/v1/restart', { method: 'POST' });
+    setMsg(r.json ? ('Restart: ' + r.json.result_code) : ('Restart failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
+    await refresh();
+  });
 }
 
 async function copyFieldValue(fieldId, label, fallbackIds = []) {
@@ -1964,7 +2107,18 @@ function applyVrProfile(profileName = 'balanced') {
     }
   };
 
-  const profile = profiles[profileName] || profiles['balanced'];
+  let profile = profiles[profileName] || profiles['balanced'];
+  const osId = getCurrentPlatformOsId();
+  if (osId === 'pop') {
+    profile = Object.assign({}, profile, {
+      optimized_no_virt: true,
+      wifi_power_save_disable: true,
+      usb_autosuspend_disable: true,
+      cpu_governor_performance: true,
+      sysctl_tuning: true,
+      interrupt_coalescing: true,
+    });
+  }
 
   setValueIf('band_preference', profile.band_preference);
   setValueIf('ap_security', profile.ap_security);
@@ -1999,6 +2153,7 @@ function applyVrProfile(profileName = 'balanced') {
   enforceBandRules();
   maybeAutoPickAdapterForBand();
   setDirty(true);
+  updateStabilityChecklist(lastStatus || {});
 }
 
 function getForm() {
@@ -2363,10 +2518,12 @@ async function loadAdapters() {
 }
 
 async function refresh() {
+  const requestSeq = ++refreshRequestSeq;
   const privacy = document.getElementById('privacyMode').checked;
   const stPath = privacy ? '/v1/status' : '/v1/status?include_logs=1';
 
   const [st, cfg] = await Promise.all([api(stPath), api('/v1/config')]);
+  if (requestSeq !== refreshRequestSeq) return;
 
   if (cfg.ok && cfg.json) {
     applyConfig(cfg.json.data || {});
@@ -2382,6 +2539,7 @@ async function refresh() {
   }
 
   const s = st.json.data || {};
+  lastStatus = s;
   setPill(s);
   updateBasicStatusMeta(s);
 
@@ -2712,24 +2870,15 @@ function init() {
   });
 
   document.getElementById('btnStop').addEventListener('click', async () => {
-    setMsg('Stopping...');
-    const r = await api('/v1/stop', { method: 'POST' });
-    setMsg(r.json ? ('Stop: ' + r.json.result_code) : ('Stop failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
-    await refresh();
+    await stopHotspot();
   });
 
   document.getElementById('btnRepair').addEventListener('click', async () => {
-    setMsg('Repairing...');
-    const r = await api('/v1/repair', { method: 'POST' });
-    setMsg(r.json ? ('Repair: ' + r.json.result_code) : ('Repair failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
-    await refresh();
+    await repairHotspot();
   });
 
   document.getElementById('btnRestart').addEventListener('click', async () => {
-    setMsg('Restarting...');
-    const r = await api('/v1/restart', { method: 'POST' });
-    setMsg(r.json ? ('Restart: ' + r.json.result_code) : ('Restart failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
-    await refresh();
+    await restartHotspot();
   });
 
   const btnToggleRawStatus = document.getElementById('btnToggleRawStatus');
@@ -2762,12 +2911,12 @@ function init() {
     }
   });
   const btnStopBasic = document.getElementById('btnStopBasic');
-  if (btnStopBasic) btnStopBasic.addEventListener('click', () => {
-    document.getElementById('btnStop').click();
+  if (btnStopBasic) btnStopBasic.addEventListener('click', async () => {
+    await stopHotspot();
   });
   const btnRepairBasic = document.getElementById('btnRepairBasic');
-  if (btnRepairBasic) btnRepairBasic.addEventListener('click', () => {
-    document.getElementById('btnRepair').click();
+  if (btnRepairBasic) btnRepairBasic.addEventListener('click', async () => {
+    await repairHotspot();
   });
 
   async function saveConfigOnly() {
@@ -2884,6 +3033,7 @@ function init() {
   if (modeToggle) {
     modeToggle.addEventListener('change', () => {
       uiModeState.setMode(modeToggle.checked ? 'advanced' : 'basic');
+      updateStabilityChecklist(lastStatus || {});
     });
   }
 

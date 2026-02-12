@@ -271,6 +271,22 @@ class TestNmPreStartGate(unittest.TestCase):
 
     @patch("vr_hotspotd.lifecycle._nm_is_running")
     @patch("vr_hotspotd.lifecycle._nm_device_state")
+    def test_nm_gate_check_returns_none_when_disconnected(
+        self,
+        mock_device_state,
+        mock_nm_running
+    ):
+        """NM gate should not block disconnected interfaces."""
+        mock_nm_running.return_value = True
+        mock_device_state.return_value = "disconnected"
+
+        from vr_hotspotd.lifecycle import _nm_gate_check
+
+        result = _nm_gate_check("wlan1")
+        self.assertIsNone(result)
+
+    @patch("vr_hotspotd.lifecycle._nm_is_running")
+    @patch("vr_hotspotd.lifecycle._nm_device_state")
     def test_nm_gate_check_returns_error_when_connected(
         self,
         mock_device_state,
@@ -719,6 +735,85 @@ class TestBasicModeFallbackBlocking(unittest.TestCase):
             f"Pop should enable pop_timeout_retry_no_virt, got: {call_kwargs}",
         )
 
+    @patch("vr_hotspotd.lifecycle.load_config")
+    @patch("vr_hotspotd.lifecycle.load_state")
+    @patch("vr_hotspotd.lifecycle.update_state")
+    @patch("vr_hotspotd.lifecycle.ensure_config_file")
+    @patch("vr_hotspotd.lifecycle._repair_impl")
+    @patch("vr_hotspotd.lifecycle.get_adapters")
+    @patch("vr_hotspotd.lifecycle._nm_gate_check")
+    @patch("vr_hotspotd.lifecycle._start_hotspot_5ghz_strict")
+    @patch("vr_hotspotd.os_release.read_os_release")
+    @patch("vr_hotspotd.os_release.is_pop_os")
+    @patch("vr_hotspotd.os_release.is_cachyos")
+    @patch("vr_hotspotd.os_release.is_bazzite")
+    @patch("os.makedirs")
+    @patch("pathlib.Path.mkdir")
+    @patch("shutil.chown")
+    def test_pop_os_switches_to_hostapd_nat_when_iface_busy_prestart(
+        self,
+        mock_chown,
+        mock_mkdir,
+        mock_makedirs,
+        mock_is_bazzite,
+        mock_is_cachyos,
+        mock_is_pop_os,
+        mock_read_os_release,
+        mock_5ghz_strict,
+        mock_nm_gate,
+        mock_get_adapters,
+        mock_repair_impl,
+        mock_ensure_config,
+        mock_update_state,
+        mock_load_state,
+        mock_load_config,
+    ):
+        """Pop!_OS should force hostapd_nat when prestart reports busy iface."""
+        mock_is_bazzite.return_value = False
+        mock_is_cachyos.return_value = False
+        mock_is_pop_os.return_value = True
+        mock_read_os_release.return_value = {"id": "pop", "id_like": "ubuntu debian"}
+        mock_nm_gate.return_value = None
+
+        from vr_hotspotd.lifecycle import LifecycleResult
+        mock_5ghz_strict.return_value = LifecycleResult("started", {"phase": "running"})
+
+        mock_get_adapters.return_value = {
+            "adapters": [
+                {
+                    "ifname": "wlan1",
+                    "phy": "phy1",
+                    "bus": "usb",
+                    "supports_ap": True,
+                    "supports_5ghz": True,
+                    "supports_80mhz": True,
+                }
+            ],
+            "recommended": "wlan1",
+        }
+        mock_load_config.return_value = {
+            "wpa2_passphrase": "password123",
+            "band_preference": "5ghz",
+        }
+        mock_load_state.return_value = {"phase": "stopped"}
+        mock_update_state.return_value = {"phase": "starting"}
+
+        from vr_hotspotd import lifecycle
+
+        with patch("vr_hotspotd.lifecycle._prepare_ap_interface", return_value=["ap_iface_not_up_prestart"]), \
+             patch("vr_hotspotd.lifecycle._ensure_iface_up", return_value=False), \
+             patch("vr_hotspotd.lifecycle.wifi_probe.detect_firewall_backends", return_value={"selected_backend": "nftables"}), \
+             patch("vr_hotspotd.lifecycle.preflight.run", return_value={"errors": [], "warnings": [], "details": {}}), \
+             patch("vr_hotspotd.lifecycle.system_tuning.apply_pre", return_value=({}, [])):
+            lifecycle.start_hotspot()
+
+        self.assertTrue(mock_5ghz_strict.called, "_start_hotspot_5ghz_strict should have been called")
+        call_kwargs = mock_5ghz_strict.call_args.kwargs
+        self.assertTrue(
+            bool(call_kwargs.get("use_hostapd_nat", False)),
+            f"Pop busy prestart should force use_hostapd_nat, got: {call_kwargs}",
+        )
+
 
 class TestPostStartWidthCheck(unittest.TestCase):
     """Test post-start width validation."""
@@ -882,6 +977,344 @@ class TestPostStartWidthCheck(unittest.TestCase):
             self.assertIsNone(failure_code)
             self.assertIsNone(failure_detail)
             self.assertEqual(mock_wait.call_count, 2)
+
+    def test_attempt_start_candidate_classifies_iface_busy_from_tails(self):
+        """Busy RTNETLINK tails should classify as hostapd_failed/iface_busy."""
+        from vr_hotspotd.lifecycle import _attempt_start_candidate
+        from unittest.mock import MagicMock, patch
+
+        mock_res = MagicMock()
+        mock_res.ok = True
+        mock_res.pid = 123
+        mock_res.cmd = ["cmd"]
+        mock_res.started_ts = 123456
+        mock_res.exit_code = None
+        mock_res.error = None
+        mock_res.stdout_tail = []
+        mock_res.stderr_tail = []
+
+        busy_stderr = [
+            "RTNETLINK answers: Device or resource busy",
+            "ERROR: Failed bringing wlan1 up",
+        ]
+
+        with patch("vr_hotspotd.lifecycle.start_engine", return_value=mock_res), \
+             patch("vr_hotspotd.lifecycle.update_state"), \
+             patch("vr_hotspotd.lifecycle._wait_for_ap_ready", return_value=None), \
+             patch("vr_hotspotd.lifecycle.get_tails", return_value=([], busy_stderr)), \
+             patch("vr_hotspotd.lifecycle._stdout_has_ap_ready", return_value=False), \
+             patch("vr_hotspotd.lifecycle._stdout_extract_ap_ifname", return_value=None), \
+             patch("vr_hotspotd.lifecycle.is_running", return_value=False):
+
+            ap_info, _, failure_code, failure_detail, _, _ = _attempt_start_candidate(
+                cmd=["test"],
+                firewalld_cfg={},
+                target_phy="phy1",
+                ap_ready_timeout_s=5.0,
+                ssid="TestSSID",
+                adapter_ifname="wlan1",
+                expected_ap_ifname="wlan1",
+                require_band="5ghz",
+                require_width_mhz=80,
+            )
+
+        self.assertIsNone(ap_info)
+        self.assertEqual(failure_code, "hostapd_failed")
+        self.assertEqual(failure_detail, "iface_busy")
+
+    def test_attempt_start_candidate_classifies_open_files_error_as_iface_busy(self):
+        """Virtual iface ENFILE path should classify as hostapd_failed/iface_busy."""
+        from vr_hotspotd.lifecycle import _attempt_start_candidate
+        from unittest.mock import MagicMock, patch
+
+        mock_res = MagicMock()
+        mock_res.ok = True
+        mock_res.pid = 123
+        mock_res.cmd = ["cmd"]
+        mock_res.started_ts = 123456
+        mock_res.exit_code = None
+        mock_res.error = None
+        mock_res.stdout_tail = []
+        mock_res.stderr_tail = []
+
+        with patch("vr_hotspotd.lifecycle.start_engine", return_value=mock_res), \
+             patch("vr_hotspotd.lifecycle.update_state"), \
+             patch("vr_hotspotd.lifecycle._wait_for_ap_ready", return_value=None), \
+             patch(
+                 "vr_hotspotd.lifecycle.get_tails",
+                 return_value=(
+                     [],
+                     ["command failed: Too many open files in system (-23)"],
+                 ),
+             ), \
+             patch("vr_hotspotd.lifecycle._stdout_has_ap_ready", return_value=False), \
+             patch("vr_hotspotd.lifecycle._stdout_extract_ap_ifname", return_value=None), \
+             patch("vr_hotspotd.lifecycle.is_running", return_value=False):
+
+            ap_info, _, failure_code, failure_detail, _, _ = _attempt_start_candidate(
+                cmd=["test"],
+                firewalld_cfg={},
+                target_phy="phy1",
+                ap_ready_timeout_s=5.0,
+                ssid="TestSSID",
+                adapter_ifname="wlan1",
+                expected_ap_ifname="wlan1",
+                require_band="5ghz",
+                require_width_mhz=80,
+            )
+
+        self.assertIsNone(ap_info)
+        self.assertEqual(failure_code, "hostapd_failed")
+        self.assertEqual(failure_detail, "iface_busy")
+
+    def test_start_5ghz_strict_retries_no_virt_when_hostapd_nat_iface_busy(self):
+        """When hostapd_nat busy-signals on virt iface, strict mode should retry with --no-virt."""
+        from vr_hotspotd import lifecycle
+        from vr_hotspotd.lifecycle import APReadyInfo
+
+        candidate = {
+            "band": 5,
+            "width": 80,
+            "primary_channel": 36,
+            "center_channel": 42,
+            "country": "US",
+            "flags": ["non_dfs"],
+            "rationale": "test",
+        }
+        probe_payload = {
+            "wifi": {
+                "errors": [],
+                "warnings": [],
+                "counts": {"dfs": 0},
+                "candidates": [candidate],
+            }
+        }
+
+        state = {}
+
+        def fake_update_state(**kwargs):
+            state.update(kwargs)
+            return dict(state)
+
+        first_res = MagicMock()
+        first_res.pid = 1001
+        first_res.cmd = ["cmd-virt"]
+        first_res.started_ts = 123
+        first_res.exit_code = 1
+        first_res.error = "engine_exited_early: rc=1"
+        first_res.stdout_tail = []
+        first_res.stderr_tail = ["RTNETLINK answers: Device or resource busy"]
+
+        second_res = MagicMock()
+        second_res.pid = 1002
+        second_res.cmd = ["cmd-no-virt"]
+        second_res.started_ts = 124
+        second_res.exit_code = None
+        second_res.error = None
+        second_res.stdout_tail = []
+        second_res.stderr_tail = []
+
+        ap_ready = APReadyInfo(
+            ifname="wlan1",
+            phy="phy1",
+            ssid="VR-Hotspot",
+            freq_mhz=5180,
+            channel=36,
+            channel_width_mhz=80,
+        )
+
+        call_count = {"n": 0}
+
+        def fake_attempt_start_candidate(**_kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return (
+                    None,
+                    first_res,
+                    "hostapd_failed",
+                    "engine_exited_early: rc=1",
+                    [],
+                    ["command failed: Too many open files in system (-23)"],
+                )
+            return ap_ready, second_res, None, None, [], []
+
+        with patch("vr_hotspotd.lifecycle.wifi_probe.probe", return_value=probe_payload), \
+             patch("vr_hotspotd.lifecycle._attempt_start_candidate", side_effect=fake_attempt_start_candidate), \
+             patch("vr_hotspotd.lifecycle.build_cmd_nat", side_effect=lambda **kwargs: [f"no_virt={kwargs.get('no_virt')}"]) as mock_build_nat, \
+             patch("vr_hotspotd.lifecycle._prepare_ap_interface", return_value=[]), \
+             patch("vr_hotspotd.lifecycle._kill_runtime_processes"), \
+             patch("vr_hotspotd.lifecycle._remove_conf_dirs", return_value=[]), \
+             patch("vr_hotspotd.lifecycle._cleanup_virtual_ap_ifaces", return_value=[]), \
+             patch("vr_hotspotd.lifecycle.update_state", side_effect=fake_update_state), \
+             patch("vr_hotspotd.lifecycle._collect_affinity_pids", return_value=[]), \
+             patch("vr_hotspotd.lifecycle.system_tuning.apply_runtime", return_value=({}, [])), \
+             patch("vr_hotspotd.lifecycle.network_tuning.apply", return_value=({}, [])), \
+             patch("vr_hotspotd.lifecycle._watchdog_enabled", return_value=False), \
+             patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
+            res = lifecycle._start_hotspot_5ghz_strict(
+                cfg={"watchdog_enable": False},
+                inv={"adapters": []},
+                ap_ifname="wlan1",
+                target_phy="phy1",
+                ssid="VR-Hotspot",
+                passphrase="password123",
+                country="US",
+                ap_security="wpa2",
+                ap_ready_timeout_s=5.0,
+                optimized_no_virt=False,
+                debug=False,
+                enable_internet=True,
+                bridge_mode=False,
+                bridge_name=None,
+                bridge_uplink=None,
+                gateway_ip="192.168.68.1",
+                dhcp_start_ip="192.168.68.10",
+                dhcp_end_ip="192.168.68.250",
+                dhcp_dns="gateway",
+                effective_wifi6=False,
+                tuning_state={},
+                start_warnings=[],
+                fw_cfg={},
+                firewall_backend="nftables",
+                use_hostapd_nat=True,
+                correlation_id="test-cid",
+                enforced_channel_5g=None,
+                allow_fallback_40mhz=False,
+                allow_dfs_channels=False,
+            )
+
+        self.assertEqual(res.code, "started")
+        self.assertGreaterEqual(mock_build_nat.call_count, 2)
+        self.assertFalse(bool(mock_build_nat.call_args_list[0].kwargs.get("no_virt", True)))
+        self.assertTrue(bool(mock_build_nat.call_args_list[1].kwargs.get("no_virt", False)))
+
+    def test_start_5ghz_strict_pop_busy_hostapd_nat_fallback_uses_no_virt(self):
+        """On Pop!_OS busy fallback from lnxrouter->hostapd_nat should use --no-virt first."""
+        from vr_hotspotd import lifecycle
+        from vr_hotspotd.lifecycle import APReadyInfo
+
+        candidate = {
+            "band": 5,
+            "width": 80,
+            "primary_channel": 149,
+            "center_channel": 155,
+            "country": "US",
+            "flags": ["non_dfs"],
+            "rationale": "test",
+        }
+        probe_payload = {
+            "wifi": {
+                "errors": [],
+                "warnings": [],
+                "counts": {"dfs": 0},
+                "candidates": [candidate],
+            }
+        }
+
+        state = {}
+
+        def fake_update_state(**kwargs):
+            state.update(kwargs)
+            return dict(state)
+
+        first_res = MagicMock()
+        first_res.pid = 2001
+        first_res.cmd = ["cmd-lnxrouter"]
+        first_res.started_ts = 111
+        first_res.exit_code = 1
+        first_res.error = "engine_exited_early: rc=1"
+        first_res.stdout_tail = []
+        first_res.stderr_tail = []
+
+        second_res = MagicMock()
+        second_res.pid = 2002
+        second_res.cmd = ["cmd-hostapd-nat-no-virt"]
+        second_res.started_ts = 112
+        second_res.exit_code = None
+        second_res.error = None
+        second_res.stdout_tail = []
+        second_res.stderr_tail = []
+
+        ap_ready = APReadyInfo(
+            ifname="wlan1",
+            phy="phy1",
+            ssid="VR-Hotspot",
+            freq_mhz=5745,
+            channel=149,
+            channel_width_mhz=80,
+        )
+
+        call_count = {"n": 0}
+
+        def fake_attempt_start_candidate(**_kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return (
+                    None,
+                    first_res,
+                    "hostapd_failed",
+                    "iface_busy",
+                    [],
+                    ["RTNETLINK answers: Device or resource busy"],
+                )
+            return ap_ready, second_res, None, None, [], []
+
+        build_nat_no_virt = []
+
+        def fake_build_cmd_nat(**kwargs):
+            build_nat_no_virt.append(bool(kwargs.get("no_virt")))
+            return [f"no_virt={kwargs.get('no_virt')}"]
+
+        with patch("vr_hotspotd.lifecycle.wifi_probe.probe", return_value=probe_payload), \
+             patch("vr_hotspotd.lifecycle._attempt_start_candidate", side_effect=fake_attempt_start_candidate), \
+             patch("vr_hotspotd.lifecycle.build_cmd", return_value=["lnxrouter"]), \
+             patch("vr_hotspotd.lifecycle.build_cmd_nat", side_effect=fake_build_cmd_nat), \
+             patch("vr_hotspotd.lifecycle._prepare_ap_interface", return_value=[]), \
+             patch("vr_hotspotd.lifecycle._kill_runtime_processes"), \
+             patch("vr_hotspotd.lifecycle._remove_conf_dirs", return_value=[]), \
+             patch("vr_hotspotd.lifecycle._cleanup_virtual_ap_ifaces", return_value=[]), \
+             patch("vr_hotspotd.lifecycle.update_state", side_effect=fake_update_state), \
+             patch("vr_hotspotd.lifecycle._collect_affinity_pids", return_value=[]), \
+             patch("vr_hotspotd.lifecycle.system_tuning.apply_runtime", return_value=({}, [])), \
+             patch("vr_hotspotd.lifecycle.network_tuning.apply", return_value=({}, [])), \
+             patch("vr_hotspotd.lifecycle._watchdog_enabled", return_value=False), \
+             patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
+            res = lifecycle._start_hotspot_5ghz_strict(
+                cfg={"watchdog_enable": False},
+                inv={"adapters": []},
+                ap_ifname="wlan1",
+                target_phy="phy1",
+                ssid="VR-Hotspot",
+                passphrase="password123",
+                country="US",
+                ap_security="wpa2",
+                ap_ready_timeout_s=5.0,
+                optimized_no_virt=False,
+                debug=False,
+                enable_internet=True,
+                bridge_mode=False,
+                bridge_name=None,
+                bridge_uplink=None,
+                gateway_ip="192.168.68.1",
+                dhcp_start_ip="192.168.68.10",
+                dhcp_end_ip="192.168.68.250",
+                dhcp_dns="gateway",
+                effective_wifi6=False,
+                tuning_state={},
+                start_warnings=[],
+                fw_cfg={},
+                firewall_backend="nftables",
+                use_hostapd_nat=False,
+                correlation_id="test-cid-pop-busy-fallback",
+                enforced_channel_5g=None,
+                allow_fallback_40mhz=False,
+                allow_dfs_channels=False,
+                pop_timeout_retry_no_virt=True,
+            )
+
+        self.assertEqual(res.code, "started")
+        self.assertEqual(build_nat_no_virt[:1], [True])
+        self.assertIn("iface_busy_retry_hostapd_nat_no_virt", state.get("warnings", []))
 
 
 class TestWidthRegexParsing(unittest.TestCase):

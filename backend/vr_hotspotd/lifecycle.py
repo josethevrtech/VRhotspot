@@ -1,9 +1,11 @@
 import logging
 import os
 import re
+import secrets
 import shutil
 import signal
 import stat
+import string
 import subprocess
 import threading
 import time
@@ -15,7 +17,7 @@ from typing import Optional, Set, Dict, Any, List, Tuple
 from vr_hotspotd.state import load_state, update_state
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.adapters.profiles import apply_adapter_profile
-from vr_hotspotd.config import load_config, ensure_config_file
+from vr_hotspotd.config import load_config, ensure_config_file, write_config_file
 from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
 from vr_hotspotd.engine import lnxrouter_conf
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
@@ -63,6 +65,8 @@ _OP_LOCK = threading.Lock()
 _WATCHDOG_THREAD: Optional[threading.Thread] = None
 _WATCHDOG_STOP = threading.Event()
 _WATCHDOG_BACKOFF_MAX_S = 30.0
+_AUTOGEN_PASSPHRASE_CACHE: Optional[str] = None
+_AUTOGEN_PASSPHRASE_TS: float = 0.0
 
 
 def _virt_ap_ifname(base: str) -> str:
@@ -92,6 +96,28 @@ class LifecycleResult:
     def __init__(self, code, state):
         self.code = code
         self.state = state
+
+
+def _generate_bootstrap_passphrase(length: int = 12) -> str:
+    alphabet = string.ascii_letters + string.digits
+    n = max(8, min(63, int(length)))
+    return "".join(secrets.choice(alphabet) for _ in range(n))
+
+
+def _get_or_create_bootstrap_passphrase(*, cache_ttl_s: float = 300.0) -> str:
+    global _AUTOGEN_PASSPHRASE_CACHE, _AUTOGEN_PASSPHRASE_TS
+    now = time.time()
+    cached = _AUTOGEN_PASSPHRASE_CACHE
+    if (
+        isinstance(cached, str)
+        and len(cached) >= 8
+        and (now - float(_AUTOGEN_PASSPHRASE_TS)) <= float(cache_ttl_s)
+    ):
+        return cached
+    generated = _generate_bootstrap_passphrase()
+    _AUTOGEN_PASSPHRASE_CACHE = generated
+    _AUTOGEN_PASSPHRASE_TS = now
+    return generated
 
 
 _START_OVERRIDE_KEYS = {
@@ -162,6 +188,7 @@ _IW_FREQ_RE = re.compile(r"^(?:freq|frequency)(?:[:\s]+)(\d+(?:\.\d+)?)\b")
 _IW_WIDTH_RE = re.compile(r"width:\s*(\d+)\s*mhz", re.IGNORECASE)
 _HOSTAPD_CTRL_DIR_RE = re.compile(r"DIR=(.+)")
 _COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
+_CMD_TIMEOUT_S = 2.5
 
 
 def ensure_hostapd_ctrl_interface_dir(conf_path: str) -> None:
@@ -314,9 +341,16 @@ def _iw_bin() -> str:
     raise RuntimeError("iw_not_found")
 
 
-def _run(cmd: List[str]) -> str:
-    p = subprocess.run(cmd, capture_output=True, text=True)
-    return (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+def _run(cmd: List[str], timeout_s: float = _CMD_TIMEOUT_S) -> str:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+        return (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+    except subprocess.TimeoutExpired as exc:
+        out = (exc.stdout or "") + ("\n" + exc.stderr if exc.stderr else "")
+        cmd_s = " ".join(cmd)
+        return (out + ("\n" if out else "")) + f"cmd_timed_out:{cmd_s}"
+    except Exception as exc:
+        return f"cmd_failed:{type(exc).__name__}:{exc}"
 
 
 def _iw_dev_dump() -> str:
@@ -384,7 +418,31 @@ def _iface_is_up(ifname: str) -> bool:
     if p.returncode != 0:
         return False
     text = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
-    return "state UP" in text or "<UP" in text
+    if "state UP" in text:
+        return True
+    # ip link flags are typically like "<BROADCAST,MULTICAST,UP,LOWER_UP>"
+    # so checking only for "<UP" is too strict and misses valid UP states.
+    m = re.search(r"<([^>]+)>", text)
+    if m:
+        flags = [f.strip().upper() for f in m.group(1).split(",") if f.strip()]
+        if "UP" in flags:
+            return True
+
+    # Fallback: kernel netdev flags bitmask (IFF_UP = 0x1).
+    try:
+        flags_raw = Path(f"/sys/class/net/{ifname}/flags").read_text(encoding="utf-8").strip()
+        flags = int(flags_raw, 0)
+        if flags & 0x1:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _iface_exists(ifname: str) -> bool:
+    if not ifname:
+        return False
+    return os.path.exists(f"/sys/class/net/{ifname}")
 
 
 def _ensure_iface_up(ifname: str) -> bool:
@@ -477,6 +535,31 @@ def _nm_device_state(ifname: str) -> Optional[str]:
     return None
 
 
+def _nm_state_non_interfering(state: Optional[str]) -> bool:
+    if state is None:
+        return True
+    state_norm = state.strip().lower()
+    if state_norm in ("unmanaged", "unavailable", "disconnected"):
+        return True
+    if state_norm.startswith("disconnected "):
+        return True
+    return False
+
+
+def _nm_wait_non_interfering(ifname: str, timeout_s: float = 1.5) -> bool:
+    if not ifname or not _nm_is_running():
+        return True
+    deadline = time.time() + max(0.1, float(timeout_s))
+    last_state: Optional[str] = None
+    while time.time() < deadline:
+        state = _nm_device_state(ifname)
+        if _nm_state_non_interfering(state):
+            return True
+        last_state = state
+        time.sleep(0.2)
+    return _nm_state_non_interfering(last_state)
+
+
 def _nm_set_unmanaged(ifname: str) -> Tuple[bool, Optional[str]]:
     if not ifname or not str(ifname).strip():
         return False, "invalid_interface"
@@ -495,8 +578,425 @@ def _nm_set_unmanaged(ifname: str) -> Tuple[bool, Optional[str]]:
         return False, f"nmcli_error:{type(exc).__name__}"
     if p.returncode != 0:
         err = (p.stderr or p.stdout or "").strip()
+        low = err.lower()
+        if "device" in low and "not found" in low:
+            # Interface can transiently disappear during USB driver re-enumeration.
+            return True, None
         return False, err or "nmcli_failed"
     return True, None
+
+
+def _nm_disconnect(ifname: str) -> Tuple[bool, Optional[str]]:
+    if not ifname or not str(ifname).strip():
+        return False, "invalid_interface"
+    nmcli = _nmcli_path()
+    if not nmcli:
+        return False, "nmcli_not_found"
+    try:
+        p = subprocess.run(
+            [nmcli, "dev", "disconnect", ifname],
+            capture_output=True,
+            text=True,
+        )
+    except Exception as exc:
+        return False, f"nmcli_error:{type(exc).__name__}"
+    if p.returncode == 0:
+        return True, None
+
+    err = (p.stderr or p.stdout or "").strip()
+    low = err.lower()
+    # Best-effort operation: treat "already disconnected/unmanaged" conditions as success.
+    benign = (
+        "not active",
+        "not connected",
+        "is disconnected",
+        "is unmanaged",
+        "not managed",
+        "is unknown",
+        "no suitable device found",
+        "not all devices found",
+    )
+    if any(tok in low for tok in benign):
+        return True, None
+    if "device" in low and "not found" in low:
+        return True, None
+    return False, err or "nmcli_disconnect_failed"
+
+
+def _rfkill_unblock_wifi() -> bool:
+    rfkill = shutil.which("rfkill")
+    if not rfkill:
+        return False
+    try:
+        p = subprocess.run(
+            [rfkill, "unblock", "wifi"],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return False
+    return p.returncode == 0
+
+
+def _cleanup_p2p_dev_ifaces(parent_ifname: str) -> List[str]:
+    """
+    Remove p2p-dev interfaces that can keep a radio busy for AP mode transitions.
+    Best-effort only.
+    """
+    removed: List[str] = []
+    if not parent_ifname:
+        return removed
+    try:
+        dump = _iw_dev_dump()
+    except Exception:
+        return removed
+
+    candidates: List[str] = []
+    for raw in dump.splitlines():
+        line = raw.strip()
+        if not line.startswith("Interface "):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        ifname = parts[1].strip()
+        if not ifname:
+            continue
+        if ifname == f"p2p-dev-{parent_ifname}" or (ifname.startswith("p2p-dev-") and ifname.endswith(parent_ifname)):
+            candidates.append(ifname)
+
+    for ifname in sorted(set(candidates)):
+        try:
+            subprocess.run(
+                [_iw_bin(), "dev", ifname, "del"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_CMD_TIMEOUT_S,
+            )
+            removed.append(ifname)
+        except Exception:
+            pass
+    return removed
+
+
+def _iface_kernel_driver(ifname: str) -> Optional[str]:
+    if not ifname:
+        return None
+    try:
+        driver_link = Path(f"/sys/class/net/{ifname}/device/driver")
+        if not driver_link.exists():
+            return None
+        resolved = driver_link.resolve()
+        name = resolved.name.strip()
+        return name or None
+    except Exception:
+        return None
+
+
+def _iface_bus_type(ifname: str) -> Optional[str]:
+    if not ifname:
+        return None
+    try:
+        sub_link = Path(f"/sys/class/net/{ifname}/device/subsystem")
+        if not sub_link.exists():
+            return None
+        name = sub_link.resolve().name.strip().lower()
+        return name or None
+    except Exception:
+        return None
+
+
+def _driver_reload_recovery_enabled() -> bool:
+    raw = str(os.environ.get("VR_HOTSPOTD_ENABLE_DRIVER_RELOAD_RECOVERY", "")).strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _usb_rebind_iface(ifname: str) -> Tuple[bool, Optional[str]]:
+    """
+    Rebind a USB wlan interface to clear hard busy states without unloading modules.
+    Returns (ok, detail_or_reason).
+    """
+    if os.geteuid() != 0:
+        return False, "not_root"
+    bus = _iface_bus_type(ifname)
+    if bus != "usb":
+        return False, f"non_usb:{bus or 'unknown'}"
+    dev_path = Path(f"/sys/class/net/{ifname}/device")
+    if not dev_path.exists():
+        return False, "device_path_missing"
+    try:
+        dev_id = dev_path.resolve().name
+    except Exception:
+        return False, "device_resolve_failed"
+    if not dev_id:
+        return False, "device_id_missing"
+    driver_link = dev_path / "driver"
+    if not driver_link.exists():
+        return False, "driver_link_missing"
+    try:
+        driver = driver_link.resolve().name
+    except Exception:
+        return False, "driver_resolve_failed"
+    if not driver:
+        return False, "driver_unknown"
+    unbind = Path(f"/sys/bus/usb/drivers/{driver}/unbind")
+    bind = Path(f"/sys/bus/usb/drivers/{driver}/bind")
+    if not unbind.exists() or not bind.exists():
+        return False, f"usb_driver_bind_paths_missing:{driver}"
+    try:
+        unbind.write_text(f"{dev_id}\n", encoding="utf-8")
+        time.sleep(0.5)
+        bind.write_text(f"{dev_id}\n", encoding="utf-8")
+    except Exception as exc:
+        return False, f"usb_rebind_failed:{type(exc).__name__}"
+    return True, f"{driver}:{dev_id}"
+
+
+def _reload_wifi_driver_for_iface(ifname: str) -> Tuple[bool, Optional[str]]:
+    """
+    Best-effort module reload for hard-stuck adapters.
+    Intended as a last-resort recovery on platforms where interface up can stay busy.
+    """
+    if os.geteuid() != 0:
+        return False, "not_root"
+    driver = _iface_kernel_driver(ifname)
+    if not driver:
+        return False, "driver_unknown"
+    modprobe = shutil.which("modprobe")
+    if not modprobe:
+        return False, "modprobe_not_found"
+    try:
+        down = subprocess.run(
+            [modprobe, "-r", driver],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=6.0,
+        )
+    except Exception as exc:
+        return False, f"modprobe_remove_error:{type(exc).__name__}"
+    if down.returncode != 0:
+        err = (down.stderr or down.stdout or "").strip()
+        return False, f"modprobe_remove_failed:{err or down.returncode}"
+    time.sleep(0.35)
+    try:
+        up = subprocess.run(
+            [modprobe, driver],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=6.0,
+        )
+    except Exception as exc:
+        return False, f"modprobe_insert_error:{type(exc).__name__}"
+    if up.returncode != 0:
+        err = (up.stderr or up.stdout or "").strip()
+        return False, f"modprobe_insert_failed:{err or up.returncode}"
+    return True, driver
+
+
+def _prepare_ap_interface(
+    ifname: Optional[str],
+    *,
+    force_nm_disconnect: bool = False,
+) -> List[str]:
+    """
+    Best-effort AP interface prep before engine launch.
+
+    On some platforms (notably Pop!_OS), NetworkManager/wpa_supplicant can still
+    hold the adapter even after a managed=no request, causing:
+      RTNETLINK answers: Device or resource busy
+      Failed bringing <iface> up
+    """
+    warnings: List[str] = []
+    if not ifname:
+        return warnings
+
+    iface_present = _iface_exists(ifname)
+    if _nm_is_running():
+        if force_nm_disconnect:
+            # Pop!_OS can still hold the adapter even in "unavailable" state.
+            # Force unmanaged first, then disconnect as a best-effort release.
+            if iface_present:
+                set_ok, set_err = _nm_set_unmanaged(ifname)
+                if not set_ok and set_err and set_err not in ("not_root", "nmcli_not_found"):
+                    warnings.append(f"nm_set_unmanaged_failed:{set_err}")
+                ok, err = _nm_disconnect(ifname)
+                if not ok and err:
+                    warnings.append(f"nm_disconnect_failed:{err}")
+                removed_p2p = _cleanup_p2p_dev_ifaces(ifname)
+                if removed_p2p:
+                    warnings.append("removed_p2p_dev_iface:" + ",".join(removed_p2p))
+                if not _nm_wait_non_interfering(ifname):
+                    warnings.append("nm_still_managed_prestart")
+
+    _rfkill_unblock_wifi()
+
+    if _ensure_iface_up(ifname):
+        return warnings
+
+    # One extra hard reset attempt can clear transient busy states.
+    ip = shutil.which("ip") or "/usr/sbin/ip"
+    try:
+        subprocess.run(
+            [ip, "link", "set", "dev", ifname, "down"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        time.sleep(0.2)
+        subprocess.run(
+            [ip, "link", "set", "dev", ifname, "up"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        pass
+
+    if not _iface_is_up(ifname):
+        iface_present = _iface_exists(ifname)
+        if not iface_present:
+            warnings.append("ap_iface_missing_prestart")
+        warnings.append("ap_iface_not_up_prestart")
+        # First Pop!/USB fallback: USB driver rebind (less disruptive than module reload).
+        if force_nm_disconnect and iface_present and _iface_bus_type(ifname) == "usb":
+            ok, detail = _usb_rebind_iface(ifname)
+            if ok:
+                warnings.append(f"ap_iface_driver_reload:usb_rebind:{detail}")
+                _rfkill_unblock_wifi()
+                _cleanup_p2p_dev_ifaces(ifname)
+                if _ensure_iface_up(ifname):
+                    return warnings
+                warnings.append("ap_iface_not_up_post_driver_reload")
+            elif detail:
+                warnings.append(f"ap_iface_driver_reload_failed:usb_rebind:{detail}")
+        # Last-resort Pop!_OS recovery path: reload driver module once, then retry.
+        if force_nm_disconnect and iface_present and _driver_reload_recovery_enabled():
+            bus = _iface_bus_type(ifname)
+            if bus != "usb":
+                if bus:
+                    warnings.append(f"ap_iface_driver_reload_skipped_non_usb:{bus}")
+            else:
+                ok, detail = _reload_wifi_driver_for_iface(ifname)
+                if ok:
+                    warnings.append(f"ap_iface_driver_reload:{detail}")
+                    _rfkill_unblock_wifi()
+                    _cleanup_p2p_dev_ifaces(ifname)
+                    if _ensure_iface_up(ifname):
+                        return warnings
+                    warnings.append("ap_iface_not_up_post_driver_reload")
+                elif detail:
+                    warnings.append(f"ap_iface_driver_reload_failed:{detail}")
+    return warnings
+
+
+def _maybe_reselect_ap_after_prestart_failure(
+    *,
+    ap_ifname: str,
+    preferred_ifname: Optional[str],
+    band_pref: str,
+    inv: Dict[str, Any],
+    adapter: Optional[Dict[str, Any]],
+    platform_is_pop: bool,
+    prep_warnings: List[str],
+) -> Tuple[str, Dict[str, Any], Optional[Dict[str, Any]], List[str]]:
+    """
+    On Pop!_OS, driver reload can cause USB wlan ifnames to change/disappear.
+    Re-discover adapters and select the current AP-capable iface.
+    """
+    warnings: List[str] = []
+    if not platform_is_pop or not ap_ifname:
+        return ap_ifname, inv, adapter, warnings
+
+    missing_iface = not os.path.exists(f"/sys/class/net/{ap_ifname}")
+    had_reload_failure = any(
+        w == "ap_iface_not_up_post_driver_reload" or str(w).startswith("ap_iface_driver_reload:")
+        for w in (prep_warnings or [])
+    )
+    if not missing_iface and not had_reload_failure:
+        return ap_ifname, inv, adapter, warnings
+
+    old_bus = str((adapter or {}).get("bus") or "").strip().lower()
+
+    def _pick_candidate(
+        inv_cur: Dict[str, Any],
+        *,
+        require_bus: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        ordered: List[str] = []
+        if preferred_ifname and isinstance(preferred_ifname, str) and preferred_ifname.strip():
+            ordered.append(preferred_ifname.strip())
+        if ap_ifname:
+            ordered.append(ap_ifname)
+        rec = inv_cur.get("recommended")
+        if isinstance(rec, str) and rec.strip():
+            ordered.append(rec.strip())
+        for item in inv_cur.get("adapters", []):
+            cand = item.get("ifname")
+            if isinstance(cand, str) and cand.strip():
+                ordered.append(cand.strip())
+
+        seen: Set[str] = set()
+        for raw in ordered:
+            cand = _normalize_ap_adapter(raw, inv_cur)
+            if not cand or cand in seen:
+                continue
+            seen.add(cand)
+            if not os.path.exists(f"/sys/class/net/{cand}"):
+                continue
+            item = _get_adapter(inv_cur, cand)
+            if not item or not item.get("supports_ap"):
+                continue
+            if require_bus and str(item.get("bus") or "").strip().lower() != require_bus:
+                continue
+            return cand, item
+        return None, None
+
+    # USB adapters can disappear/re-enumerate for a few seconds after reload.
+    # Prefer staying on USB instead of falling back to internal PCI radios.
+    wait_usb = old_bus == "usb"
+    scans = 12 if wait_usb else 1
+    for _ in range(scans):
+        try:
+            inv_refreshed = get_adapters()
+        except Exception:
+            inv_refreshed = inv
+        inv_err = inv_refreshed.get("error") if isinstance(inv_refreshed, dict) else None
+        if inv_err and not (inv_refreshed or {}).get("adapters"):
+            if wait_usb:
+                time.sleep(0.5)
+                continue
+            warnings.append(f"ap_adapter_reselect_failed:{inv_err}")
+            return ap_ifname, inv, adapter, warnings
+
+        require_bus = old_bus if wait_usb else None
+        candidate, new_adapter = _pick_candidate(inv_refreshed, require_bus=require_bus)
+        if candidate and new_adapter:
+            if candidate != ap_ifname:
+                warnings.append(f"ap_adapter_reselected_after_reload:{ap_ifname}->{candidate}")
+            return candidate, inv_refreshed, new_adapter, warnings
+
+        if wait_usb:
+            time.sleep(0.5)
+            continue
+
+    if wait_usb:
+        warnings.append("ap_adapter_reselect_usb_missing_after_reload")
+        return ap_ifname, inv, adapter, warnings
+
+    try:
+        inv_refreshed = get_adapters()
+        candidate = _normalize_ap_adapter(ap_ifname, inv_refreshed)
+        if not candidate:
+            return ap_ifname, inv, adapter, warnings
+        new_adapter = _get_adapter(inv_refreshed, candidate)
+        if new_adapter and new_adapter.get("supports_ap"):
+            return candidate, inv_refreshed, new_adapter, warnings
+    except Exception as exc:
+        warnings.append(f"ap_adapter_reselect_failed:{exc}")
+    return ap_ifname, inv, adapter, warnings
 
 
 def _nm_interference_reason(ifname: str) -> Optional[str]:
@@ -505,9 +1005,9 @@ def _nm_interference_reason(ifname: str) -> Optional[str]:
     state = _nm_device_state(ifname)
     if not state:
         return None
-    state_norm = state.strip().lower()
-    if state_norm in ("unmanaged", "unavailable"):
+    if _nm_state_non_interfering(state):
         return None
+    state_norm = state.strip().lower()
     return f"nm_state={state_norm}"
 
 
@@ -521,10 +1021,9 @@ def _nm_gate_check(ifname: str) -> Optional[str]:
     state = _nm_device_state(ifname)
     if not state:
         return None
-    state_norm = state.strip().lower()
-    # Allow only "unmanaged" or "unavailable" states
-    if state_norm in ("unmanaged", "unavailable"):
+    if _nm_state_non_interfering(state):
         return None
+    state_norm = state.strip().lower()
     # Interface is managed by NM - fail fast
     log.warning(
         "nm_interface_managed_prestart_gate",
@@ -797,11 +1296,15 @@ def _validate_channel_for_band(band: str, channel: int, country: Optional[str] =
 
 
 def _iface_phy(ifname: str) -> Optional[str]:
-    p = subprocess.run(
-        [_iw_bin(), "dev", ifname, "info"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        p = subprocess.run(
+            [_iw_bin(), "dev", ifname, "info"],
+            capture_output=True,
+            text=True,
+            timeout=_CMD_TIMEOUT_S,
+        )
+    except Exception:
+        return None
     for raw in (p.stdout or "").splitlines():
         line = raw.strip()
         if line.startswith("wiphy "):
@@ -847,7 +1350,15 @@ def _wait_for_ap_ready(
             if isinstance(stderr_lines, str):
                 stderr_lines = stderr_lines.splitlines()
             combined_lines = list(stdout_lines) + list(stderr_lines)
+            if _lines_have_iface_busy_signal(combined_lines) and not is_running():
+                # Busy logs are often transient while the engine is still in its own
+                # iface-recovery loop. Only fail early once the engine has exited.
+                return None
             stdout_ready = _stdout_has_ap_ready(combined_lines)
+            if stdout_ready and _stdout_has_ap_not_ready(combined_lines):
+                # Ignore AP-ready hints if hostapd already reported AP teardown
+                # in the same output window.
+                stdout_ready = False
             stdout_ifname = _stdout_extract_ap_ifname(combined_lines)
             conf_ifname = None if stdout_ifname else _infer_ap_ifname_from_conf(adapter_ifname)
             if stdout_ifname or conf_ifname:
@@ -871,7 +1382,6 @@ def _wait_for_ap_ready(
                     "ap_ready_grace_extended",
                     extra={"grace_s": grace_s, "reason": "stdout_ready_no_ifname"},
                 )
-
         dump = _iw_dev_dump()
         ap = _select_ap_from_iw(dump, target_phy=target_phy, ssid=ssid)
         if ap:
@@ -914,6 +1424,10 @@ def _wait_for_ap_ready(
                         channel_width_mhz=None,
                     )
 
+        if not is_running() and not ap and not expected_ap_ifname and not stdout_ready:
+            # Engine exited and there is no AP-ready signal to wait for.
+            return None
+
         time.sleep(poll_s)
 
     return None
@@ -950,6 +1464,19 @@ def _attempt_start_candidate(
     latest_stdout = res.stdout_tail
     latest_stderr = res.stderr_tail
     if not res.ok:
+        # Early engine exits can race with reader threads and return empty tails.
+        # Refresh once so higher-level classifiers can still see actionable errors.
+        if not latest_stdout and not latest_stderr:
+            try:
+                latest_stdout, latest_stderr = get_tails()
+            except Exception:
+                latest_stdout = res.stdout_tail
+                latest_stderr = res.stderr_tail
+        if latest_stdout or latest_stderr:
+            try:
+                update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
+            except Exception:
+                pass
         return None, res, "hostapd_failed", res.error, latest_stdout, latest_stderr
 
     ap_info = _wait_for_ap_ready(
@@ -960,22 +1487,51 @@ def _attempt_start_candidate(
         expected_ap_ifname=expected_ap_ifname,
     )
     if not ap_info:
-        try:
-            latest_stdout, latest_stderr = get_tails()
-        except Exception:
-            latest_stdout = res.stdout_tail
-            latest_stderr = res.stderr_tail
+        def _as_lines(value: object) -> List[str]:
+            if isinstance(value, str):
+                return value.splitlines()
+            if isinstance(value, list):
+                return list(value)
+            return []
+
+        def _refresh_tails(default_out: List[str], default_err: List[str]) -> Tuple[List[str], List[str]]:
+            try:
+                out_now, err_now = get_tails()
+            except Exception:
+                return default_out, default_err
+            out_lines = _as_lines(out_now) or default_out
+            err_lines = _as_lines(err_now) or default_err
+            return out_lines, err_lines
+
+        latest_stdout, latest_stderr = _refresh_tails(_as_lines(res.stdout_tail), _as_lines(res.stderr_tail))
         if latest_stdout or latest_stderr:
-            update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
+            try:
+                update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
+            except Exception:
+                pass
+
+        # Some drivers emit decisive hostapd failure lines slightly after AP-ready timeout.
+        # Give a brief settle window to capture those lines for accurate classification.
+        settle_deadline = time.time() + 1.2
+        while is_running() and time.time() < settle_deadline:
+            combined_now = list(latest_stdout) + list(latest_stderr)
+            if (
+                _lines_have_iface_busy_signal(combined_now)
+                or _stdout_has_ap_not_ready(combined_now)
+                or _stdout_has_ap_ready(combined_now)
+            ):
+                break
+            time.sleep(0.2)
+            latest_stdout, latest_stderr = _refresh_tails(latest_stdout, latest_stderr)
+        if latest_stdout or latest_stderr:
+            try:
+                update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
+            except Exception:
+                pass
+
         # If logs indicate AP is coming up, wait a bit longer before failing.
         try:
-            out_lines = latest_stdout
-            err_lines = latest_stderr
-            if isinstance(out_lines, str):
-                out_lines = out_lines.splitlines()
-            if isinstance(err_lines, str):
-                err_lines = err_lines.splitlines()
-            combined = list(out_lines or []) + list(err_lines or [])
+            combined = list(latest_stdout) + list(latest_stderr)
             ready_hint = _stdout_has_ap_ready(combined) or _stdout_extract_ap_ifname(combined)
         except Exception:
             ready_hint = False
@@ -1010,6 +1566,42 @@ def _attempt_start_candidate(
             )
             if ap_info:
                 return ap_info, res, None, None, latest_stdout, latest_stderr
+        combined_lines: List[str] = []
+        combined_lines.extend(latest_stdout)
+        combined_lines.extend(latest_stderr)
+        busy_signal = _lines_have_iface_busy_signal(combined_lines)
+        if busy_signal and is_running():
+            # If the engine is still alive, busy can be transient while retries run.
+            # Give a final brief window before classifying it as a hard failure.
+            extra_wait_s = max(2.0, min(8.0, float(ap_ready_timeout_s)))
+            log.info(
+                "ap_ready_retry_wait",
+                extra={"extra_wait_s": extra_wait_s, "reason": "iface_busy_signal_engine_running"},
+            )
+            ap_info = _wait_for_ap_ready(
+                target_phy,
+                extra_wait_s,
+                ssid=ssid,
+                adapter_ifname=adapter_ifname,
+                expected_ap_ifname=expected_ap_ifname,
+            )
+            if ap_info:
+                return ap_info, res, None, None, latest_stdout, latest_stderr
+            latest_stdout, latest_stderr = _refresh_tails(latest_stdout, latest_stderr)
+            combined_lines = list(latest_stdout) + list(latest_stderr)
+            busy_signal = _lines_have_iface_busy_signal(combined_lines)
+            if latest_stdout or latest_stderr:
+                try:
+                    update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
+                except Exception:
+                    pass
+        if busy_signal and not is_running():
+            # lnxrouter can report busy/bring-up failures and then exit before AP appears.
+            return None, res, "hostapd_failed", "iface_busy", latest_stdout, latest_stderr
+        if _stdout_has_ap_not_ready(combined_lines):
+            return None, res, "hostapd_failed", "ap_disabled", latest_stdout, latest_stderr
+        if not is_running():
+            return None, res, "hostapd_failed", "engine_not_running", latest_stdout, latest_stderr
         return None, res, "ap_start_timed_out", None, latest_stdout, latest_stderr
 
     if not _iface_is_up(ap_info.ifname):
@@ -1021,6 +1613,25 @@ def _attempt_start_candidate(
                 extra["grace_s"] = iface_up_grace_s
             log.info(event, extra=extra)
         else:
+            try:
+                latest_stdout, latest_stderr = get_tails()
+            except Exception:
+                pass
+            if latest_stdout or latest_stderr:
+                try:
+                    update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
+                except Exception:
+                    pass
+
+            combined_lines: List[str] = []
+            if isinstance(latest_stdout, list):
+                combined_lines.extend(latest_stdout)
+            if isinstance(latest_stderr, list):
+                combined_lines.extend(latest_stderr)
+            if _lines_have_iface_busy_signal(combined_lines) and not is_running():
+                return None, res, "hostapd_failed", "iface_busy", latest_stdout, latest_stderr
+            if not is_running():
+                return None, res, "hostapd_failed", "engine_not_running", latest_stdout, latest_stderr
             return None, res, "ap_start_timed_out", "iface_not_up", latest_stdout, latest_stderr
 
     stable_s = min(2.0, max(1.0, ap_ready_timeout_s / 2.0))
@@ -1118,7 +1729,34 @@ def _start_hotspot_5ghz_strict(
     for w in wifi_warnings or []:
         start_warnings.append(f"wifi_probe_warning:{w}")
 
-    if wifi_errors:
+    adapter_info = _get_adapter(inv, ap_ifname) if isinstance(inv, dict) else None
+    adapter_supports_ap = bool((adapter_info or {}).get("supports_ap"))
+    adapter_supports_5ghz = bool((adapter_info or {}).get("supports_5ghz"))
+    adapter_supports_80mhz = bool((adapter_info or {}).get("supports_80mhz"))
+    prestart_iface_unready = any(
+        isinstance(w, str)
+        and (
+            w == "ap_iface_not_up_prestart"
+            or w == "ap_iface_not_up_post_driver_reload"
+            or w.startswith("ap_iface_driver_reload:")
+        )
+        for w in start_warnings
+    )
+    recoverable_probe_codes = {"driver_no_ap_mode_5ghz", "driver_no_vht80_or_he80"}
+    recoverable_probe_errors = bool(wifi_errors) and all(
+        isinstance(err, dict) and str(err.get("code", "")) in recoverable_probe_codes
+        for err in (wifi_errors or [])
+    )
+    can_degrade_probe_errors = (
+        pop_timeout_retry_no_virt
+        and prestart_iface_unready
+        and adapter_supports_ap
+        and adapter_supports_5ghz
+        and adapter_supports_80mhz
+        and recoverable_probe_errors
+    )
+
+    if wifi_errors and not can_degrade_probe_errors:
         last_error = wifi_errors[0].get("code") if isinstance(wifi_errors[0], dict) else "wifi_probe_failed"
         warnings = list(start_warnings)
         warnings.extend(_safe_revert_tuning(tuning_state))
@@ -1137,8 +1775,47 @@ def _start_hotspot_5ghz_strict(
             network_tuning={},
         )
         return LifecycleResult("start_failed", state)
+    if wifi_errors and can_degrade_probe_errors:
+        start_warnings.append("wifi_probe_errors_degraded_platform_pop")
+        for err in wifi_errors:
+            if not isinstance(err, dict):
+                continue
+            code = str(err.get("code", "")).strip()
+            if not code:
+                continue
+            reason = str((err.get("context") or {}).get("reason", "")).strip()
+            if reason:
+                start_warnings.append(f"wifi_probe_error_degraded:{code}:{reason}")
+            else:
+                start_warnings.append(f"wifi_probe_error_degraded:{code}")
 
     candidates = wifi.get("candidates") if isinstance(wifi, dict) else []
+    if (not candidates) and can_degrade_probe_errors:
+        default_candidates: List[Dict[str, Any]] = [
+            {
+                "band": 5,
+                "width": 80,
+                "primary_channel": 36,
+                "center_channel": 42,
+                "country": country if isinstance(country, str) else None,
+                "flags": ["non_dfs"],
+                "rationale": "pop_probe_default_36_48",
+            },
+            {
+                "band": 5,
+                "width": 80,
+                "primary_channel": 149,
+                "center_channel": 155,
+                "country": country if isinstance(country, str) else None,
+                "flags": ["non_dfs"],
+                "rationale": "pop_probe_default_149_161",
+            },
+        ]
+        if preferred_primary_channel in (149, 153, 157, 161):
+            default_candidates = [default_candidates[1], default_candidates[0]]
+        candidates = default_candidates
+        start_warnings.append("wifi_probe_default_candidates_used")
+
     if not candidates:
         last_error = "non_dfs_80mhz_channels_unavailable"
         warnings = list(start_warnings)
@@ -1181,16 +1858,28 @@ def _start_hotspot_5ghz_strict(
     res_final = None
     selected_candidate: Optional[Dict[str, Any]] = None
 
-    def _expected_ifname(no_virt: bool) -> Optional[str]:
-        if use_hostapd_nat or bridge_mode:
+    # Defensive guard: if caller missed passing the Pop!_OS flag, detect here
+    # so iface-busy retries still prefer no-virt mode.
+    if (not pop_timeout_retry_no_virt) and os_release.is_pop_os():
+        pop_timeout_retry_no_virt = True
+        start_warnings.append("platform_pop_retry_no_virt_autodetected")
+
+    def _expected_ifname(no_virt: bool, force_hostapd_nat: bool = False) -> Optional[str]:
+        if use_hostapd_nat or force_hostapd_nat or bridge_mode:
             return ap_ifname if no_virt else _virt_ap_ifname(ap_ifname)
         return _lnxrouter_expected_ifname(ap_ifname, no_virt=no_virt)
 
-    def _build_cmd_for_candidate(candidate: Dict[str, Any], no_virt: bool, width_mhz: int) -> List[str]:
+    def _build_cmd_for_candidate(
+        candidate: Dict[str, Any],
+        no_virt: bool,
+        width_mhz: int,
+        force_hostapd_nat: bool = False,
+    ) -> List[str]:
         ch = candidate.get("primary_channel")
         center = candidate.get("center_channel")
         width_str = str(width_mhz)
         strict_width = width_mhz >= 80
+        effective_hostapd_nat = use_hostapd_nat or force_hostapd_nat
         if bridge_mode:
             return build_cmd_bridge(
                 ap_ifname=ap_ifname,
@@ -1211,7 +1900,7 @@ def _start_hotspot_5ghz_strict(
                 short_guard_interval=short_guard_interval,
                 tx_power=tx_power,
             )
-        if use_hostapd_nat:
+        if effective_hostapd_nat:
             return build_cmd_nat(
                 ap_ifname=ap_ifname,
                 ssid=ssid,
@@ -1255,11 +1944,39 @@ def _start_hotspot_5ghz_strict(
         _kill_runtime_processes(ap_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
         _remove_conf_dirs(ap_ifname)
         try:
-            _cleanup_virtual_ap_ifaces(target_phy=target_phy)
+            cleanup_phy = None if pop_timeout_retry_no_virt else target_phy
+            _cleanup_virtual_ap_ifaces(target_phy=cleanup_phy)
         except Exception:
             pass
 
     for candidate in candidates:
+        if pop_timeout_retry_no_virt:
+            nm_state_now = _nm_device_state(ap_ifname)
+            if (not _iface_is_up(ap_ifname)) or (not _nm_state_non_interfering(nm_state_now)):
+                prep_loop_warnings = _prepare_ap_interface(ap_ifname, force_nm_disconnect=True)
+                if prep_loop_warnings:
+                    start_warnings.extend(prep_loop_warnings)
+
+        if pop_timeout_retry_no_virt and not _iface_exists(ap_ifname):
+            start_warnings.append("ap_iface_missing_prestart")
+            old_ifname = ap_ifname
+            ap_ifname, inv, adapter_now, reselect_warnings = _maybe_reselect_ap_after_prestart_failure(
+                ap_ifname=ap_ifname,
+                preferred_ifname=cfg.get("ap_adapter") if isinstance(cfg.get("ap_adapter"), str) else None,
+                band_pref="5ghz",
+                inv=inv,
+                adapter=_get_adapter(inv, old_ifname),
+                platform_is_pop=True,
+                prep_warnings=["ap_iface_not_up_prestart"],
+            )
+            if reselect_warnings:
+                start_warnings.extend(reselect_warnings)
+            if ap_ifname != old_ifname:
+                target_phy = _get_adapter_phy(inv, ap_ifname)
+                prep_retry_warnings = _prepare_ap_interface(ap_ifname, force_nm_disconnect=True)
+                if prep_retry_warnings:
+                    start_warnings.extend(prep_retry_warnings)
+
         log.info(
             f"start_candidate_attempt band=5 width=80 channel={candidate.get('primary_channel')}",
             extra={"correlation_id": correlation_id},
@@ -1296,12 +2013,263 @@ def _start_hotspot_5ghz_strict(
         last_failure_code = failure_code
         last_failure_detail = failure_detail
 
+        out_lines = out_tail.splitlines() if isinstance(out_tail, str) else list(out_tail or [])
+        err_lines = err_tail.splitlines() if isinstance(err_tail, str) else list(err_tail or [])
+        pop_unstable_iface_state = (
+            pop_timeout_retry_no_virt
+            and failure_code in ("ap_start_timed_out", "hostapd_failed")
+            and failure_detail in ("iface_not_up", "ap_disabled", "engine_not_running")
+        )
+        busy_error = (
+            failure_detail == "iface_busy"
+            or pop_unstable_iface_state
+            or _lines_have_iface_busy_signal(out_lines)
+            or _lines_have_iface_busy_signal(err_lines)
+        )
+        virt_iface_missing_error = (
+            _lines_have_virtual_iface_missing_signal(out_lines)
+            or _lines_have_virtual_iface_missing_signal(err_lines)
+        )
+        if (busy_error or virt_iface_missing_error) and (not bridge_mode):
+            if busy_error:
+                start_warnings.append("ap_iface_busy_recovery")
+            if virt_iface_missing_error:
+                start_warnings.append("virt_iface_missing_recovery")
+            prep_warnings = _prepare_ap_interface(ap_ifname, force_nm_disconnect=True)
+            if prep_warnings:
+                start_warnings.extend(prep_warnings)
+
+            if use_hostapd_nat and (not optimized_no_virt):
+                # hostapd_nat with virtual iface can fail on some drivers/sessions
+                # (busy or transient parent-iface disappearance). Retry on the parent
+                # iface (--no-virt) before moving to next channel.
+                if virt_iface_missing_error:
+                    start_warnings.append("virt_iface_missing_retry_no_virt")
+                else:
+                    start_warnings.append("iface_busy_retry_no_virt")
+                _cleanup_attempt()
+                retry_no_virt = True
+                cmd_retry = _build_cmd_for_candidate(candidate, retry_no_virt, 80)
+                ap_info_retry, res_retry, failure_code, failure_detail, out_tail, err_tail = _attempt_start_candidate(
+                    cmd=cmd_retry,
+                    firewalld_cfg=fw_cfg,
+                    target_phy=target_phy,
+                    ap_ready_timeout_s=ap_ready_timeout_s,
+                    ssid=ssid,
+                    adapter_ifname=ap_ifname,
+                    expected_ap_ifname=_expected_ifname(retry_no_virt),
+                    require_band="5ghz",
+                    require_width_mhz=80,
+                    iface_up_grace_s=iface_up_grace_s,
+                    ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
+                )
+                if ap_info_retry:
+                    attempts.append(
+                        {
+                            "candidate": candidate,
+                            "failure_reason": None,
+                            "no_virt": retry_no_virt,
+                            "engine": "hostapd_nat",
+                        }
+                    )
+                    ap_info_final = ap_info_retry
+                    res_final = res_retry
+                    selected_candidate = candidate
+                    break
+
+                retry_out_lines = out_tail.splitlines() if isinstance(out_tail, str) else list(out_tail or [])
+                retry_err_lines = err_tail.splitlines() if isinstance(err_tail, str) else list(err_tail or [])
+                parent_iface_missing = (
+                    _lines_have_parent_iface_missing_signal(retry_out_lines, ap_ifname)
+                    or _lines_have_parent_iface_missing_signal(retry_err_lines, ap_ifname)
+                    or (not os.path.exists(f"/sys/class/net/{ap_ifname}"))
+                )
+                if parent_iface_missing and pop_timeout_retry_no_virt:
+                    start_warnings.append("ap_parent_iface_missing_reselect")
+                    _cleanup_attempt()
+                    old_ifname = ap_ifname
+                    ap_ifname, inv, adapter_now, reselect_warnings = _maybe_reselect_ap_after_prestart_failure(
+                        ap_ifname=ap_ifname,
+                        preferred_ifname=cfg.get("ap_adapter") if isinstance(cfg.get("ap_adapter"), str) else None,
+                        band_pref="5ghz",
+                        inv=inv,
+                        adapter=_get_adapter(inv, old_ifname),
+                        platform_is_pop=True,
+                        prep_warnings=["ap_iface_not_up_post_driver_reload"],
+                    )
+                    if reselect_warnings:
+                        start_warnings.extend(reselect_warnings)
+                    # Retry once more after parent-iface recovery even when the
+                    # iface name is unchanged. On Pop!_OS, USB adapters can
+                    # transiently disappear/reappear under the same ifname.
+                    target_phy = _get_adapter_phy(inv, ap_ifname)
+                    prep_retry_warnings = _prepare_ap_interface(ap_ifname, force_nm_disconnect=True)
+                    if prep_retry_warnings:
+                        start_warnings.extend(prep_retry_warnings)
+                    cmd_retry2 = _build_cmd_for_candidate(candidate, retry_no_virt, 80)
+                    ap_info_retry2, res_retry2, failure_code, failure_detail, out_tail, err_tail = _attempt_start_candidate(
+                        cmd=cmd_retry2,
+                        firewalld_cfg=fw_cfg,
+                        target_phy=target_phy,
+                        ap_ready_timeout_s=ap_ready_timeout_s,
+                        ssid=ssid,
+                        adapter_ifname=ap_ifname,
+                        expected_ap_ifname=_expected_ifname(retry_no_virt),
+                        require_band="5ghz",
+                        require_width_mhz=80,
+                        iface_up_grace_s=iface_up_grace_s,
+                        ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
+                    )
+                    if ap_info_retry2:
+                        attempts.append(
+                            {
+                                "candidate": candidate,
+                                "failure_reason": None,
+                                "no_virt": retry_no_virt,
+                                "engine": "hostapd_nat",
+                            }
+                        )
+                        ap_info_final = ap_info_retry2
+                        res_final = res_retry2
+                        selected_candidate = candidate
+                        break
+
+                attempts.append(
+                    {
+                        "candidate": candidate,
+                        "failure_reason": failure_code,
+                        "failure_detail": failure_detail,
+                        "no_virt": retry_no_virt,
+                        "engine": "hostapd_nat",
+                    }
+                )
+                last_failure_code = failure_code
+                last_failure_detail = failure_detail
+                _cleanup_attempt()
+                # If parent-iface AP mode is still busy after recovery, changing channels
+                # is unlikely to help on this adapter/session; fail fast.
+                if failure_detail == "iface_busy":
+                    if pop_timeout_retry_no_virt:
+                        start_warnings.append("ap_iface_busy_continue_channel_hopping")
+                    else:
+                        start_warnings.append("ap_iface_busy_abort_channel_hopping")
+                        break
+                continue
+
+            if use_hostapd_nat and optimized_no_virt and pop_timeout_retry_no_virt:
+                # Already in no-virt mode; busy scans on Pop!_OS can still clear
+                # with a single in-place retry after interface preparation.
+                start_warnings.append("iface_busy_retry_same_mode")
+                _cleanup_attempt()
+                retry_no_virt = True
+                cmd_retry = _build_cmd_for_candidate(candidate, retry_no_virt, 80)
+                ap_info_retry, res_retry, failure_code, failure_detail, out_tail, err_tail = _attempt_start_candidate(
+                    cmd=cmd_retry,
+                    firewalld_cfg=fw_cfg,
+                    target_phy=target_phy,
+                    ap_ready_timeout_s=ap_ready_timeout_s,
+                    ssid=ssid,
+                    adapter_ifname=ap_ifname,
+                    expected_ap_ifname=_expected_ifname(retry_no_virt),
+                    require_band="5ghz",
+                    require_width_mhz=80,
+                    iface_up_grace_s=iface_up_grace_s,
+                    ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
+                )
+                if ap_info_retry:
+                    attempts.append(
+                        {
+                            "candidate": candidate,
+                            "failure_reason": None,
+                            "no_virt": retry_no_virt,
+                            "engine": "hostapd_nat",
+                        }
+                    )
+                    ap_info_final = ap_info_retry
+                    res_final = res_retry
+                    selected_candidate = candidate
+                    break
+
+                attempts.append(
+                    {
+                        "candidate": candidate,
+                        "failure_reason": failure_code,
+                        "failure_detail": failure_detail,
+                        "no_virt": retry_no_virt,
+                        "engine": "hostapd_nat",
+                    }
+                )
+                last_failure_code = failure_code
+                last_failure_detail = failure_detail
+                _cleanup_attempt()
+                continue
+
+            if not use_hostapd_nat:
+                # Pop!/Ubuntu combinations can fail in lnxrouter with RTNETLINK busy.
+                # Retry once using hostapd_nat; Pop!_OS prefers no-virt here.
+                retry_no_virt = bool(pop_timeout_retry_no_virt)
+                if retry_no_virt:
+                    start_warnings.append("iface_busy_retry_hostapd_nat_no_virt")
+                else:
+                    start_warnings.append("iface_busy_retry_hostapd_nat")
+                _cleanup_attempt()
+                cmd_retry = _build_cmd_for_candidate(
+                    candidate,
+                    retry_no_virt,
+                    80,
+                    force_hostapd_nat=True,
+                )
+                ap_info_retry, res_retry, failure_code, failure_detail, out_tail, err_tail = _attempt_start_candidate(
+                    cmd=cmd_retry,
+                    firewalld_cfg=fw_cfg,
+                    target_phy=target_phy,
+                    ap_ready_timeout_s=ap_ready_timeout_s,
+                    ssid=ssid,
+                    adapter_ifname=ap_ifname,
+                    expected_ap_ifname=_expected_ifname(retry_no_virt, force_hostapd_nat=True),
+                    require_band="5ghz",
+                    require_width_mhz=80,
+                    iface_up_grace_s=iface_up_grace_s,
+                    ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
+                )
+                if ap_info_retry:
+                    attempts.append(
+                        {
+                            "candidate": candidate,
+                            "failure_reason": None,
+                            "no_virt": retry_no_virt,
+                            "engine": "hostapd_nat",
+                        }
+                    )
+                    ap_info_final = ap_info_retry
+                    res_final = res_retry
+                    selected_candidate = candidate
+                    break
+
+                attempts.append(
+                    {
+                        "candidate": candidate,
+                        "failure_reason": failure_code,
+                        "failure_detail": failure_detail,
+                        "no_virt": retry_no_virt,
+                        "engine": "hostapd_nat",
+                    }
+                )
+                last_failure_code = failure_code
+                last_failure_detail = failure_detail
+                _cleanup_attempt()
+                continue
+
         pop_timeout_retry = (
             pop_timeout_retry_no_virt
             and (not bridge_mode)
             and (not optimized_no_virt)
-            and failure_code == "ap_start_timed_out"
-            and not failure_detail
+            and failure_code in ("ap_start_timed_out", "hostapd_failed")
+            and (
+                not failure_detail
+                or failure_detail in ("iface_not_up", "ap_disabled", "engine_not_running")
+                or str(failure_detail).startswith("engine_exited_early")
+            )
         )
         if pop_timeout_retry:
             start_warnings.append("platform_pop_timeout_retry_no_virt")
@@ -1678,23 +2646,64 @@ _HOSTAPD_DRIVER_ERROR_PATTERNS = (
     "nl80211: Failed to set interface",
 )
 
+_IFACE_BUSY_PATTERNS = (
+    "rtnetlink answers: device or resource busy",
+    "name not unique on network",
+    "failed bringing",
+    "device or resource busy",
+    "too many open files in system",
+    "failed to request a scan of neighboring bsses",
+)
+
 _VIRT_AP_IFACE_RE = re.compile(r"^x\d+(.+)$")
 
 
 def _normalize_ap_adapter(preferred: Optional[str], inv: Optional[dict]) -> Optional[str]:
     if not preferred or not isinstance(preferred, str):
         return preferred
-    m = _VIRT_AP_IFACE_RE.match(preferred.strip())
+    preferred = preferred.strip()
+    m = _VIRT_AP_IFACE_RE.match(preferred)
     if not m:
-        return preferred.strip()
+        # Handle stale physical ifnames after USB driver resets (wlx* can change).
+        if os.path.exists(f"/sys/class/net/{preferred}"):
+            return preferred
+        if isinstance(inv, dict) and _get_adapter(inv, preferred):
+            return preferred
+        if isinstance(inv, dict):
+            rec = inv.get("recommended")
+            if isinstance(rec, str) and rec and _get_adapter(inv, rec):
+                log.warning(
+                    "ap_adapter_missing_fallback_recommended",
+                    extra={"preferred": preferred, "fallback": rec},
+                )
+                return rec
+            # If recommendation is unavailable, pick any AP-capable adapter, preferring USB.
+            adapters = inv.get("adapters") if isinstance(inv.get("adapters"), list) else []
+            usb_ap = [a.get("ifname") for a in adapters if a.get("supports_ap") and a.get("bus") == "usb" and a.get("ifname")]
+            if usb_ap:
+                fallback = str(usb_ap[0])
+                log.warning(
+                    "ap_adapter_missing_fallback_usb",
+                    extra={"preferred": preferred, "fallback": fallback},
+                )
+                return fallback
+            any_ap = [a.get("ifname") for a in adapters if a.get("supports_ap") and a.get("ifname")]
+            if any_ap:
+                fallback = str(any_ap[0])
+                log.warning(
+                    "ap_adapter_missing_fallback_any_ap",
+                    extra={"preferred": preferred, "fallback": fallback},
+                )
+                return fallback
+        return preferred
     base = m.group(1).strip()
     if not base:
-        return preferred.strip()
+        return preferred
     if os.path.exists(f"/sys/class/net/{base}"):
         return base
     if isinstance(inv, dict) and _get_adapter(inv, base):
         return base
-    return preferred.strip()
+    return preferred
 
 
 def _stdout_has_hostapd_driver_error(lines: List[str]) -> bool:
@@ -1702,6 +2711,62 @@ def _stdout_has_hostapd_driver_error(lines: List[str]) -> bool:
         for pattern in _HOSTAPD_DRIVER_ERROR_PATTERNS:
             if pattern in line:
                 return True
+    return False
+
+
+def _lines_have_iface_busy_signal(lines: List[str]) -> bool:
+    for line in lines:
+        low = str(line or "").lower()
+        for pattern in _IFACE_BUSY_PATTERNS:
+            if pattern in low:
+                return True
+    return False
+
+
+def _lines_have_virtual_iface_missing_signal(lines: List[str]) -> bool:
+    """
+    Detect hostapd_nat virtual-AP creation failures like:
+      iw dev <if> interface add x0<if> type __ap
+      ... No such device (-19)
+    """
+    if not lines:
+        return False
+    saw_no_such_device = False
+    saw_virtual_add = False
+    saw_virtual_iface_missing = False
+    for line in lines:
+        low = str(line or "").lower()
+        if "no such device" in low or "cannot find device" in low:
+            saw_no_such_device = True
+        if "interface add" in low and "type __ap" in low:
+            saw_virtual_add = True
+        if "cmd=/usr/sbin/iw dev" in low and "interface add" in low and "type __ap" in low:
+            saw_virtual_add = True
+        if "cannot find device" in low and ("\"x0" in low or " iface=x0" in low or " iface=x1" in low):
+            saw_virtual_iface_missing = True
+        if "no such device" in low and (" x0" in low or "\"x0" in low or " iface=x0" in low):
+            saw_virtual_iface_missing = True
+    if saw_virtual_iface_missing:
+        return True
+    return saw_no_such_device and saw_virtual_add
+
+
+def _lines_have_parent_iface_missing_signal(lines: List[str], ifname: Optional[str]) -> bool:
+    if not lines or not ifname:
+        return False
+    token = str(ifname).strip().lower()
+    if not token:
+        return False
+    for line in lines:
+        low = str(line or "").lower()
+        if f'cannot find device "{token}"' in low or f"cannot find device '{token}'" in low:
+            return True
+        if f"iface={token}" in low and "no such device" in low:
+            return True
+        if "cmd=/usr/sbin/ip link set" in low and f" {token} up" in low and "cannot find device" in low:
+            return True
+        if "cmd=/usr/sbin/iw dev" in low and f" {token} " in low and "no such device" in low:
+            return True
     return False
 
 
@@ -1716,6 +2781,11 @@ _STDOUT_AP_READY_PATTERNS = (
     "AP-ENABLED",
     "interface state HT_SCAN->ENABLED",
 )
+_STDOUT_AP_NOT_READY_PATTERNS = (
+    "AP-DISABLED",
+    "interface state HT_SCAN->DISABLED",
+    "CTRL-EVENT-TERMINATING",
+)
 
 _STDOUT_CREATED_IFACE_RE = re.compile(r"\b([A-Za-z0-9._-]{1,15})\s+created\b")
 
@@ -1723,6 +2793,14 @@ _STDOUT_CREATED_IFACE_RE = re.compile(r"\b([A-Za-z0-9._-]{1,15})\s+created\b")
 def _stdout_has_ap_ready(lines: List[str]) -> bool:
     for line in lines:
         for pattern in _STDOUT_AP_READY_PATTERNS:
+            if pattern in line:
+                return True
+    return False
+
+
+def _stdout_has_ap_not_ready(lines: List[str]) -> bool:
+    for line in lines:
+        for pattern in _STDOUT_AP_NOT_READY_PATTERNS:
             if pattern in line:
                 return True
     return False
@@ -1884,20 +2962,20 @@ def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[
     ap_interface = state.get("ap_interface") if isinstance(state, dict) else None
     engine_pid = state.get("engine", {}).get("pid") if isinstance(state, dict) else None
     expect_dns = not bool(cfg.get("bridge_mode", False))
-    bazzite = os_release.is_bazzite()
 
     conf_dir = _find_latest_conf_dir(adapter_ifname, ap_interface)
     if conf_dir:
         hostapd_ok = _hostapd_pid_running(conf_dir)
         dnsmasq_ok = (not expect_dns) or _dnsmasq_pid_running(conf_dir)
 
-        if bazzite:
-            if not hostapd_ok and ap_interface:
-                hostapd_ok = _hostapd_ready(ap_interface, adapter_ifname=adapter_ifname)
-            if not hostapd_ok and engine_pid and _pid_running(engine_pid):
-                hostapd_ok = any(_pid_is_hostapd(pid) for pid in _child_pids(engine_pid))
-            if expect_dns and not dnsmasq_ok and engine_pid and _pid_running(engine_pid):
-                dnsmasq_ok = any(_pid_is_dnsmasq(pid) for pid in _child_pids(engine_pid))
+        # hostapd_nat_engine only writes pidfiles on some platforms.
+        # When pidfiles are absent/stale, fall back to runtime process checks.
+        if not hostapd_ok and ap_interface:
+            hostapd_ok = _hostapd_ready(ap_interface, adapter_ifname=adapter_ifname)
+        if not hostapd_ok and engine_pid and _pid_running(engine_pid):
+            hostapd_ok = any(_pid_is_hostapd(pid) for pid in _child_pids(engine_pid))
+        if expect_dns and not dnsmasq_ok and engine_pid and _pid_running(engine_pid):
+            dnsmasq_ok = any(_pid_is_dnsmasq(pid) for pid in _child_pids(engine_pid))
 
         if not hostapd_ok:
             return "hostapd_exited"
@@ -1973,6 +3051,11 @@ def _check_connection_quality(state: Dict[str, Any], cfg: Dict[str, object]) -> 
 
 
 def _restart_from_watchdog(reason: str) -> None:
+    # Guard against stale watchdog ticks: only restart when state is still running.
+    st_guard = load_state()
+    if not isinstance(st_guard, dict) or not st_guard.get("running") or st_guard.get("phase") != "running":
+        return
+
     cid = f"watchdog-{int(time.time())}"
     
     # Check if auto channel switch is enabled and reason is quality-related
@@ -2000,9 +3083,19 @@ def _restart_from_watchdog(reason: str) -> None:
             except Exception:
                 pass  # Best-effort
     
-    with _OP_LOCK:
-        _stop_hotspot_impl(correlation_id=cid + ":stop")
-        _start_hotspot_impl(correlation_id=cid + ":start")
+    try:
+        with _OP_LOCK:
+            _stop_hotspot_impl(correlation_id=cid + ":stop")
+            _start_hotspot_impl(correlation_id=cid + ":start")
+    except Exception as exc:
+        try:
+            st = load_state()
+            warnings = list(st.get("warnings") if isinstance(st, dict) and st.get("warnings") else [])
+            warnings.append(f"watchdog_restart_failed:{reason}:{type(exc).__name__}")
+            update_state(warnings=warnings)
+        except Exception:
+            pass
+        return
 
     try:
         st = load_state()
@@ -2143,7 +3236,13 @@ def _cleanup_virtual_ap_ifaces(target_phy: Optional[str] = None) -> List[str]:
                 continue
 
         try:
-            subprocess.run([_iw_bin(), "dev", ifname, "del"], check=False, capture_output=True, text=True)
+            subprocess.run(
+                [_iw_bin(), "dev", ifname, "del"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_CMD_TIMEOUT_S,
+            )
         except Exception:
             pass
 
@@ -2268,7 +3367,10 @@ def _repair_impl(correlation_id: str = "repair"):
     removed_conf_dirs = _remove_conf_dirs(ap_ifname)
 
     try:
-        removed_ifaces = _cleanup_virtual_ap_ifaces(target_phy=target_phy)
+        # Pop!_OS USB adapters can re-enumerate PHYs; stale virtual AP ifaces on
+        # old PHYs can poison subsequent starts, so clean across all PHYs there.
+        cleanup_phy = None if os_release.is_pop_os() else target_phy
+        removed_ifaces = _cleanup_virtual_ap_ifaces(target_phy=cleanup_phy)
     except Exception:
         removed_ifaces = []
 
@@ -2311,11 +3413,11 @@ def start_hotspot(correlation_id: str = "start", overrides: Optional[dict] = Non
 
 def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict] = None, basic_mode: bool = False):
     ensure_config_file()
-    _repair_impl(correlation_id=correlation_id)
-
     state = load_state()
-    if state["phase"] in ("starting", "running"):
+    if state.get("phase") in ("starting", "running") and is_running():
         return LifecycleResult("already_running", state)
+
+    _repair_impl(correlation_id=correlation_id)
 
     state = update_state(
         phase="starting",
@@ -2402,21 +3504,37 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     else:
         bp = "5ghz"
 
+    passphrase_override_provided = isinstance(overrides, dict) and "wpa2_passphrase" in overrides
     if not isinstance(passphrase, str) or len(passphrase) < 8:
-        err = "invalid_passphrase_min_length_8"
-        state = update_state(
-            phase="error",
-            running=False,
-            ap_interface=None,
-            last_error=err,
-            last_correlation_id=correlation_id,
-            engine={"last_error": err, "ap_logs_tail": []},
-        )
-        return LifecycleResult("start_failed", state)
+        # Fresh installs can have an empty passphrase in config. Auto-provision a strong
+        # default once (unless caller explicitly provided an override).
+        if not passphrase_override_provided:
+            try:
+                generated_pw = _get_or_create_bootstrap_passphrase()
+                write_config_file({"wpa2_passphrase": generated_pw})
+                cfg["wpa2_passphrase"] = generated_pw
+                passphrase = generated_pw
+                platform_warnings.append("auto_generated_passphrase")
+                log.warning("auto_generated_passphrase_for_start")
+            except Exception as e:
+                platform_warnings.append(f"auto_generate_passphrase_failed:{e}")
+
+        if not isinstance(passphrase, str) or len(passphrase) < 8:
+            err = "invalid_passphrase_min_length_8"
+            state = update_state(
+                phase="error",
+                running=False,
+                ap_interface=None,
+                last_error=err,
+                last_correlation_id=correlation_id,
+                engine={"last_error": err, "ap_logs_tail": []},
+            )
+            return LifecycleResult("start_failed", state)
 
     ap_ifname = None
     nm_remediation_attempted = False
     nm_remediation_error: Optional[str] = None
+    prestart_warnings: List[str] = []
     try:
         inv = get_adapters()
         inv_error = inv.get("error")
@@ -2454,6 +3572,21 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         if not a or not a.get("supports_ap"):
             raise RuntimeError("no_ap_capable_adapter_found")
 
+        # Pop!_OS + USB adapters are substantially more stable in hostapd_nat
+        # no-virt mode (virtual iface naming and busy churn are common otherwise).
+        if (
+            platform_is_pop
+            and bp == "5ghz"
+            and (not bridge_mode)
+            and a.get("bus") == "usb"
+        ):
+            if not optimized_no_virt:
+                optimized_no_virt = True
+                platform_warnings.append("platform_pop_force_no_virt_usb")
+            if not use_hostapd_nat:
+                use_hostapd_nat = True
+                platform_warnings.append("platform_pop_force_hostapd_nat_usb")
+
         # --- Basic Mode Enforcement ---
         if basic_mode:
             log.info("basic_mode_enforcement_active", extra={"adapter": ap_ifname, "band": bp})
@@ -2482,8 +3615,52 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                     nm_remediation_error = "still_managed"
                 raise RuntimeError(nm_gate_error)
 
+        prep_warnings = _prepare_ap_interface(
+            ap_ifname,
+            force_nm_disconnect=platform_is_pop,
+        )
+        if prep_warnings:
+            prestart_warnings.extend(prep_warnings)
+            if (
+                platform_is_pop
+                and (not bridge_mode)
+                and (not use_hostapd_nat)
+                and "ap_iface_not_up_prestart" in prep_warnings
+            ):
+                use_hostapd_nat = True
+                platform_warnings.append("platform_pop_use_hostapd_nat_on_iface_busy")
+
         if not _ensure_iface_up(ap_ifname):
             log.warning("ap_iface_not_up_prestart", extra={"ap_interface": ap_ifname})
+            old_ifname = ap_ifname
+            ap_ifname, inv, a, reselect_warnings = _maybe_reselect_ap_after_prestart_failure(
+                ap_ifname=ap_ifname,
+                preferred_ifname=preferred if isinstance(preferred, str) else None,
+                band_pref=bp,
+                inv=inv,
+                adapter=a,
+                platform_is_pop=platform_is_pop,
+                prep_warnings=prep_warnings,
+            )
+            if reselect_warnings:
+                prestart_warnings.extend(reselect_warnings)
+            if ap_ifname != old_ifname:
+                prep_retry = _prepare_ap_interface(
+                    ap_ifname,
+                    force_nm_disconnect=platform_is_pop,
+                )
+                if prep_retry:
+                    prestart_warnings.extend(prep_retry)
+                    if (
+                        platform_is_pop
+                        and (not bridge_mode)
+                        and (not use_hostapd_nat)
+                        and "ap_iface_not_up_prestart" in prep_retry
+                    ):
+                        use_hostapd_nat = True
+                        platform_warnings.append("platform_pop_use_hostapd_nat_on_iface_busy")
+                if not _ensure_iface_up(ap_ifname):
+                    log.warning("ap_iface_not_up_post_reselect", extra={"ap_interface": ap_ifname})
 
         if bp == "5ghz":
             if not a.get("supports_80mhz"):
@@ -2554,6 +3731,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     supports_wifi6 = bool(a.get("supports_wifi6"))
     effective_wifi6 = False
     start_warnings: List[str] = []
+    if prestart_warnings:
+        start_warnings.extend(prestart_warnings)
     if platform_warnings:
         start_warnings.extend(platform_warnings)
 
@@ -2712,7 +3891,6 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 if best_channel:
                     channel_6g = best_channel
                     # Update config with selected channel
-                    from vr_hotspotd.config import write_config_file
                     write_config_file({"channel_6g": best_channel})
             except Exception:
                 pass  # Best-effort, continue with default
@@ -2777,7 +3955,6 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                     # If we auto-picked 5GHz, should we persist it?
                     # 6GHz logic persists it. Let's persist it for consistency if it was a 5GHz pick.
                     if bp == "5ghz":
-                        from vr_hotspotd.config import write_config_file
                         write_config_file({"channel_5g": best_channel})
             except Exception:
                 pass  # Best-effort
@@ -3482,12 +4659,23 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
         state.get("network_tuning") if isinstance(state, dict) else None
     )
 
-    if state["phase"] == "stopped":
-        return LifecycleResult("already_stopped", state)
-
     cfg = load_config()
     fw_cfg = _build_firewalld_cfg(cfg)
     adapter_ifname = state.get("adapter") if isinstance(state, dict) else None
+
+    runtime_present = False
+    try:
+        runtime_present = bool(
+            is_running()
+            or _find_our_lnxrouter_pids()
+            or _find_hostapd_pids(adapter_ifname)
+            or _find_dnsmasq_pids(adapter_ifname)
+        )
+    except Exception:
+        runtime_present = bool(is_running())
+
+    if state["phase"] == "stopped" and not runtime_present:
+        return LifecycleResult("already_stopped", state)
 
     state = update_state(
         phase="stopping",
@@ -3498,7 +4686,8 @@ def _stop_hotspot_impl(correlation_id: str = "stop"):
 
     ok, rc, out_tail, err_tail, err = stop_engine(firewalld_cfg=fw_cfg)
 
-    _kill_runtime_processes(adapter_ifname, firewalld_cfg=fw_cfg, stop_engine_first=False)
+    # Always run a second-pass teardown in case engine children or orphan helpers remain.
+    _kill_runtime_processes(adapter_ifname, firewalld_cfg=fw_cfg, stop_engine_first=True)
     removed_conf_dirs = _remove_conf_dirs(adapter_ifname)
 
     removed_ifaces: List[str] = []
