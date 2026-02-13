@@ -1419,6 +1419,15 @@ function getCurrentPlatformOsId() {
   return os && os.id ? String(os.id).toLowerCase() : '';
 }
 
+function shouldSuppressTransientStartError(status) {
+  const osObj = status && status.platform && status.platform.os ? status.platform.os : null;
+  const osId = osObj && osObj.id ? String(osObj.id).toLowerCase() : getCurrentPlatformOsId();
+  const phase = status && status.phase ? String(status.phase).toLowerCase() : '';
+  const running = !!(status && (status.running || phase === "running"));
+  // Bazzite can hit recoverable early engine exits during startup retries.
+  return osId === "bazzite" && phase === "starting" && !running;
+}
+
 // Chart Globals
 let rssiChartRef = null;
 let rateChartRef = null;
@@ -1862,6 +1871,7 @@ function updateBasicStatusMeta(state) {
   const cmdInfo = parseEngineCmd(state && state.engine ? state.engine.cmd : null);
   const adapter = state.adapter || '--';
   const band = state.band || cmdInfo.band || '--';
+  const suppressTransientError = shouldSuppressTransientStartError(state);
   const metaEl = document.getElementById('basicStatusAdapterBand');
   if (metaEl) {
     const bandLabel = band !== '--' ? formatBandLabel(normalizeBandValue(band)) : band;
@@ -1893,7 +1903,7 @@ function updateBasicStatusMeta(state) {
   const errEl = document.getElementById('basicLastError');
   if (!errEl) return;
   const err = state.last_error || (state.engine && state.engine.last_error) || '';
-  if (err) {
+  if (err && !suppressTransientError) {
     errEl.textContent = `Last error: ${truncateText(err, 140)}`;
     errEl.style.display = '';
   } else {
@@ -1904,7 +1914,7 @@ function updateBasicStatusMeta(state) {
   const remEl = document.getElementById('basicLastErrorDetail');
   if (remEl) {
     const remediation = extractRemediationText(state.last_error_detail);
-    if (remediation) {
+    if (remediation && !suppressTransientError) {
       remEl.textContent = `Remediation: ${remediation}`;
       remEl.style.display = '';
     } else {
@@ -2542,11 +2552,12 @@ async function refresh() {
   lastStatus = s;
   setPill(s);
   updateBasicStatusMeta(s);
+  const suppressTransientError = shouldSuppressTransientStartError(s);
 
   const advErrEl = document.getElementById('statusLastError');
   if (advErrEl) {
     const err = s.last_error || (s.engine && s.engine.last_error) || '';
-    if (err) {
+    if (err && !suppressTransientError) {
       advErrEl.textContent = `Last error: ${truncateText(err, 140)}`;
       advErrEl.style.display = '';
     } else {
@@ -2557,7 +2568,7 @@ async function refresh() {
   const advRemEl = document.getElementById('statusErrorDetail');
   if (advRemEl) {
     const remediation = extractRemediationText(s.last_error_detail);
-    if (remediation) {
+    if (remediation && !suppressTransientError) {
       advRemEl.textContent = `Remediation: ${remediation}`;
       advRemEl.style.display = '';
     } else {
