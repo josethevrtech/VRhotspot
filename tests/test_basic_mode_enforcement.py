@@ -1188,6 +1188,135 @@ class TestPostStartWidthCheck(unittest.TestCase):
         self.assertFalse(bool(mock_build_nat.call_args_list[0].kwargs.get("no_virt", True)))
         self.assertTrue(bool(mock_build_nat.call_args_list[1].kwargs.get("no_virt", False)))
 
+    def test_start_5ghz_strict_bazzite_no_virt_driver_mode_error_retries_with_virt(self):
+        """Bazzite no-virt driver-mode failures should retry the same candidate with a virtual AP iface."""
+        from vr_hotspotd import lifecycle
+        from vr_hotspotd.lifecycle import APReadyInfo
+
+        candidate = {
+            "band": 5,
+            "width": 80,
+            "primary_channel": 149,
+            "center_channel": 155,
+            "country": "US",
+            "flags": ["non_dfs"],
+            "rationale": "test",
+        }
+        probe_payload = {
+            "wifi": {
+                "errors": [],
+                "warnings": [],
+                "counts": {"dfs": 0},
+                "candidates": [candidate],
+            }
+        }
+
+        state = {}
+
+        def fake_update_state(**kwargs):
+            state.update(kwargs)
+            return dict(state)
+
+        first_res = MagicMock()
+        first_res.pid = 3001
+        first_res.cmd = ["cmd-no-virt"]
+        first_res.started_ts = 211
+        first_res.exit_code = 245
+        first_res.error = "engine_exited_early: rc=245"
+        first_res.stdout_tail = []
+        first_res.stderr_tail = []
+
+        second_res = MagicMock()
+        second_res.pid = 3002
+        second_res.cmd = ["cmd-virt"]
+        second_res.started_ts = 212
+        second_res.exit_code = None
+        second_res.error = None
+        second_res.stdout_tail = []
+        second_res.stderr_tail = []
+
+        ap_ready = APReadyInfo(
+            ifname="x0wlan1",
+            phy="phy1",
+            ssid="VR-Hotspot",
+            freq_mhz=5745,
+            channel=149,
+            channel_width_mhz=80,
+        )
+
+        call_count = {"n": 0}
+
+        def fake_attempt_start_candidate(**_kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return (
+                    None,
+                    first_res,
+                    "hostapd_failed",
+                    "engine_exited_early: rc=245",
+                    [],
+                    [
+                        "nl80211: kernel reports: Registration to specific type not supported",
+                        "nl80211: Could not configure driver mode",
+                    ],
+                )
+            return ap_ready, second_res, None, None, [], []
+
+        build_nat_no_virt = []
+
+        def fake_build_cmd_nat(**kwargs):
+            build_nat_no_virt.append(bool(kwargs.get("no_virt")))
+            return [f"no_virt={kwargs.get('no_virt')}"]
+
+        with patch("vr_hotspotd.lifecycle.wifi_probe.probe", return_value=probe_payload), \
+             patch("vr_hotspotd.lifecycle._attempt_start_candidate", side_effect=fake_attempt_start_candidate), \
+             patch("vr_hotspotd.lifecycle.build_cmd_nat", side_effect=fake_build_cmd_nat), \
+             patch("vr_hotspotd.lifecycle._prepare_ap_interface", return_value=[]), \
+             patch("vr_hotspotd.lifecycle._kill_runtime_processes"), \
+             patch("vr_hotspotd.lifecycle._remove_conf_dirs", return_value=[]), \
+             patch("vr_hotspotd.lifecycle._cleanup_virtual_ap_ifaces", return_value=[]), \
+             patch("vr_hotspotd.lifecycle.update_state", side_effect=fake_update_state), \
+             patch("vr_hotspotd.lifecycle._collect_affinity_pids", return_value=[]), \
+             patch("vr_hotspotd.lifecycle.system_tuning.apply_runtime", return_value=({}, [])), \
+             patch("vr_hotspotd.lifecycle.network_tuning.apply", return_value=({}, [])), \
+             patch("vr_hotspotd.lifecycle._watchdog_enabled", return_value=False), \
+             patch("vr_hotspotd.lifecycle.time.sleep", return_value=None):
+            res = lifecycle._start_hotspot_5ghz_strict(
+                cfg={"watchdog_enable": False},
+                inv={"adapters": []},
+                ap_ifname="wlan1",
+                target_phy="phy1",
+                ssid="VR-Hotspot",
+                passphrase="password123",
+                country="US",
+                ap_security="wpa2",
+                ap_ready_timeout_s=5.0,
+                optimized_no_virt=True,
+                debug=False,
+                enable_internet=True,
+                bridge_mode=False,
+                bridge_name=None,
+                bridge_uplink=None,
+                gateway_ip="192.168.68.1",
+                dhcp_start_ip="192.168.68.10",
+                dhcp_end_ip="192.168.68.250",
+                dhcp_dns="gateway",
+                effective_wifi6=False,
+                tuning_state={},
+                start_warnings=[],
+                fw_cfg={},
+                firewall_backend="nftables",
+                use_hostapd_nat=True,
+                correlation_id="test-cid-bazzite-driver-retry",
+                enforced_channel_5g=None,
+                allow_fallback_40mhz=False,
+                allow_dfs_channels=False,
+            )
+
+        self.assertEqual(res.code, "started")
+        self.assertEqual(build_nat_no_virt[:2], [True, False])
+        self.assertIn("optimized_no_virt_retry_with_virt", state.get("warnings", []))
+
     def test_start_5ghz_strict_pop_busy_hostapd_nat_fallback_uses_no_virt(self):
         """On Pop!_OS busy fallback from lnxrouter->hostapd_nat should use --no-virt first."""
         from vr_hotspotd import lifecycle

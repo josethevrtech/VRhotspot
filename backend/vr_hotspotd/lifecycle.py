@@ -2318,7 +2318,8 @@ def _start_hotspot_5ghz_strict(
             _cleanup_attempt()
             continue
 
-        driver_error = _stdout_has_hostapd_driver_error(out_tail or [])
+        driver_lines = _coerce_log_lines(out_tail) + _coerce_log_lines(err_tail)
+        driver_error = _stdout_has_hostapd_driver_error(driver_lines)
         if driver_error and (not bridge_mode):
             start_warnings.append("optimized_no_virt_retry_with_virt" if optimized_no_virt else "optimized_virt_retry_with_no_virt")
             _cleanup_attempt()
@@ -2645,13 +2646,15 @@ def _hostapd_ready(ap_interface: str, *, adapter_ifname: Optional[str]) -> bool:
 
 
 _HOSTAPD_DRIVER_ERROR_PATTERNS = (
-    "Could not set channel for kernel driver",
-    "Failed to set beacon parameters",
-    "Could not connect to kernel driver",
-    "Interface initialization failed",
-    "Unable to setup interface",
-    "nl80211: Failed to set beacon",
-    "nl80211: Failed to set interface",
+    "could not set channel for kernel driver",
+    "failed to set beacon parameters",
+    "could not connect to kernel driver",
+    "interface initialization failed",
+    "unable to setup interface",
+    "nl80211: failed to set beacon",
+    "nl80211: failed to set interface",
+    "nl80211: could not configure driver mode",
+    "registration to specific type not supported",
 )
 
 _IFACE_BUSY_PATTERNS = (
@@ -2714,10 +2717,19 @@ def _normalize_ap_adapter(preferred: Optional[str], inv: Optional[dict]) -> Opti
     return preferred
 
 
+def _coerce_log_lines(value: object) -> List[str]:
+    if isinstance(value, str):
+        return value.splitlines()
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    return []
+
+
 def _stdout_has_hostapd_driver_error(lines: List[str]) -> bool:
     for line in lines:
+        low = str(line or "").lower()
         for pattern in _HOSTAPD_DRIVER_ERROR_PATTERNS:
-            if pattern in line:
+            if pattern in low:
                 return True
     return False
 
@@ -4139,7 +4151,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     else:
         warnings.append(f"optimized_start_failed:{start_failure_reason or 'engine_start_failed'}")
 
-    driver_error = _stdout_has_hostapd_driver_error(latest_stdout or [])
+    driver_lines = _coerce_log_lines(latest_stdout) + _coerce_log_lines(latest_stderr)
+    driver_error = _stdout_has_hostapd_driver_error(driver_lines)
     if optimized_no_virt and driver_error and (not bridge_mode) and bp in ("2.4ghz", "5ghz"):
         warnings.append("optimized_no_virt_retry_with_virt")
         retry_channel_width = str(cfg.get("channel_width", "auto")).lower()
