@@ -113,7 +113,7 @@
 
         <div class="card basic-card">
           <div class="card-header">
-            <h2>Hotspot Setup</h2>
+            <h2>Connection Setup</h2>
           </div>
           <div class="card-body">
             <div id="basicInfoBanner" class="info-banner" style="display:none"></div>
@@ -122,7 +122,11 @@
             <div class="basic-connect-inline mt-12">
               <div id="basicConnectFields" class="form-stack"></div>
               <div class="form-group mb-0">
-                <label style="font-size:12px; text-transform:uppercase; color:var(--text-muted);">Passphrase</label>
+                <div class="field-label-with-tip">
+                  <label for="wpa2_passphrase_basic" style="font-size:12px; text-transform:uppercase; color:var(--text-muted);">Passphrase</label>
+                  <span class="tip" data-tip="WPA2 is the standard default. For WPA3, use Pro mode."
+                    aria-label="WPA2 is the standard default. For WPA3, use Pro mode." tabindex="0">ⓘ</span>
+                </div>
                 <div class="input-with-action">
                   <input id="wpa2_passphrase_basic" type="password" placeholder="Saved" />
                   <button id="btnRevealPassBasic" class="btn icon-only" title="Show">👁</button>

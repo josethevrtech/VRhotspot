@@ -77,6 +77,13 @@ let authFlowLocked = false;
 let uiBootstrapped = false;
 let refreshTimer = null;
 const BASIC_REFRESH_INTERVAL_MS = 2000;
+const BASIC_QOS_DEFAULT = 'ultra_low_latency';
+const BASIC_DEFAULT_SECURITY = 'wpa2';
+const BASIC_DEFAULT_COUNTRY = 'US';
+const BASIC_QOS_AUTOSAVE_DEBOUNCE_MS = 400;
+let basicQosAutosaveTimer = null;
+let basicQosAutosaveHook = null;
+let basicQosFeedbackTimer = null;
 
 function readUiMode() {
   const raw = (STORE.getItem(UI_MODE_KEY) || '').trim().toLowerCase();
@@ -632,13 +639,22 @@ function updateBasicQosBanner(opts = {}) {
       balanced: 'Balanced',
     };
     const displayValue = displayMap[savedValue] || savedValue;
-    banner.textContent = `Saved QoS is ${displayValue}. Basic mode uses Speed/Stable/Off. Click Save to apply your Basic choice.`;
+    banner.textContent = `Saved QoS is ${displayValue}. Basic mode uses Speed/Stable/Off. Select a profile to apply your Basic choice.`;
     banner.classList.add('show');
     if (opts.markDirty !== false) markDirty();
   } else {
     banner.classList.remove('show');
     banner.textContent = '';
   }
+}
+
+function scheduleBasicQosAutosave() {
+  if (typeof basicQosAutosaveHook !== 'function') return;
+  if (basicQosAutosaveTimer) clearTimeout(basicQosAutosaveTimer);
+  basicQosAutosaveTimer = setTimeout(() => {
+    basicQosAutosaveTimer = null;
+    basicQosAutosaveHook();
+  }, BASIC_QOS_AUTOSAVE_DEBOUNCE_MS);
 }
 
 function wireQosBasic() {
@@ -649,6 +665,7 @@ function wireQosBasic() {
         setQoS(radio.value);
         markDirty();
         updateBasicQosBanner();
+        if (getUiMode() === 'basic') scheduleBasicQosAutosave();
       });
     }
   }
@@ -659,6 +676,19 @@ function wireQosBasic() {
       updateBasicQosBanner();
     });
   }
+}
+
+function getInitialQosPreset(cfg) {
+  const hasSavedPreset = !!(
+    cfg &&
+    Object.prototype.hasOwnProperty.call(cfg, 'qos_preset') &&
+    cfg.qos_preset !== undefined &&
+    cfg.qos_preset !== null &&
+    String(cfg.qos_preset).trim() !== ''
+  );
+  if (hasSavedPreset) return cfg.qos_preset;
+  const fallback = (getUiMode() === 'basic') ? BASIC_QOS_DEFAULT : 'off';
+  return fallback;
 }
 
 function updateQosLabel(mode) {
@@ -743,6 +773,8 @@ function pickBasicFields(cfg) {
   if (cfg.wpa2_passphrase !== undefined) {
     out.wpa2_passphrase = cfg.wpa2_passphrase;
   }
+  out.ap_security = BASIC_DEFAULT_SECURITY;
+  out.country = BASIC_DEFAULT_COUNTRY;
   return out;
 }
 
@@ -758,8 +790,12 @@ function applyFieldVisibility(mode) {
     const fieldMode = getFieldMode(key);
     const show = (mode === 'advanced') || (fieldMode === 'basic');
     const hideBandPreferenceInBasic = (mode === 'basic' && key === 'band_preference');
+    const hideSecurityInBasic = (mode === 'basic' && key === 'ap_security');
+    const hideCountryInBasic = (mode === 'basic' && key === 'country');
     const bandVisible = el.dataset.bandVisible;
-    const finalShow = (bandVisible === '0') ? false : (show && !hideBandPreferenceInBasic);
+    const finalShow = (bandVisible === '0')
+      ? false
+      : (show && !hideBandPreferenceInBasic && !hideSecurityInBasic && !hideCountryInBasic);
     el.style.display = finalShow ? '' : 'none';
   }
 }
@@ -2614,7 +2650,7 @@ function applyConfig(cfg) {
   if (document.getElementById('auto_channel_switch')) {
     document.getElementById('auto_channel_switch').checked = !!cfg.auto_channel_switch;
   }
-  setQoS(cfg.qos_preset || 'off');
+  setQoS(getInitialQosPreset(cfg), { mode: getUiMode() });
   document.getElementById('nat_accel').checked = !!cfg.nat_accel;
   document.getElementById('bridge_mode').checked = !!cfg.bridge_mode;
   document.getElementById('bridge_name').value = (cfg.bridge_name || 'vrbr0');
@@ -3086,6 +3122,34 @@ function bootstrapAuthenticatedUi() {
     await refresh();
     return r;
   }
+
+  let basicQosSaveInFlight = false;
+  let basicQosSaveQueued = false;
+  basicQosAutosaveHook = async () => {
+    if (getUiMode() !== 'basic') return;
+    if (basicQosSaveInFlight) {
+      basicQosSaveQueued = true;
+      return;
+    }
+    basicQosSaveInFlight = true;
+    const res = await saveConfigOnly();
+    if (res && res.ok) {
+      updateBasicQosBanner({ markDirty: false });
+      setMsg('Saved');
+      if (basicQosFeedbackTimer) clearTimeout(basicQosFeedbackTimer);
+      basicQosFeedbackTimer = setTimeout(() => {
+        const msg = document.getElementById('msg');
+        const msgBasic = document.getElementById('msgBasic');
+        if (msg && msg.textContent === 'Saved') msg.textContent = '';
+        if (msgBasic && msgBasic.textContent === 'Saved') msgBasic.textContent = '';
+      }, 1600);
+    }
+    basicQosSaveInFlight = false;
+    if (basicQosSaveQueued) {
+      basicQosSaveQueued = false;
+      scheduleBasicQosAutosave();
+    }
+  };
 
 
   // Basic Mode Passphrase Logic
