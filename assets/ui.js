@@ -76,6 +76,7 @@ let isAuthenticated = false;
 let authFlowLocked = false;
 let uiBootstrapped = false;
 let refreshTimer = null;
+const BASIC_REFRESH_INTERVAL_MS = 2000;
 
 function readUiMode() {
   const raw = (STORE.getItem(UI_MODE_KEY) || '').trim().toLowerCase();
@@ -660,6 +661,20 @@ function wireQosBasic() {
   }
 }
 
+function updateQosLabel(mode) {
+  const label = document.querySelector('label[for="qos_preset"]');
+  if (!label) return;
+  label.textContent = (mode === 'basic') ? 'Connection profiles' : 'QoS / Scheduler';
+}
+
+function setRefreshIntervalValue(ms) {
+  const value = String(ms);
+  const advEvery = document.getElementById('refreshEvery');
+  const basicEvery = document.getElementById('refreshEveryBasic');
+  if (advEvery) advEvery.value = value;
+  if (basicEvery) basicEvery.value = value;
+}
+
 function applyUiMode(mode, opts = {}) {
   document.body.dataset.uiMode = mode;
   const toggle = document.getElementById('uiModeToggle');
@@ -679,6 +694,7 @@ function applyUiMode(mode, opts = {}) {
       : 'Select the interface that will run AP mode. Recommended chooses the best detected adapter.';
     renderHintTip(adapterTip, tipText);
   }
+  updateQosLabel(mode);
 
   // Reload adapters to apply filtering and renaming rules
   if (!opts.skipAdapters) loadAdapters();
@@ -697,6 +713,12 @@ function applyUiMode(mode, opts = {}) {
   if (telCard) {
     const show = (mode === 'advanced') || showTelemetryState;
     telCard.style.display = show ? '' : 'none';
+  }
+
+  const autoRefresh = document.getElementById('autoRefresh');
+  if (mode === 'basic' && autoRefresh && autoRefresh.checked) {
+    setRefreshIntervalValue(BASIC_REFRESH_INTERVAL_MS);
+    applyAutoRefresh();
   }
 }
 
@@ -2795,8 +2817,15 @@ async function refresh() {
 }
 
 function applyAutoRefresh() {
-  const enabled = document.getElementById('autoRefresh').checked;
-  const every = parseInt(document.getElementById('refreshEvery').value || '2000', 10);
+  const autoEl = document.getElementById('autoRefresh');
+  const everyEl = document.getElementById('refreshEvery');
+  const enabled = autoEl ? autoEl.checked : false;
+  let every = parseInt(everyEl && everyEl.value ? everyEl.value : String(BASIC_REFRESH_INTERVAL_MS), 10);
+  if (!Number.isFinite(every) || every <= 0) every = BASIC_REFRESH_INTERVAL_MS;
+  if (enabled && getUiMode() === 'basic') {
+    every = BASIC_REFRESH_INTERVAL_MS;
+    setRefreshIntervalValue(BASIC_REFRESH_INTERVAL_MS);
+  }
 
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = null;
@@ -2916,12 +2945,20 @@ document.getElementById('autoRefresh').addEventListener('change', applyAutoRefre
 document.getElementById('refreshEvery').addEventListener('change', applyAutoRefresh);
 const autoRefreshBasic = document.getElementById('autoRefreshBasic');
 if (autoRefreshBasic) autoRefreshBasic.addEventListener('change', () => {
-  document.getElementById('autoRefresh').checked = autoRefreshBasic.checked;
+  const advAuto = document.getElementById('autoRefresh');
+  if (advAuto) advAuto.checked = autoRefreshBasic.checked;
+  if (autoRefreshBasic.checked) {
+    setRefreshIntervalValue(BASIC_REFRESH_INTERVAL_MS);
+  }
   applyAutoRefresh();
 });
 const refreshEveryBasic = document.getElementById('refreshEveryBasic');
 if (refreshEveryBasic) refreshEveryBasic.addEventListener('change', () => {
-  document.getElementById('refreshEvery').value = refreshEveryBasic.value;
+  if (getUiMode() === 'basic') {
+    setRefreshIntervalValue(BASIC_REFRESH_INTERVAL_MS);
+  } else {
+    document.getElementById('refreshEvery').value = refreshEveryBasic.value;
+  }
   applyAutoRefresh();
 });
 

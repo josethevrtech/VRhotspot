@@ -61,7 +61,7 @@
       <div class="basic-grid">
         <div class="card basic-card">
           <div class="card-header">
-            <h2>Status, Control & Connect</h2>
+            <h2>Status & Control</h2>
           </div>
           <div class="card-body">
             <div id="basicPillContainer" class="status-indicator-lg mb-12">
@@ -93,10 +93,8 @@
                 <span class="tip" data-tip="Updates the status of the connection and connected devices."
                   aria-label="Updates the status of the connection and connected devices." tabindex="0">ⓘ</span>
               </label>
-              <select id="refreshEveryBasic" class="mini-select" aria-label="Refresh interval">
+              <select id="refreshEveryBasic" class="mini-select" aria-label="Refresh interval" hidden>
                 <option value="2000">2s</option>
-                <option value="3000">3s</option>
-                <option value="5000">5s</option>
               </select>
               <label class="tog" title="Show Telemetry">
                 <input type="checkbox" id="showTelemetryBasic" /> Stats
@@ -132,16 +130,12 @@
               </div>
               <div class="action-group mt-12 wrap-btns basic-connect-actions">
                 <button class="btn secondary" id="btnCopySsid">Copy SSID</button>
-                <button class="btn secondary" id="btnCopyPass">Copy Pass</button>
+                <button class="btn secondary" id="btnCopyPass">Copy passphrase</button>
                 <button class="btn secondary" id="btnShowQrBasic">QR Code</button>
                 <button class="btn primary" id="btnSavePassBasic" title="Save passphrase"
                   aria-label="Save passphrase">Save passphrase</button>
               </div>
               <div class="small mt-6 faded" id="copyHint"></div>
-            </div>
-            <div class="action-group mt-12">
-              <button class="btn primary" id="btnSaveConfigBasic">Save Config</button>
-              <button class="btn secondary" id="btnSaveRestartBasic">Save & Restart</button>
             </div>
           </div>
         </div>
@@ -511,7 +505,7 @@
               </div>
 
               <div class="form-group" data-field="qos_preset">
-                <label for="qos_preset">QoS / Scheduler</label>
+                <label for="qos_preset">Connection profiles</label>
 
                 <div class="qos-basic">
                   <div id="basicQosBanner" class="pillWarn info-banner">
