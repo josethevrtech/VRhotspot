@@ -17,6 +17,8 @@ from vr_hotspotd import os_release
 
 _CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
 _CMD_TIMEOUT_S = 4.0
+_LNXROUTER_TMPDIR_ENV = "VR_HOTSPOT_LNXROUTER_TMPDIR"
+_DEFAULT_LNXROUTER_TMPDIR = "/dev/shm/lnxrouter_tmp"
 
 
 def _is_bazzite() -> bool:
@@ -94,6 +96,13 @@ def _default_uplink_iface() -> Optional[str]:
             if idx + 1 < len(parts):
                 return parts[idx + 1]
     return None
+
+
+def _resolve_lnxrouter_tmp_root() -> Path:
+    override = (os.environ.get(_LNXROUTER_TMPDIR_ENV) or "").strip()
+    if override:
+        return Path(override)
+    return Path(_DEFAULT_LNXROUTER_TMPDIR)
 
 
 def _maybe_set_regdom(country: Optional[str]) -> None:
@@ -750,9 +759,16 @@ def main() -> int:
     hostapd = _resolve_binary("hostapd", "HOSTAPD")
     dnsmasq = _resolve_binary("dnsmasq", "DNSMASQ")
 
-    # Align with lifecycle.py expectations
-    base_tmp = "/dev/shm/lnxrouter_tmp"
-    os.makedirs(base_tmp, exist_ok=True)
+    # Align with lifecycle.py expectations (with optional test override).
+    base_tmp_path = _resolve_lnxrouter_tmp_root()
+    base_tmp_path.mkdir(parents=True, exist_ok=True)
+    if (_LNXROUTER_TMPDIR_ENV in os.environ) and base_tmp_path.exists():
+        try:
+            os.chmod(base_tmp_path, 0o700)
+        except Exception:
+            # Best-effort hardening for override paths used in tests/sandboxes.
+            pass
+    base_tmp = str(base_tmp_path)
     prefix = f"lnxrouter.{args.ap_ifname}.conf."
     tmpdir = tempfile.mkdtemp(prefix=prefix, dir=base_tmp)
     # Ensure correct permissions for the directory

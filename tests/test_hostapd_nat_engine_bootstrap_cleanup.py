@@ -36,9 +36,11 @@ def test_main_bootstrap_failure_restores_managed_state(monkeypatch, tmp_path):
     )
 
     calls = []
+    lnxrouter_tmp = tmp_path / "lnxrouter_tmp"
     conf_dir = tmp_path / "lnxrouter.wlan1.conf.TEST"
     conf_dir.mkdir(parents=True, exist_ok=True)
 
+    monkeypatch.setenv("VR_HOTSPOT_LNXROUTER_TMPDIR", str(lnxrouter_tmp))
     monkeypatch.setattr(eng.argparse.ArgumentParser, "parse_args", lambda self: args)
     monkeypatch.setattr(eng, "_resolve_binary", lambda name, env_key: f"/usr/sbin/{name}")
     monkeypatch.setattr(eng, "_maybe_set_regdom", lambda _country: None)
