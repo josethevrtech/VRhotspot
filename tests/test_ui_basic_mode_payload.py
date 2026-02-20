@@ -18,6 +18,8 @@ class TestUiBasicModePayload(unittest.TestCase):
         html = Path("assets/index.html").read_text(encoding="utf-8")
         self.assertIn("<h2>Status & Control</h2>", html)
         self.assertNotIn("Status, Control & Connect", html)
+        self.assertIn("<h2>Hotspot Setup</h2>", html)
+        self.assertNotIn("<h2>Quick Setup</h2>", html)
         self.assertIn('id="btnCopyPass">Copy passphrase</button>', html)
         self.assertIn('<label for="qos_preset">Connection profiles</label>', html)
         self.assertNotIn('id="btnSaveConfigBasic"', html)
