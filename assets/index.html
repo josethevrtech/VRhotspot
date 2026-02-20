@@ -84,31 +84,45 @@
               <button class="btn secondary" id="btnRefreshBasic" title="Refresh" aria-label="Refresh">Refresh</button>
             </div>
 
-            <div class="control-row mt-12 basic-refresh-controls">
-              <label class="tog" title="Auto refresh">
-                <input type="checkbox" id="autoRefreshBasic" /> Auto
+            <div class="control-row mt-12 basic-status-preferences">
+              <label class="tog" title="Hide logs">
+                <input type="checkbox" id="privacyModeBasic" /> Privacy
               </label>
-              <select id="refreshEveryBasic" class="mini-select">
+              <label class="tog" title="Auto refresh">
+                <input type="checkbox" id="autoRefreshBasic" /> Refresh Status
+                <span class="tip" data-tip="Updates the status of the connection and connected devices."
+                  aria-label="Updates the status of the connection and connected devices." tabindex="0">ⓘ</span>
+              </label>
+              <select id="refreshEveryBasic" class="mini-select" aria-label="Refresh interval">
                 <option value="2000">2s</option>
                 <option value="3000">3s</option>
                 <option value="5000">5s</option>
               </select>
-            </div>
-
-            <div class="control-row mt-12">
-              <label class="tog" title="Hide logs">
-                <input type="checkbox" id="privacyModeBasic" /> Privacy
-              </label>
               <label class="tog" title="Show Telemetry">
                 <input type="checkbox" id="showTelemetryBasic" /> Stats
+                <span class="tip"
+                  data-tip="Enables a quick glimpse of devices connected and connection speed."
+                  aria-label="Enables a quick glimpse of devices connected and connection speed."
+                  tabindex="0">ⓘ</span>
               </label>
             </div>
             <div class="small mt-6 faded" id="privacyHintBasic">Privacy mode hides logs</div>
 
-            <div class="basic-connect-merged mt-12">
-              <h3 class="basic-subheading">Connect</h3>
-              <div id="basicConnectFields" class="form-stack">
-              </div>
+            <div id="msgBasic" class="small mt-10"></div>
+            <div id="dirtyBasic" class="small mt-6 warning-text"></div>
+          </div>
+        </div>
+
+        <div class="card basic-card">
+          <div class="card-header">
+            <h2>Quick Setup</h2>
+          </div>
+          <div class="card-body">
+            <div id="basicInfoBanner" class="info-banner" style="display:none"></div>
+            <div id="basicChannelBanner" class="info-banner warn" style="display:none"></div>
+            <div id="basicQuickFields" class="form-stack"></div>
+            <div class="basic-connect-inline mt-12">
+              <div id="basicConnectFields" class="form-stack"></div>
               <div class="form-group mb-0">
                 <label style="font-size:12px; text-transform:uppercase; color:var(--text-muted);">Passphrase</label>
                 <div class="input-with-action">
@@ -125,19 +139,6 @@
               </div>
               <div class="small mt-6 faded" id="copyHint"></div>
             </div>
-
-            <div id="msgBasic" class="small mt-10"></div>
-            <div id="dirtyBasic" class="small mt-6 warning-text"></div>
-          </div>
-        </div>
-
-        <div class="card basic-card">
-          <div class="card-header">
-            <h2>Quick Setup</h2>
-          </div>
-          <div class="card-body">
-            <div id="basicChannelBanner" class="info-banner warn" style="display:none"></div>
-            <div id="basicQuickFields" class="form-stack"></div>
             <div class="action-group mt-12">
               <button class="btn primary" id="btnSaveConfigBasic">Save Config</button>
               <button class="btn secondary" id="btnSaveRestartBasic">Save & Restart</button>
@@ -512,15 +513,14 @@
               <div class="form-group" data-field="qos_preset">
                 <label for="qos_preset">QoS / Scheduler</label>
 
-                <!-- Basic QoS (Hidden here, logic in ui.js handles visibility but layout logic might need update) -->
-                <div class="qos-basic" style="display:none">
+                <div class="qos-basic">
                   <div id="basicQosBanner" class="pillWarn info-banner">
                     Settings applied in Basic mode.
                   </div>
                   <div class="segmented">
-                    <label class="seg"><input type="radio" name="qos_basic" value="off" />Off</label>
-                    <label class="seg"><input type="radio" name="qos_basic" value="ultra_low_latency" />Speed</label>
-                    <label class="seg"><input type="radio" name="qos_basic" value="vr" />Stable</label>
+                    <label class="seg"><input type="radio" name="qos_basic" value="off" /><span>Off</span></label>
+                    <label class="seg"><input type="radio" name="qos_basic" value="ultra_low_latency" /><span>Speed</span></label>
+                    <label class="seg"><input type="radio" name="qos_basic" value="vr" /><span>Stable</span></label>
                   </div>
                 </div>
 

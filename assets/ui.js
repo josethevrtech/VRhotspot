@@ -514,6 +514,11 @@ function updateBasicInfoBanner() {
   const banner = document.getElementById('basicInfoBanner');
   if (!banner) return;
   const show = (getUiMode() === 'basic') && hasAdvancedValues(lastCfg);
+  if (show) {
+    banner.textContent = 'Advanced settings are currently saved. Basic mode only edits quick fields.';
+  } else {
+    banner.textContent = '';
+  }
   banner.style.display = show ? 'block' : 'none';
 }
 
@@ -561,7 +566,7 @@ function updateBasicChannelBanner() {
 }
 
 const QOS_ALLOWED = new Set(['off', 'vr', 'balanced', 'ultra_low_latency', 'high_throughput']);
-const QOS_BASIC_VALUES = new Set(['off', 'ultra_low_latency', 'high_throughput', 'balanced', 'vr']);
+const QOS_BASIC_VALUES = new Set(['off', 'ultra_low_latency', 'vr']);
 let currentQosPreset = 'vr';
 
 function setQoS(value, opts = {}) {
@@ -602,11 +607,13 @@ function updateBasicQosBanner(opts = {}) {
   if (!banner) return;
   if (!lastCfg || !Object.prototype.hasOwnProperty.call(lastCfg, 'qos_preset')) {
     banner.classList.remove('show');
+    banner.textContent = '';
     return;
   }
   const mode = getUiMode();
   if (mode !== 'basic') {
     banner.classList.remove('show');
+    banner.textContent = '';
     return;
   }
 
@@ -614,25 +621,22 @@ function updateBasicQosBanner(opts = {}) {
     ? String(lastCfg.qos_preset).trim().toLowerCase()
     : '';
 
-  // Check if the saved config value is in basic values
   const savedValue = QOS_ALLOWED.has(raw) ? raw : 'off';
-
-  // Check if user has selected a basic value in the UI (currentQosPreset is updated by setQoS)
   const uiValue = currentQosPreset || 'vr';
-
-  // Only show banner if:
-  // 1. Saved value is not in basic values (i.e., it's "off")
-  // 2. AND user hasn't selected a basic value in the UI yet
-  const needs = !QOS_BASIC_VALUES.has(savedValue) && !QOS_BASIC_VALUES.has(uiValue);
+  const needs = !QOS_BASIC_VALUES.has(savedValue) && savedValue !== uiValue;
 
   if (needs) {
-    // Update banner text based on saved value
-    const displayValue = savedValue === 'off' ? 'Off' : savedValue;
-    banner.textContent = `QoS is currently ${displayValue} in Advanced settings. Basic defaults to Stability. Click Save to apply.`;
+    const displayMap = {
+      high_throughput: 'High Throughput',
+      balanced: 'Balanced',
+    };
+    const displayValue = displayMap[savedValue] || savedValue;
+    banner.textContent = `Saved QoS is ${displayValue}. Basic mode uses Speed/Stable/Off. Click Save to apply your Basic choice.`;
     banner.classList.add('show');
     if (opts.markDirty !== false) markDirty();
   } else {
     banner.classList.remove('show');
+    banner.textContent = '';
   }
 }
 
@@ -718,7 +722,6 @@ function pickBasicFields(cfg) {
     out.wpa2_passphrase = cfg.wpa2_passphrase;
   }
   return out;
-  return out;
 }
 
 function getFieldMode(key) {
@@ -732,8 +735,9 @@ function applyFieldVisibility(mode) {
     const key = el.getAttribute('data-field') || '';
     const fieldMode = getFieldMode(key);
     const show = (mode === 'advanced') || (fieldMode === 'basic');
+    const hideBandPreferenceInBasic = (mode === 'basic' && key === 'band_preference');
     const bandVisible = el.dataset.bandVisible;
-    const finalShow = (bandVisible === '0') ? false : show;
+    const finalShow = (bandVisible === '0') ? false : (show && !hideBandPreferenceInBasic);
     el.style.display = finalShow ? '' : 'none';
   }
 }
