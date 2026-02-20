@@ -81,9 +81,11 @@ const BASIC_QOS_DEFAULT = 'ultra_low_latency';
 const BASIC_DEFAULT_SECURITY = 'wpa2';
 const BASIC_DEFAULT_COUNTRY = 'US';
 const BASIC_QOS_AUTOSAVE_DEBOUNCE_MS = 400;
+const BASIC_PASS_SAVE_RECENT_MS = 3000;
 let basicQosAutosaveTimer = null;
 let basicQosAutosaveHook = null;
 let basicQosFeedbackTimer = null;
+let lastBasicPassphraseSaveAt = 0;
 
 function readUiMode() {
   const raw = (STORE.getItem(UI_MODE_KEY) || '').trim().toLowerCase();
@@ -3153,33 +3155,49 @@ function bootstrapAuthenticatedUi() {
 
 
   // Basic Mode Passphrase Logic
-  const btnSavePassBasic = document.getElementById('btnSavePassBasic');
-  if (btnSavePassBasic) btnSavePassBasic.addEventListener('click', async () => {
-    const passField = document.getElementById('wpa2_passphrase_basic'); // Use basic input
+  let basicPassphraseSaveInFlight = false;
+  async function saveBasicPassphraseIfNeeded(opts = {}) {
+    const showHint = opts.showHint !== false;
+    const skipRecent = !!opts.skipRecent;
+    const passField = document.getElementById('wpa2_passphrase_basic');
     const hint = document.getElementById('copyHint');
-
-    // Check if user entered something
     const val = passField ? passField.value.trim() : '';
+
     if (!passField || !val) {
-      if (hint) {
+      if (showHint && hint) {
         hint.textContent = 'Enter a passphrase (8-63 characters)';
         hint.style.color = 'var(--bad)';
       }
-      return;
+      return { attempted: false, skippedReason: 'empty' };
     }
 
-    // Sync to main config object manually since getForm() might strictly check the advanced input
-    // But wait, getForm() uses document.getElementById... we should update THAT or sync it here.
-    // Easiest: Update the advanced input value so getForm() picks it up if we use that.
-    // But better: Update the 'out' object in saveConfigOnly() logic?
-    // Let's just update the advanced field to match, trigger dirty, then save.
+    if (!passphraseDirty) {
+      if (showHint && hint) {
+        hint.textContent = 'No passphrase changes to save';
+        hint.style.color = 'var(--text-muted)';
+      }
+      return { attempted: false, skippedReason: 'unchanged' };
+    }
+
+    if (skipRecent && (Date.now() - lastBasicPassphraseSaveAt) < BASIC_PASS_SAVE_RECENT_MS) {
+      return { attempted: false, skippedReason: 'recent' };
+    }
+
+    if (basicPassphraseSaveInFlight) {
+      return { attempted: false, skippedReason: 'busy' };
+    }
+
     const advPass = document.getElementById('wpa2_passphrase');
     if (advPass) advPass.value = val;
 
     passphraseDirty = true;
+    basicPassphraseSaveInFlight = true;
     const res = await saveConfigOnly();
+    basicPassphraseSaveInFlight = false;
 
-    if (hint) {
+    if (res && res.ok) lastBasicPassphraseSaveAt = Date.now();
+
+    if (showHint && hint) {
       if (res && res.ok) {
         hint.textContent = 'Passphrase saved to config';
         hint.style.color = 'var(--good)';
@@ -3189,6 +3207,20 @@ function bootstrapAuthenticatedUi() {
         hint.style.color = 'var(--bad)';
       }
     }
+    return { attempted: true, ok: !!(res && res.ok), response: res };
+  }
+
+  const passFieldBasic = document.getElementById('wpa2_passphrase_basic');
+  if (passFieldBasic) passFieldBasic.addEventListener('keydown', async (ev) => {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    await saveBasicPassphraseIfNeeded({ showHint: true, skipRecent: false });
+  });
+
+  const btnSavePassBasic = document.getElementById('btnSavePassBasic');
+  if (btnSavePassBasic) btnSavePassBasic.addEventListener('click', async () => {
+    await saveBasicPassphraseIfNeeded({ showHint: true, skipRecent: false });
   });
 
   // Basic Reveal Button
@@ -3199,6 +3231,14 @@ function bootstrapAuthenticatedUi() {
   });
 
   document.getElementById('btnSaveConfig').addEventListener('click', async () => {
+    if (getUiMode() === 'basic') {
+      if (!cfgDirty && (Date.now() - lastBasicPassphraseSaveAt) < BASIC_PASS_SAVE_RECENT_MS) {
+        setMsg('Saved');
+        return;
+      }
+      const passSave = await saveBasicPassphraseIfNeeded({ showHint: false, skipRecent: true });
+      if (passSave.attempted || passSave.skippedReason === 'busy') return;
+    }
     await saveConfigOnly();
   });
   const btnSaveConfigBasic = document.getElementById('btnSaveConfigBasic');
@@ -3304,7 +3344,14 @@ function wireQr() {
   const modal = document.getElementById('qrModal');
   const place = document.getElementById('qrPlaceholder');
   const rawDiv = document.getElementById('qrSsidRaw');
+  const btnShowQr = document.getElementById('btnShowQr');
+  const btnShowQrBasic = document.getElementById('btnShowQrBasic');
   if (!modal || !place) return;
+
+  function setBasicQrToggleState(open) {
+    if (!btnShowQrBasic) return;
+    btnShowQrBasic.setAttribute('aria-pressed', open ? 'true' : 'false');
+  }
 
   async function resolvePassphraseForQr() {
     const typedPass = getPassphraseValue();
@@ -3328,7 +3375,7 @@ function wireQr() {
 
     if (!ssid) {
       setMsg('SSID is missing', 'dangerText');
-      return;
+      return false;
     }
 
     const passLookup = await resolvePassphraseForQr();
@@ -3342,7 +3389,7 @@ function wireQr() {
       const { advanced, basic } = getPassphraseInputs();
       const focusEl = (getUiMode() === 'basic' ? basic : advanced) || advanced || basic;
       if (focusEl) focusEl.focus();
-      return;
+      return false;
     }
 
     // Auth Type: WPA (works for WPA2/3 usually) or WPA2-EAP etc.
@@ -3371,25 +3418,39 @@ function wireQr() {
         });
       }
       modal.style.display = 'flex';
+      setBasicQrToggleState(true);
+      return true;
     } catch (e) {
       place.textContent = 'Error generating QR code.';
       console.error(e);
       modal.style.display = 'flex';
+      setBasicQrToggleState(true);
+      return true;
     }
   }
 
-  const btns = [document.getElementById('btnShowQr'), document.getElementById('btnShowQrBasic')];
-  for (const b of btns) {
-    if (b) b.addEventListener('click', showQr);
-  }
+  if (btnShowQr) btnShowQr.addEventListener('click', showQr);
+  if (btnShowQrBasic) btnShowQrBasic.addEventListener('click', async () => {
+    const isOpen = modal.style.display && modal.style.display !== 'none';
+    if (isOpen) {
+      modal.style.display = 'none';
+      setBasicQrToggleState(false);
+      return;
+    }
+    await showQr();
+  });
 
   document.getElementById('btnCloseQr').addEventListener('click', () => {
     modal.style.display = 'none';
+    setBasicQrToggleState(false);
   });
 
   // Close on outside click
   modal.addEventListener('click', (e) => {
-    if (e.target === modal) modal.style.display = 'none';
+    if (e.target === modal) {
+      modal.style.display = 'none';
+      setBasicQrToggleState(false);
+    }
   });
 }
 

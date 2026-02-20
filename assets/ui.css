@@ -1287,6 +1287,33 @@ body[data-ui-mode="basic"] #refreshEveryBasic {
   padding: 0 12px;
 }
 
+body[data-ui-mode="basic"] #btnCopySsid,
+body[data-ui-mode="basic"] #btnCopyPass {
+  display: none !important;
+}
+
+body[data-ui-mode="basic"] .basic-connect-actions {
+  grid-template-columns: 1fr;
+}
+
+body[data-ui-mode="basic"] .basic-passphrase-actions .btn.icon-only {
+  flex-shrink: 0;
+}
+
+body[data-ui-mode="basic"] .basic-passphrase-actions .basic-qr-toggle {
+  width: 40px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+body[data-ui-mode="basic"] #btnShowQrBasic[aria-pressed="true"] {
+  background: rgba(0, 243, 255, 0.1);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 12px rgba(0, 243, 255, 0.25);
+}
+
 .floating-tip-layer {
   position: fixed;
   top: 0;
