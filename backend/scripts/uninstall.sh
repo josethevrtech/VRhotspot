@@ -6,18 +6,26 @@ set -euo pipefail
 log() { echo "[backend-uninstall] $*"; }
 die() { echo "[backend-uninstall] ERROR: $*" >&2; exit 1; }
 
+DAEMON_UNIT="vr-hotspotd.service"
+AUTOSTART_UNIT="vr-hotspot-autostart.service"
+# Backward-compat cleanup only.
+LEGACY_SYSTEMD_UNITS=("vr-hotspotd-autostart.service")
+SYSTEMD_DIR="/etc/systemd/system"
+
 if [[ "${EUID}" -ne 0 ]]; then
     die "This script must be run as root."
 fi
 
 log "Stopping and disabling services..."
-systemctl disable --now vr-hotspotd.service &>/dev/null || true
-systemctl disable --now vr-hotspot-autostart.service &>/dev/null || true
+for unit in "$DAEMON_UNIT" "$AUTOSTART_UNIT" "${LEGACY_SYSTEMD_UNITS[@]}"; do
+    systemctl disable --now "$unit" &>/dev/null || true
+done
 
 log "Removing systemd unit files..."
-rm -f /etc/systemd/system/vr-hotspotd.service
-rm -f /etc/systemd/system/vr-hotspot-autostart.service
-rm -rf /etc/systemd/system/vr-hotspotd.service.d
+for unit in "$DAEMON_UNIT" "$AUTOSTART_UNIT" "${LEGACY_SYSTEMD_UNITS[@]}"; do
+    rm -f "$SYSTEMD_DIR/$unit"
+done
+rm -rf "$SYSTEMD_DIR/$DAEMON_UNIT.d"
 systemctl daemon-reload
 
 log "Removing application and configuration files..."

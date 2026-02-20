@@ -5,10 +5,12 @@ set -e
 
 # --- Configuration ---
 APP_NAME="VR Hotspot"
-SERVICE_NAME="vr-hotspotd"
+DAEMON_UNIT="vr-hotspotd.service"
+AUTOSTART_UNIT="vr-hotspot-autostart.service"
+# Backward-compat cleanup only.
+LEGACY_SYSTEMD_UNITS=("vr-hotspotd-autostart.service")
 INSTALL_ROOT="/var/lib/vr-hotspot"
 APP_DIR="$INSTALL_ROOT/app"
-VENV_DIR="$INSTALL_ROOT/venv"
 CONFIG_DIR="/etc/vr-hotspot"
 ENV_FILE="$CONFIG_DIR/env"
 SYSTEMD_DIR="/etc/systemd/system"
@@ -38,9 +40,9 @@ print_info() { echo -e "${CYAN}ℹ $1${NC}"; }
 
 interactive_read() {
     if [ -c /dev/tty ]; then
-        read "$@" < /dev/tty
+        read -r "$@" < /dev/tty
     else
-        read "$@"
+        read -r "$@"
     fi
 }
 
@@ -171,7 +173,7 @@ check_root() {
 
 cleanup_previous_install() {
     print_step "Checking for existing installation..."
-    if [ ! -d "$INSTALL_ROOT" ] && ! systemctl list-unit-files | grep -q "$SERVICE_NAME.service"; then
+    if [ ! -d "$INSTALL_ROOT" ] && ! systemctl list-unit-files | grep -Fq "$DAEMON_UNIT"; then
         print_success "No existing installation found."
         return 0
     fi
@@ -185,8 +187,11 @@ cleanup_previous_install() {
     fi
 
     print_info "Cleaning up previous installation..."
-    systemctl stop "$SERVICE_NAME.service" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME.service" &>/dev/null || true
+    local unit
+    for unit in "$DAEMON_UNIT" "$AUTOSTART_UNIT" "${LEGACY_SYSTEMD_UNITS[@]}"; do
+        systemctl stop "$unit" &>/dev/null || true
+        systemctl disable "$unit" &>/dev/null || true
+    done
     pkill -f "vr_hotspotd/main.py" &>/dev/null || true
 
     if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
@@ -195,8 +200,9 @@ cleanup_previous_install() {
         firewall-cmd --reload &>/dev/null || true
     fi
 
-    rm -f "$SYSTEMD_DIR/$SERVICE_NAME.service"
-    rm -f "$SYSTEMD_DIR/$SERVICE_NAME-autostart.service"
+    for unit in "$DAEMON_UNIT" "$AUTOSTART_UNIT" "${LEGACY_SYSTEMD_UNITS[@]}"; do
+        rm -f "$SYSTEMD_DIR/$unit"
+    done
     systemctl daemon-reload
 
     print_info "Removing files and directories..."
@@ -212,6 +218,7 @@ detect_os() {
         OS_NAME="${VR_HOTSPOT_OS_NAME:-$OS_ID}"
         OS_ID_LIKE="${VR_HOTSPOT_OS_ID_LIKE:-}"
     elif [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
         . /etc/os-release
         OS_ID="$ID"
         OS_NAME="$NAME"
@@ -471,6 +478,8 @@ install_daemon() {
     local install_args=()
     if [ "$ENABLE_AUTOSTART" == "y" ]; then
         install_args+=("--enable-autostart")
+    else
+        install_args+=("--disable-autostart")
     fi
 
     bash "$backend_install_script" "${install_args[@]}"
@@ -546,8 +555,8 @@ show_completion() {
     echo -e "   3. Configure and start your hotspot!"
     echo
     echo -e "${CYAN}🔧 ${BOLD}Useful Commands:${NC}"
-    echo -e "   - Status:      ${BOLD}sudo systemctl status $SERVICE_NAME${NC}"
-    echo -e "   - Logs:        ${BOLD}sudo journalctl -u $SERVICE_NAME -f${NC}"
+    echo -e "   - Status:      ${BOLD}sudo systemctl status $DAEMON_UNIT${NC}"
+    echo -e "   - Logs:        ${BOLD}sudo journalctl -u $DAEMON_UNIT -f${NC}"
     echo -e "   - Uninstall:   ${BOLD}sudo bash $APP_DIR/uninstall.sh${NC}"
     echo
 }
@@ -610,3 +619,4 @@ main() {
 }
 
 main "$@"
+

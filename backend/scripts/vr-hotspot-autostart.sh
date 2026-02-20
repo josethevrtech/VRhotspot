@@ -14,6 +14,18 @@ if [[ -f "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
 fi
 
+is_truthy() {
+  case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if ! is_truthy "${VR_HOTSPOT_AUTOSTART_HELPER_ENABLED:-0}"; then
+  echo "autostart helper disabled (VR_HOTSPOT_AUTOSTART_HELPER_ENABLED); exiting"
+  exit 0
+fi
+
 # Self-healing: Ensure vendor binaries are linked into venv if missing
 VENV_SITE=$(find /var/lib/vr-hotspot/venv/lib -maxdepth 2 -name site-packages -type d 2>/dev/null | head -n 1)
 APP_VENDOR="/var/lib/vr-hotspot/app/backend/vendor"
@@ -69,6 +81,25 @@ if [[ "${running}" == "true" ]]; then
 fi
 
 cfg="$(curl -fsS "${hdrs[@]}" "${BASE}/v1/config" 2>/dev/null || true)"
+autostart_enabled="$(python3 - <<'PY' "${cfg}"
+import json
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    payload = json.loads(raw) if raw else {}
+    data = payload.get("data") or {}
+    print("true" if bool(data.get("autostart")) else "false")
+except Exception:
+    print("false")
+PY
+)"
+
+if [[ "${autostart_enabled}" != "true" ]]; then
+  log "autostart disabled in config; exiting"
+  exit 0
+fi
+
 ap_adapter="$(python3 - <<'PY' "${cfg}"
 import json
 import sys

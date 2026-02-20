@@ -28,6 +28,13 @@ def _install_signal_handlers(stop_event: threading.Event) -> None:
         signal.signal(sig, _handler)
 
 
+def _inprocess_autostart_enabled() -> bool:
+    raw = os.environ.get("VR_HOTSPOTD_INPROCESS_AUTOSTART")
+    if raw is None:
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def main():
     setup_logging()
     ensure_config_file()
@@ -65,27 +72,34 @@ def main():
     )
     server_thread.start()
 
-    # Autostart / Persistence Logic (Async)
-    def _do_autostart():
-        try:
-            # Short sleep to let server settle / logs verify boot
-            import time
-            time.sleep(1.0)
-            
-            from vr_hotspotd.config import load_config
-            from vr_hotspotd.lifecycle import start_hotspot
-            cfg = load_config()
-            if cfg.get("autostart"):
-                log.info("autostart_enabled_starting_hotspot")
-                start_hotspot(correlation_id="autostart")
-        except Exception:
-            log.exception("autostart_failed")
+    if _inprocess_autostart_enabled():
+        # Autostart / Persistence Logic (Async)
+        def _do_autostart():
+            try:
+                # Short sleep to let server settle / logs verify boot
+                import time
 
-    try:
-        autostart_thread = threading.Thread(target=_do_autostart, name="autostart-worker", daemon=True)
-        autostart_thread.start()
-    except Exception:
-        log.exception("autostart_thread_launch_failed")
+                time.sleep(1.0)
+
+                from vr_hotspotd.config import load_config
+                from vr_hotspotd.lifecycle import start_hotspot
+
+                cfg = load_config()
+                if cfg.get("autostart"):
+                    log.info("autostart_enabled_starting_hotspot")
+                    start_hotspot(correlation_id="autostart")
+            except Exception:
+                log.exception("autostart_failed")
+
+        try:
+            autostart_thread = threading.Thread(
+                target=_do_autostart, name="autostart-worker", daemon=True
+            )
+            autostart_thread.start()
+        except Exception:
+            log.exception("autostart_thread_launch_failed")
+    else:
+        log.info("autostart_inprocess_disabled")
 
     try:
         while server_thread.is_alive() and not stop_event.wait(0.5):

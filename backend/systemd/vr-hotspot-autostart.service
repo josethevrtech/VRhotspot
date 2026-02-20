@@ -9,6 +9,7 @@ After=firewalld.service
 
 [Service]
 Type=oneshot
+Environment=VR_HOTSPOT_AUTOSTART_HELPER_ENABLED=1
 EnvironmentFile=-/etc/vr-hotspot/env
 ExecStart=/var/lib/vr-hotspot/bin/vr-hotspot-autostart.sh
 

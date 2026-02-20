@@ -185,7 +185,7 @@ sudo ./install.sh
 
 ```bash
 curl -fsS http://127.0.0.1:8732/healthz && echo OK
-sudo systemctl status vr-hotspotd
+sudo systemctl status vr-hotspotd.service
 ```
 
 ---
@@ -243,17 +243,17 @@ sudo systemctl disable --now vr-hotspot-autostart.service
 ### Check Service Status
 
 ```bash
-sudo systemctl status vr-hotspotd
+sudo systemctl status vr-hotspotd.service
 ```
 
 ### View Logs
 
 ```bash
 # Recent logs
-sudo journalctl -u vr-hotspotd -n 100
+sudo journalctl -u vr-hotspotd.service -n 100
 
 # Follow logs in real-time
-sudo journalctl -u vr-hotspotd -f
+sudo journalctl -u vr-hotspotd.service -f
 ```
 
 ### Check API Status
@@ -272,12 +272,13 @@ curl -s "http://127.0.0.1:8732/v1/status?include_logs=1" -H "X-Api-Token: $TOKEN
 - Check: `iw dev`
 - Ensure adapter supports AP mode: `iw list | grep -A10 "Supported interface modes"`
 
-**2. Hotspot times out (ap_ready_timeout):**
-- Check if NetworkManager is interfering: `nmcli device status | grep wlan`
-- Try using wlan1 instead of wlan0
-- Check logs: `sudo journalctl -u vr-hotspotd -n 50`
+2. Hotspot times out (ap_ready_timeout):
 
-**3. Can't access web UI:**
+- Check if NetworkManager is interfering: `nmcli device status | grep wlan`
+- Try using `wlan1` instead of `wlan0`
+- Check logs: `sudo journalctl -u vr-hotspotd.service -n 50`
+
+3. Can't access web UI:
 - Check firewall: `sudo firewall-cmd --list-ports` or `sudo ufw status`
 - Verify service is running: `curl http://127.0.0.1:8732/healthz`
 
@@ -372,7 +373,7 @@ Issues and pull requests are welcome!
 **When filing a bug, please include:**
 - OS/distro + kernel version
 - WiFi adapter chipset/model
-- Output of: `sudo journalctl -u vr-hotspotd -n 200`
+- Output of: `sudo journalctl -u vr-hotspotd.service -n 200`
 - Output of: `curl http://127.0.0.1:8732/v1/status?include_logs=1`
 - Redact any API tokens or passwords
 

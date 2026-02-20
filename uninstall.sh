@@ -5,7 +5,10 @@ set -e
 
 # --- Configuration ---
 APP_NAME="VR Hotspot"
-SERVICE_NAME="vr-hotspotd"
+DAEMON_UNIT="vr-hotspotd.service"
+AUTOSTART_UNIT="vr-hotspot-autostart.service"
+# Backward-compat cleanup only.
+LEGACY_SYSTEMD_UNITS=("vr-hotspotd-autostart.service")
 INSTALL_ROOT="/var/lib/vr-hotspot"
 CONFIG_DIR="/etc/vr-hotspot"
 SYSTEMD_DIR="/etc/systemd/system"
@@ -43,6 +46,7 @@ check_root() {
 
 detect_os() {
     if [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
         . /etc/os-release
         print_info "Detected System: $NAME"
     fi
@@ -77,10 +81,11 @@ main() {
     fi
 
     print_step "Stopping and disabling services..."
-    systemctl stop "$SERVICE_NAME.service" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME.service" &>/dev/null || true
-    systemctl stop "$SERVICE_NAME-autostart.service" &>/dev/null || true
-    systemctl disable "$SERVICE_NAME-autostart.service" &>/dev/null || true
+    local unit
+    for unit in "$DAEMON_UNIT" "$AUTOSTART_UNIT" "${LEGACY_SYSTEMD_UNITS[@]}"; do
+        systemctl stop "$unit" &>/dev/null || true
+        systemctl disable "$unit" &>/dev/null || true
+    done
     print_success "Services stopped and disabled."
 
     if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
@@ -91,8 +96,9 @@ main() {
     fi
 
     print_step "Removing systemd service files..."
-    rm -f "$SYSTEMD_DIR/$SERVICE_NAME.service"
-    rm -f "$SYSTEMD_DIR/$SERVICE_NAME-autostart.service"
+    for unit in "$DAEMON_UNIT" "$AUTOSTART_UNIT" "${LEGACY_SYSTEMD_UNITS[@]}"; do
+        rm -f "$SYSTEMD_DIR/$unit"
+    done
     systemctl daemon-reload
     print_success "Service files removed."
 
