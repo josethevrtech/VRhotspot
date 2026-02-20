@@ -50,6 +50,57 @@ body {
   background-image: none;
 }
 
+/* Login Splash */
+.login-splash {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #000;
+}
+
+.login-splash-inner {
+  width: min(640px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.login-logo {
+  width: min(560px, 92vw);
+  max-width: 100%;
+  height: auto;
+}
+
+.login-form {
+  width: min(440px, 100%);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+}
+
+.login-form input {
+  font-family: var(--font-mono);
+  letter-spacing: -0.2px;
+}
+
+#loginError {
+  min-height: 18px;
+  text-align: center;
+}
+
+@media (max-width: 560px) {
+  .login-form {
+    grid-template-columns: 1fr;
+  }
+
+  .login-form .btn {
+    width: 100%;
+  }
+}
+
 /* Layout Containers */
 .app-container {
   display: flex;
@@ -303,6 +354,15 @@ body[data-ui-mode="basic"] [data-ui-section="advanced"] {
 }
 
 body[data-ui-mode="advanced"] [data-ui-section="basic"] {
+  display: none !important;
+}
+
+body[data-auth-state="pending"] [data-auth-view="app"],
+body[data-auth-state="unauthenticated"] [data-auth-view="app"] {
+  display: none !important;
+}
+
+body[data-auth-state="authenticated"] [data-auth-view="splash"] {
   display: none !important;
 }
 
@@ -1028,6 +1088,19 @@ canvas {
 
 .basic-refresh-controls {
   justify-content: flex-start;
+}
+
+.basic-connect-merged {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 14px;
+}
+
+.basic-subheading {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .basic-connect-actions {

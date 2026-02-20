@@ -72,6 +72,10 @@ const FLOATING_TIP_LAYER_ID = 'floatingTipLayer';
 let floatingTipLayer = null;
 let activeTipTarget = null;
 let floatingTipWired = false;
+let isAuthenticated = false;
+let authFlowLocked = false;
+let uiBootstrapped = false;
+let refreshTimer = null;
 
 function readUiMode() {
   const raw = (STORE.getItem(UI_MODE_KEY) || '').trim().toLowerCase();
@@ -852,20 +856,151 @@ function debugTokenLog(injected) {
 }
 
 function getToken() {
-  const advEl = document.getElementById('apiToken');
-  const basicEl = document.getElementById('apiTokenBasic');
-  const adv = advEl ? (advEl.value || '').trim() : '';
-  const basic = basicEl ? (basicEl.value || '').trim() : '';
-  const stored = getStoredToken();
-  return basic || adv || stored;
+  return getStoredToken();
 }
+
 function setToken(v) {
   const val = (v || '').trim();
   setStoredToken(val);
-  const advEl = document.getElementById('apiToken');
-  const basicEl = document.getElementById('apiTokenBasic');
-  if (advEl && advEl.value !== val) advEl.value = val;
-  if (basicEl && basicEl.value !== val) basicEl.value = val;
+}
+
+function setAuthState(state) {
+  if (!document.body) return;
+  document.body.setAttribute('data-auth-state', state);
+}
+
+function isUnauthorizedStatus(status) {
+  return status === 401 || status === 403;
+}
+
+function clearStoredTokenEverywhere() {
+  setStoredToken('');
+  const ls = getLocalStorageSafe();
+  try { if (ls) ls.removeItem(TOKEN_KEY); } catch { /* ignore */ }
+  try { if (ls) ls.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
+  try { STORE.removeItem(TOKEN_KEY); } catch { /* ignore */ }
+  try { STORE.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
+}
+
+function clearLoggedOutRouteState() {
+  if (!window.location.hash) return;
+  const cleanUrl = window.location.pathname + window.location.search;
+  if (window.history && typeof window.history.replaceState === 'function') {
+    window.history.replaceState(null, '', cleanUrl);
+  } else {
+    window.location.hash = '';
+  }
+}
+
+function setLoginError(text = '') {
+  const el = document.getElementById('loginError');
+  if (el) el.textContent = text;
+}
+
+function renderLoginSplash(errorText = '', opts = {}) {
+  const keepInput = !!opts.keepInput;
+  const input = document.getElementById('loginToken');
+  const submit = document.getElementById('btnLoginSubmit');
+  const splash = document.getElementById('login-splash');
+  if (splash) splash.setAttribute('aria-hidden', 'false');
+  setAuthState('unauthenticated');
+  isAuthenticated = false;
+  clearLoggedOutRouteState();
+  stopActivePolling();
+  setMsg('');
+  setLoginError(errorText);
+  if (submit) submit.disabled = false;
+  if (input) {
+    input.disabled = false;
+    if (!keepInput) input.value = '';
+    input.focus();
+  }
+}
+
+function showAuthenticatedApp() {
+  const splash = document.getElementById('login-splash');
+  if (splash) splash.setAttribute('aria-hidden', 'true');
+  setAuthState('authenticated');
+  setLoginError('');
+  isAuthenticated = true;
+  authFlowLocked = false;
+}
+
+function logoutToSplash(errorText = 'Invalid token') {
+  if (authFlowLocked) return;
+  authFlowLocked = true;
+  clearStoredTokenEverywhere();
+  renderLoginSplash(errorText);
+}
+
+async function validateTokenCandidate(token) {
+  const val = (token || '').trim();
+  if (!val) return { ok: false, reason: 'missing' };
+  try {
+    const st = await api('/v1/status', {
+      method: 'GET',
+      tokenOverride: val,
+      skipAuthHandling: true,
+    });
+    if (st.ok) return { ok: true };
+    if (isUnauthorizedStatus(st.status)) return { ok: false, reason: 'invalid' };
+    return { ok: false, reason: 'http', status: st.status };
+  } catch {
+    return { ok: false, reason: 'network' };
+  }
+}
+
+async function submitLoginSplashToken() {
+  const input = document.getElementById('loginToken');
+  const submit = document.getElementById('btnLoginSubmit');
+  if (!input || !submit) return;
+  const token = (input.value || '').trim();
+  if (!token) {
+    setLoginError('Token required');
+    return;
+  }
+
+  setLoginError('');
+  input.disabled = true;
+  submit.disabled = true;
+
+  const result = await validateTokenCandidate(token);
+  if (result.ok) {
+    setToken(token);
+    window.location.reload();
+    return;
+  }
+
+  if (result.reason === 'invalid') {
+    clearStoredTokenEverywhere();
+    input.value = '';
+    setLoginError('Invalid token');
+  } else if (result.reason === 'network') {
+    setLoginError('Network error while validating token');
+  } else {
+    const code = result.status ? `HTTP ${result.status}` : 'error';
+    setLoginError(`Unable to validate token (${code})`);
+  }
+
+  input.disabled = false;
+  submit.disabled = false;
+  input.focus();
+}
+
+function wireLoginSplash() {
+  const form = document.getElementById('loginForm');
+  if (!form || form.dataset.wired === '1') return;
+  form.dataset.wired = '1';
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    await submitLoginSplashToken();
+  });
+  const input = document.getElementById('loginToken');
+  if (input) {
+    input.addEventListener('input', () => {
+      setLoginError('');
+    });
+  }
 }
 
 /**
@@ -1154,6 +1289,7 @@ async function copyToClipboard(text) {
 }
 
 async function refreshInfo() {
+  if (!isAuthenticated) return;
   const versionEl = document.getElementById('uiVersion');
   if (!versionEl) return;
   const fallback = (versionEl.textContent || '').trim();
@@ -1568,12 +1704,21 @@ function updateCharts(t) {
 }
 
 async function api(path, opts = {}) {
+  const tokenOverride = (typeof opts.tokenOverride === 'string') ? opts.tokenOverride.trim() : '';
+  const skipAuthHandling = !!opts.skipAuthHandling;
+  if (!tokenOverride && !skipAuthHandling && !isAuthenticated) {
+    return { ok: false, status: 401, json: null, raw: '' };
+  }
+  const fetchOpts = Object.assign({}, opts);
+  delete fetchOpts.tokenOverride;
+  delete fetchOpts.skipAuthHandling;
+
   const baseHeaders = {};
-  if (opts.headers) {
-    if (opts.headers instanceof Headers) {
-      opts.headers.forEach((value, key) => { baseHeaders[key] = value; });
+  if (fetchOpts.headers) {
+    if (fetchOpts.headers instanceof Headers) {
+      fetchOpts.headers.forEach((value, key) => { baseHeaders[key] = value; });
     } else {
-      Object.assign(baseHeaders, opts.headers);
+      Object.assign(baseHeaders, fetchOpts.headers);
     }
   }
   const headerKeys = Object.keys(baseHeaders).reduce((acc, key) => {
@@ -1581,16 +1726,19 @@ async function api(path, opts = {}) {
     return acc;
   }, {});
   if (!headerKeys['x-correlation-id']) baseHeaders['X-Correlation-Id'] = cid();
-  const tok = getToken();
+  const tok = tokenOverride || getToken();
   const injected = !!(tok && !headerKeys['x-api-token']);
   if (injected) baseHeaders['X-Api-Token'] = tok;
-  if (opts.body && !headerKeys['content-type']) baseHeaders['Content-Type'] = 'application/json';
+  if (fetchOpts.body && !headerKeys['content-type']) baseHeaders['Content-Type'] = 'application/json';
   debugTokenLog(injected);
 
-  const res = await fetch(BASE + path, Object.assign({}, opts, { headers: baseHeaders }));
+  const res = await fetch(BASE + path, Object.assign({}, fetchOpts, { headers: baseHeaders }));
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { }
+  if (!skipAuthHandling && isUnauthorizedStatus(res.status)) {
+    logoutToSplash('Invalid token');
+  }
   return { ok: res.ok, status: res.status, json, raw: text };
 }
 
@@ -1605,6 +1753,12 @@ function setMsg(text, kind = '') {
 
 let actionInFlight = false;
 let refreshRequestSeq = 0;
+
+function stopActivePolling() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = null;
+  refreshRequestSeq += 1;
+}
 
 function setActionControlsDisabled(disabled) {
   const ids = [
@@ -1654,8 +1808,9 @@ async function waitForRunningStatus(timeoutMs = 12000, intervalMs = 1000) {
   const interval = Math.max(250, Number(intervalMs) || 1000);
   const deadline = Date.now() + timeout;
   let lastState = null;
-  while (Date.now() <= deadline) {
+  while (isAuthenticated && Date.now() <= deadline) {
     const st = await api('/v1/status');
+    if (!isAuthenticated || isUnauthorizedStatus(st.status)) break;
     if (st.ok && st.json && st.json.data) {
       lastState = st.json.data;
       if (stateIsRunning(lastState)) return { running: true, state: lastState };
@@ -1667,6 +1822,7 @@ async function waitForRunningStatus(timeoutMs = 12000, intervalMs = 1000) {
 }
 
 async function startHotspot(overrides, label) {
+  if (!isAuthenticated) return;
   await withActionLock(async () => {
     const prefix = label ? `Starting (${label})...` : 'Starting...';
     setMsg(prefix);
@@ -1730,6 +1886,7 @@ async function startHotspot(overrides, label) {
 }
 
 async function stopHotspot() {
+  if (!isAuthenticated) return;
   await withActionLock(async () => {
     setMsg('Stopping...');
     const r = await api('/v1/stop', { method: 'POST' });
@@ -1739,6 +1896,7 @@ async function stopHotspot() {
 }
 
 async function repairHotspot() {
+  if (!isAuthenticated) return;
   await withActionLock(async () => {
     setMsg('Repairing...');
     const r = await api('/v1/repair', { method: 'POST' });
@@ -1748,6 +1906,7 @@ async function repairHotspot() {
 }
 
 async function restartHotspot() {
+  if (!isAuthenticated) return;
   await withActionLock(async () => {
     setMsg('Restarting...');
     const r = await api('/v1/restart', { method: 'POST' });
@@ -2461,7 +2620,14 @@ function applyConfig(cfg) {
 }
 
 async function loadAdapters() {
-  const r = await api('/v1/adapters');
+  if (!isAuthenticated) return;
+  let r;
+  try {
+    r = await api('/v1/adapters');
+  } catch {
+    return;
+  }
+  if (!isAuthenticated) return;
   const el = document.getElementById('ap_adapter');
   if (!r.ok || !r.json) return;
 
@@ -2528,23 +2694,29 @@ async function loadAdapters() {
 }
 
 async function refresh() {
+  if (!isAuthenticated) return;
   const requestSeq = ++refreshRequestSeq;
   const privacy = document.getElementById('privacyMode').checked;
   const stPath = privacy ? '/v1/status' : '/v1/status?include_logs=1';
 
-  const [st, cfg] = await Promise.all([api(stPath), api('/v1/config')]);
-  if (requestSeq !== refreshRequestSeq) return;
+  let st;
+  let cfg;
+  try {
+    [st, cfg] = await Promise.all([api(stPath), api('/v1/config')]);
+  } catch {
+    if (!isAuthenticated || requestSeq !== refreshRequestSeq) return;
+    setMsg('Network error while fetching status.', 'dangerText');
+    return;
+  }
+  if (!isAuthenticated || requestSeq !== refreshRequestSeq) return;
 
   if (cfg.ok && cfg.json) {
     applyConfig(cfg.json.data || {});
   }
 
   if (!st.ok || !st.json) {
-    if (st.status === 401) {
-      setMsg('Unauthorized: paste API token and try again.', 'dangerText');
-    } else {
-      setMsg(st.json ? (st.json.result_code || 'error') : `Failed: HTTP ${st.status}`, 'dangerText');
-    }
+    if (isUnauthorizedStatus(st.status) || !isAuthenticated) return;
+    setMsg(st.json ? (st.json.result_code || 'error') : `Failed: HTTP ${st.status}`, 'dangerText');
     return;
   }
 
@@ -2618,7 +2790,6 @@ async function refresh() {
   renderTelemetry(s.telemetry);
 }
 
-let refreshTimer = null;
 function applyAutoRefresh() {
   const enabled = document.getElementById('autoRefresh').checked;
   const every = parseInt(document.getElementById('refreshEvery').value || '2000', 10);
@@ -2626,6 +2797,7 @@ function applyAutoRefresh() {
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = null;
 
+  if (!isAuthenticated) return;
   if (enabled) refreshTimer = setInterval(refresh, every);
 
   STORE.setItem(LS.auto, enabled ? '1' : '0');
@@ -2643,10 +2815,6 @@ function applyPrivacyMode() {
   const v = adv ? adv.checked : (basic ? basic.checked : true);
   if (adv) adv.checked = v;
   if (basic) basic.checked = v;
-  const tokenEl = document.getElementById('apiToken');
-  const tokenBasic = document.getElementById('apiTokenBasic');
-  if (tokenEl) tokenEl.type = v ? 'password' : 'text';
-  if (tokenBasic) tokenBasic.type = v ? 'password' : 'text';
 }
 
 document.getElementById('btnRefresh').addEventListener('click', refresh);
@@ -2740,69 +2908,6 @@ if (showTelBasic) showTelBasic.addEventListener('change', () => {
   if (basicTel) basicTel.style.display = showTelemetryState ? '' : 'none';
 });
 
-document.getElementById('apiToken').addEventListener('input', (e) => {
-  setToken(e.target.value.trim());
-});
-document.getElementById('apiToken').addEventListener('change', (e) => {
-  setToken(e.target.value.trim());
-});
-document.getElementById('apiToken').addEventListener('blur', (e) => {
-  setToken(e.target.value.trim());
-});
-const apiTokenBasic = document.getElementById('apiTokenBasic');
-if (apiTokenBasic) {
-  apiTokenBasic.addEventListener('input', (e) => {
-    setToken(e.target.value.trim());
-  });
-  apiTokenBasic.addEventListener('change', (e) => {
-    setToken(e.target.value.trim());
-  });
-  apiTokenBasic.addEventListener('blur', (e) => {
-    setToken(e.target.value.trim());
-  });
-}
-
-async function saveApiTokenAndReload(tokenFieldId) {
-  const tokenField = document.getElementById(tokenFieldId);
-  if (!tokenField) return;
-  const token = tokenField.value.trim();
-  setToken(token);
-  if (token) {
-    setMsg('API token saved.');
-    await refreshInfo();
-    await refresh();
-    window.location.reload();
-  } else {
-    setMsg('API token cleared.');
-  }
-}
-
-function wireTokenEnterSubmit(inputEl, submitFn) {
-  if (!inputEl || typeof submitFn !== 'function') return;
-  inputEl.addEventListener('keydown', (ev) => {
-    if (ev.key !== 'Enter') return;
-    ev.preventDefault();
-    submitFn();
-  });
-}
-
-const btnSaveTokenBasic = document.getElementById('btnSaveTokenBasic');
-if (btnSaveTokenBasic) btnSaveTokenBasic.addEventListener('click', async () => {
-  await saveApiTokenAndReload('apiTokenBasic');
-});
-
-const btnSaveToken = document.getElementById('btnSaveToken');
-if (btnSaveToken) btnSaveToken.addEventListener('click', async () => {
-  await saveApiTokenAndReload('apiToken');
-});
-
-wireTokenEnterSubmit(document.getElementById('apiToken'), () => {
-  saveApiTokenAndReload('apiToken');
-});
-wireTokenEnterSubmit(document.getElementById('apiTokenBasic'), () => {
-  saveApiTokenAndReload('apiTokenBasic');
-});
-
 document.getElementById('autoRefresh').addEventListener('change', applyAutoRefresh);
 document.getElementById('refreshEvery').addEventListener('change', applyAutoRefresh);
 const autoRefreshBasic = document.getElementById('autoRefreshBasic');
@@ -2821,6 +2926,7 @@ function wireTabs() {
   const panes = document.querySelectorAll('.tab-pane');
 
   function switchTab(targetName) {
+    if (!isAuthenticated) return;
     // Reset tabs
     tabs.forEach(t => t.classList.remove('active'));
     // Set active tab
@@ -2840,17 +2946,16 @@ function wireTabs() {
 
   tabs.forEach(tab => {
     tab.addEventListener('click', () => {
+      if (!isAuthenticated) return;
       const target = tab.dataset.tab;
       if (target) switchTab(target);
     });
   });
 }
 
-function init() {
-  wireFloatingTips();
-
-  const tok = migrateLegacyToken() || getStoredToken();
-  if (tok) setToken(tok);
+function bootstrapAuthenticatedUi() {
+  if (uiBootstrapped) return;
+  uiBootstrapped = true;
 
   const privacy = (STORE.getItem(LS.privacy) || '1') === '1';
   document.getElementById('privacyMode').checked = privacy;
@@ -2867,11 +2972,6 @@ function init() {
 
   const mode = loadUiMode();
   applyUiMode(mode, { skipAdapters: true });
-
-  if (tok) {
-    refreshInfo();
-    refresh();
-  }
 
   initCharts();
 
@@ -3061,6 +3161,38 @@ function init() {
       applyAutoRefresh();
       return refreshInfo();
     });
+}
+
+async function init() {
+  wireFloatingTips();
+  wireLoginSplash();
+  window.addEventListener('hashchange', () => {
+    if (!isAuthenticated) clearLoggedOutRouteState();
+  });
+
+  const tok = migrateLegacyToken() || getStoredToken();
+  if (!tok) {
+    renderLoginSplash();
+    return;
+  }
+
+  setAuthState('pending');
+  const result = await validateTokenCandidate(tok);
+  if (!result.ok) {
+    if (result.reason === 'invalid') {
+      logoutToSplash('Invalid token');
+    } else if (result.reason === 'network') {
+      renderLoginSplash('Network error while validating token');
+    } else {
+      const code = result.status ? `HTTP ${result.status}` : 'error';
+      renderLoginSplash(`Unable to validate token (${code})`);
+    }
+    return;
+  }
+
+  setToken(tok);
+  showAuthenticatedApp();
+  bootstrapAuthenticatedUi();
 }
 
 function wireQr() {
