@@ -19,6 +19,7 @@ class TestUiBasicModePayload(unittest.TestCase):
         self.assertIn("<h2>Status & Control</h2>", html)
         self.assertNotIn("Status, Control & Connect", html)
         self.assertIn("<h2>Connection Setup</h2>", html)
+        self.assertLess(html.find("<h2>Connection Setup</h2>"), html.find("<h2>Status & Control</h2>"))
         self.assertNotIn("<h2>Hotspot Setup</h2>", html)
         self.assertNotIn("<h2>Quick Setup</h2>", html)
         self.assertIn('id="btnCopyPass">Copy passphrase</button>', html)

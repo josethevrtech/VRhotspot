@@ -61,6 +61,41 @@
       <div class="basic-grid">
         <div class="card basic-card">
           <div class="card-header">
+            <h2>Connection Setup</h2>
+          </div>
+          <div class="card-body">
+            <div id="basicInfoBanner" class="info-banner" style="display:none"></div>
+            <div id="basicChannelBanner" class="info-banner warn" style="display:none"></div>
+            <div id="basicQuickFields" class="form-stack"></div>
+            <div class="basic-connect-inline mt-12">
+              <div id="basicConnectFields" class="form-stack"></div>
+              <div class="form-group mb-0">
+                <div class="field-label-with-tip">
+                  <label for="wpa2_passphrase_basic" style="font-size:12px; text-transform:uppercase; color:var(--text-muted);">Passphrase</label>
+                  <span class="tip" data-tip="WPA2 is the standard default. For WPA3, use Pro mode."
+                    aria-label="WPA2 is the standard default. For WPA3, use Pro mode." tabindex="0">ⓘ</span>
+                </div>
+                <div class="input-with-action basic-passphrase-actions">
+                  <input id="wpa2_passphrase_basic" type="password" placeholder="Saved" />
+                  <button id="btnRevealPassBasic" class="btn icon-only" title="Show"
+                    aria-label="Reveal passphrase" type="button">👁</button>
+                  <button id="btnShowQrBasic" class="btn icon-only basic-qr-toggle" title="Toggle QR code"
+                    aria-label="Toggle QR code" aria-pressed="false" type="button">QR</button>
+                </div>
+              </div>
+              <div class="action-group mt-12 wrap-btns basic-connect-actions">
+                <button class="btn secondary" id="btnCopySsid">Copy SSID</button>
+                <button class="btn secondary" id="btnCopyPass">Copy passphrase</button>
+                <button class="btn primary" id="btnSavePassBasic" title="Save passphrase"
+                  aria-label="Save passphrase">Save passphrase</button>
+              </div>
+              <div class="small mt-6 faded" id="copyHint"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card basic-card">
+          <div class="card-header">
             <h2>Status & Control</h2>
           </div>
           <div class="card-body">
@@ -108,41 +143,6 @@
 
             <div id="msgBasic" class="small mt-10"></div>
             <div id="dirtyBasic" class="small mt-6 warning-text"></div>
-          </div>
-        </div>
-
-        <div class="card basic-card">
-          <div class="card-header">
-            <h2>Connection Setup</h2>
-          </div>
-          <div class="card-body">
-            <div id="basicInfoBanner" class="info-banner" style="display:none"></div>
-            <div id="basicChannelBanner" class="info-banner warn" style="display:none"></div>
-            <div id="basicQuickFields" class="form-stack"></div>
-            <div class="basic-connect-inline mt-12">
-              <div id="basicConnectFields" class="form-stack"></div>
-              <div class="form-group mb-0">
-                <div class="field-label-with-tip">
-                  <label for="wpa2_passphrase_basic" style="font-size:12px; text-transform:uppercase; color:var(--text-muted);">Passphrase</label>
-                  <span class="tip" data-tip="WPA2 is the standard default. For WPA3, use Pro mode."
-                    aria-label="WPA2 is the standard default. For WPA3, use Pro mode." tabindex="0">ⓘ</span>
-                </div>
-                <div class="input-with-action basic-passphrase-actions">
-                  <input id="wpa2_passphrase_basic" type="password" placeholder="Saved" />
-                  <button id="btnRevealPassBasic" class="btn icon-only" title="Show"
-                    aria-label="Reveal passphrase" type="button">👁</button>
-                  <button id="btnShowQrBasic" class="btn icon-only basic-qr-toggle" title="Toggle QR code"
-                    aria-label="Toggle QR code" aria-pressed="false" type="button">QR</button>
-                </div>
-              </div>
-              <div class="action-group mt-12 wrap-btns basic-connect-actions">
-                <button class="btn secondary" id="btnCopySsid">Copy SSID</button>
-                <button class="btn secondary" id="btnCopyPass">Copy passphrase</button>
-                <button class="btn primary" id="btnSavePassBasic" title="Save passphrase"
-                  aria-label="Save passphrase">Save passphrase</button>
-              </div>
-              <div class="small mt-6 faded" id="copyHint"></div>
-            </div>
           </div>
         </div>
       </div>
