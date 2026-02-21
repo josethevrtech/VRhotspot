@@ -1292,6 +1292,10 @@ body[data-ui-mode="basic"] #btnCopyPass {
   display: none !important;
 }
 
+body[data-ui-mode="basic"] #btnSavePassBasic {
+  display: none !important;
+}
+
 body[data-ui-mode="basic"] .basic-connect-actions {
   grid-template-columns: 1fr;
 }

@@ -59,4 +59,5 @@ class TestUiBasicModePayload(unittest.TestCase):
         css = Path("assets/ui.css").read_text(encoding="utf-8")
         self.assertIn('body[data-ui-mode="basic"] #btnCopySsid', css)
         self.assertIn('body[data-ui-mode="basic"] #btnCopyPass', css)
+        self.assertIn('body[data-ui-mode="basic"] #btnSavePassBasic', css)
         self.assertIn('.basic-passphrase-actions .basic-qr-toggle', css)
