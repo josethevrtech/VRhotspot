@@ -606,7 +606,7 @@ main() {
     get_source_files
     configure_install
     install_daemon
-    if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID_LIKE" == *"fedora"* ]]; then
+    if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID" == "endeavouros" || "$OS_ID_LIKE" == *"fedora"* ]]; then
         enable_firewalld_uplink_forwarding
     fi
     
