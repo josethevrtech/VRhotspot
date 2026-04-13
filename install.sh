@@ -228,7 +228,7 @@ detect_os() {
         exit 1
     fi
     case "$OS_ID" in
-        steamos|cachyos|arch) PKG_MANAGER="pacman" ;;
+        steamos|cachyos|arch|endeavouros) PKG_MANAGER="pacman" ;;
         ubuntu|debian|pop) PKG_MANAGER="apt" ;;
         fedora) PKG_MANAGER="dnf" ;;
         bazzite) PKG_MANAGER="rpm-ostree" ;;
