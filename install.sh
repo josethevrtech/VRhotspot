@@ -268,7 +268,7 @@ detect_os() {
         exit 1
     fi
     case "$OS_ID" in
-        steamos|cachyos|arch) PKG_MANAGER="pacman" ;;
+        steamos|cachyos|arch|endeavouros) PKG_MANAGER="pacman" ;;
         ubuntu|debian|pop) PKG_MANAGER="apt" ;;
         fedora) PKG_MANAGER="dnf" ;;
         bazzite) PKG_MANAGER="rpm-ostree" ;;
@@ -660,7 +660,7 @@ main() {
     get_source_files
     configure_install
     install_daemon
-    if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID_LIKE" == *"fedora"* ]]; then
+    if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID" == "endeavouros" || "$OS_ID_LIKE" == *"fedora"* ]]; then
         enable_firewalld_uplink_forwarding
     fi
     
