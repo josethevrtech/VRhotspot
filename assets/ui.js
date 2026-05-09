@@ -1328,6 +1328,76 @@ function renderBadges(container, items) {
   }
 }
 
+function readinessPanels() {
+  return Array.from(document.querySelectorAll('[data-adapter-readiness-card]'));
+}
+
+function setReadinessField(panel, field, value, fallback = '--') {
+  if (!panel) return;
+  const el = panel.querySelector(`[data-readiness-field="${field}"]`);
+  if (!el) return;
+  const text = (value === null || value === undefined || value === '') ? fallback : String(value);
+  el.textContent = text;
+}
+
+function formatReadinessLabel(value) {
+  if (!value) return '--';
+  return labelizeKey(value);
+}
+
+function pickReadinessAdapter(data) {
+  if (!data || !Array.isArray(data.adapters) || data.adapters.length === 0) return null;
+  const recommended = data.recommended || '';
+  if (recommended) {
+    const found = data.adapters.find((adapter) => adapter && adapter.interface === recommended);
+    if (found) return found;
+  }
+  return data.adapters[0] || null;
+}
+
+function renderAdapterReadiness(data) {
+  const adapter = pickReadinessAdapter(data);
+  const summary = (data && data.summary) || adapter || {};
+  const reasons = (
+    summary.reason_messages ||
+    summary.reasons ||
+    summary.reason_codes ||
+    []
+  ).slice(0, 6);
+  const explanation = summary.explanation || 'Adapter readiness data is available, but no explanation was provided.';
+  for (const panel of readinessPanels()) {
+    setReadinessField(panel, 'recommended', data && data.recommended);
+    setReadinessField(panel, 'state', formatReadinessLabel(summary.readiness_state));
+    setReadinessField(panel, 'score', summary.recommendation_score);
+    setReadinessField(panel, 'six-ghz', formatReadinessLabel(summary.six_ghz_state));
+    setReadinessField(panel, 'basic-recommended', data && data.basic_mode_recommended, 'Not available');
+    renderBadges(panel.querySelector('[data-readiness-field="reasons"]'), reasons);
+    setReadinessField(panel, 'explanation', explanation, '');
+    const fallback = panel.querySelector('[data-readiness-field="fallback"]');
+    if (fallback) {
+      fallback.textContent = '';
+      fallback.style.display = 'none';
+    }
+  }
+}
+
+function renderAdapterReadinessFallback() {
+  for (const panel of readinessPanels()) {
+    setReadinessField(panel, 'recommended', 'Unavailable');
+    setReadinessField(panel, 'state', '--');
+    setReadinessField(panel, 'score', '--');
+    setReadinessField(panel, 'six-ghz', '--');
+    setReadinessField(panel, 'basic-recommended', '--');
+    renderBadges(panel.querySelector('[data-readiness-field="reasons"]'), []);
+    setReadinessField(panel, 'explanation', 'Adapter readiness is not available from this service version.', '');
+    const fallback = panel.querySelector('[data-readiness-field="fallback"]');
+    if (fallback) {
+      fallback.textContent = 'The rest of the UI will continue to work normally.';
+      fallback.style.display = 'block';
+    }
+  }
+}
+
 async function copyToClipboard(text) {
   if (!text) return false;
   try {
@@ -2759,6 +2829,23 @@ async function loadAdapters() {
   maybeAutoPickAdapterForBand();
 }
 
+async function loadAdapterReadiness() {
+  if (!isAuthenticated) return;
+  let r;
+  try {
+    r = await api('/v1/adapters/readiness');
+  } catch {
+    renderAdapterReadinessFallback();
+    return;
+  }
+  if (!isAuthenticated) return;
+  if (!r.ok || !r.json || !r.json.data) {
+    renderAdapterReadinessFallback();
+    return;
+  }
+  renderAdapterReadiness(r.json.data || {});
+}
+
 async function refresh() {
   if (!isAuthenticated) return;
   const requestSeq = ++refreshRequestSeq;
@@ -2856,6 +2943,10 @@ async function refresh() {
   renderTelemetry(s.telemetry);
 }
 
+async function refreshVisibleUi() {
+  await Promise.all([refresh(), loadAdapterReadiness()]);
+}
+
 function applyAutoRefresh() {
   const autoEl = document.getElementById('autoRefresh');
   const everyEl = document.getElementById('refreshEvery');
@@ -2890,12 +2981,13 @@ function applyPrivacyMode() {
   if (basic) basic.checked = v;
 }
 
-document.getElementById('btnRefresh').addEventListener('click', refresh);
+document.getElementById('btnRefresh').addEventListener('click', refreshVisibleUi);
 const btnRefreshBasic = document.getElementById('btnRefreshBasic');
-if (btnRefreshBasic) btnRefreshBasic.addEventListener('click', refresh);
+if (btnRefreshBasic) btnRefreshBasic.addEventListener('click', refreshVisibleUi);
 
 document.getElementById('btnReloadAdapters').addEventListener('click', async () => {
   await loadAdapters();
+  await loadAdapterReadiness();
   await refresh();
 });
 
@@ -3303,6 +3395,7 @@ function bootstrapAuthenticatedUi() {
 
   // Load adapters first so the adapter select is populated before applying config.
   loadAdapters()
+    .then(loadAdapterReadiness)
     .then(refresh)
     .then(() => {
       applyAutoRefresh();

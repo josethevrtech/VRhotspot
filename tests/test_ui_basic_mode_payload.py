@@ -62,3 +62,27 @@ class TestUiBasicModePayload(unittest.TestCase):
         self.assertIn('body[data-ui-mode="basic"] #btnCopyPass', css)
         self.assertIn('body[data-ui-mode="basic"] #btnSavePassBasic', css)
         self.assertIn('.basic-passphrase-actions .basic-qr-toggle', css)
+
+    def test_adapter_readiness_ui_contract(self):
+        html = Path("assets/index.html").read_text(encoding="utf-8")
+        self.assertIn("<h2>Adapter Readiness</h2>", html)
+        for field in (
+            "recommended",
+            "state",
+            "score",
+            "six-ghz",
+            "basic-recommended",
+            "reasons",
+            "explanation",
+            "fallback",
+        ):
+            self.assertIn(f'data-readiness-field="{field}"', html)
+        self.assertIn("Basic Mode", html)
+        self.assertIn("Top Reasons", html)
+
+        src = Path("assets/ui.js").read_text(encoding="utf-8")
+        self.assertIn("async function loadAdapterReadiness", src)
+        self.assertIn("api('/v1/adapters/readiness')", src)
+        self.assertIn("function renderAdapterReadinessFallback", src)
+        self.assertIn("Adapter readiness is not available from this service version.", src)
+        self.assertIn("refreshVisibleUi", src)

@@ -243,6 +243,27 @@ input:checked + .slider:before {
   align-self: start;
 }
 
+.adapter-readiness-card {
+  align-self: start;
+}
+
+.adapter-readiness-grid {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.adapter-readiness-card .kv-item {
+  padding: 9px;
+}
+
+.adapter-readiness-card .kv-value {
+  font-size: 12px;
+}
+
+.adapter-readiness-explanation {
+  line-height: 1.45;
+}
+
 /* Layout for Advanced Mode */
 .advanced-layout {
   display: flex;
