@@ -145,6 +145,42 @@
             <div id="dirtyBasic" class="small mt-6 warning-text"></div>
           </div>
         </div>
+
+        <div class="card basic-card adapter-readiness-card" data-adapter-readiness-card>
+          <div class="card-header">
+            <h2>Adapter Readiness</h2>
+          </div>
+          <div class="card-body">
+            <div class="kv-grid adapter-readiness-grid">
+              <div class="kv-item">
+                <div class="kv-label">Recommended</div>
+                <div class="kv-value" data-readiness-field="recommended">Loading...</div>
+              </div>
+              <div class="kv-item">
+                <div class="kv-label">Readiness</div>
+                <div class="kv-value" data-readiness-field="state">--</div>
+              </div>
+              <div class="kv-item">
+                <div class="kv-label">Score</div>
+                <div class="kv-value" data-readiness-field="score">--</div>
+              </div>
+              <div class="kv-item">
+                <div class="kv-label">6 GHz</div>
+                <div class="kv-value" data-readiness-field="six-ghz">--</div>
+              </div>
+              <div class="kv-item kv-span">
+                <div class="kv-label">Basic Mode</div>
+                <div class="kv-value" data-readiness-field="basic-recommended">--</div>
+              </div>
+            </div>
+            <div class="mt-12">
+              <div class="small muted">Top Reasons</div>
+              <div class="badge-row adapter-readiness-reasons" data-readiness-field="reasons"></div>
+            </div>
+            <div class="small mt-10 adapter-readiness-explanation" data-readiness-field="explanation"></div>
+            <div class="small mt-8 warning-text" data-readiness-field="fallback" style="display:none"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -315,6 +351,42 @@
                     </div>
                   </details>
                 </div>
+              </div>
+            </div>
+
+            <div class="card adapter-readiness-card" data-adapter-readiness-card>
+              <div class="card-header">
+                <h2>Adapter Readiness</h2>
+              </div>
+              <div class="card-body">
+                <div class="kv-grid adapter-readiness-grid">
+                  <div class="kv-item">
+                    <div class="kv-label">Recommended</div>
+                    <div class="kv-value" data-readiness-field="recommended">Loading...</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Readiness</div>
+                    <div class="kv-value" data-readiness-field="state">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Score</div>
+                    <div class="kv-value" data-readiness-field="score">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">6 GHz</div>
+                    <div class="kv-value" data-readiness-field="six-ghz">--</div>
+                  </div>
+                  <div class="kv-item kv-span">
+                    <div class="kv-label">Basic Mode</div>
+                    <div class="kv-value" data-readiness-field="basic-recommended">--</div>
+                  </div>
+                </div>
+                <div class="mt-12">
+                  <div class="small muted">Top Reasons</div>
+                  <div class="badge-row adapter-readiness-reasons" data-readiness-field="reasons"></div>
+                </div>
+                <div class="small mt-10 adapter-readiness-explanation" data-readiness-field="explanation"></div>
+                <div class="small mt-8 warning-text" data-readiness-field="fallback" style="display:none"></div>
               </div>
             </div>
 
