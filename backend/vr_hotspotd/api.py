@@ -26,6 +26,7 @@ from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator
 from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
 from vr_hotspotd.diagnostics.platform import collect_platform_matrix
+from vr_hotspotd import __version__
 from vr_hotspotd import telemetry
 from vr_hotspotd.state import load_state
 
@@ -194,7 +195,8 @@ _ALLOWED_BANDS = {"2.4ghz", "5ghz", "6ghz"}
 _ALLOWED_SECURITY = {"wpa2", "wpa3_sae"}
 _ALLOWED_QOS = {"off", "vr", "balanced", "ultra_low_latency", "high_throughput"}
 
-SERVER_VERSION = "vr-hotspotd/1.0"
+APP_VERSION = __version__
+SERVER_VERSION = f"vr-hotspotd/{APP_VERSION}"
 
 
 def _clamp_int(
@@ -814,6 +816,8 @@ class APIHandler(BaseHTTPRequestHandler):
             secrets.append(pw)
 
         out = copy.deepcopy(st)
+        out["version"] = APP_VERSION
+        out["server_version"] = SERVER_VERSION
         cap = out.get("capture_dir")
         cap_s = str(cap) if cap else None
         out["capture_path"] = cap_s
@@ -1080,6 +1084,7 @@ class APIHandler(BaseHTTPRequestHandler):
             if not self._require_auth(cid):
                 return
             data = {
+                "version": APP_VERSION,
                 "server_version": SERVER_VERSION,
                 "ts": int(time.time()),
                 "pid": os.getpid(),

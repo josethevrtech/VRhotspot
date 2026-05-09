@@ -1360,10 +1360,12 @@ async function refreshInfo() {
   try {
     const r = await api('/v1/info');
     const data = (r.ok && r.json && r.json.data) ? r.json.data : null;
-    const raw = data ? (data.server_version || data.version || '') : '';
+    const raw = data ? (data.version || data.server_version || '') : '';
     const cleaned = raw ? String(raw).trim() : '';
     if (cleaned) {
-      versionEl.textContent = cleaned.startsWith('v') ? cleaned : `v${cleaned}`;
+      versionEl.textContent = cleaned.startsWith('vr-hotspotd/')
+        ? cleaned
+        : (cleaned.startsWith('v') ? cleaned : `v${cleaned}`);
       return;
     }
   } catch {
