@@ -163,6 +163,46 @@ _apt_update_with_retry() {
     return 1
 }
 
+_rpm_ostree_already_requested_output() {
+    local output_lower
+    output_lower="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+    [[ "$output_lower" == *"already requested"* ]] && \
+        [[ "$output_lower" == *"package/capability"* ]] && \
+        [[ "$output_lower" == *"rpm-ostree"* ]]
+}
+
+_run_rpm_ostree_install() {
+    local output status errexit_was_set=0
+
+    case "$-" in
+        *e*) errexit_was_set=1 ;;
+    esac
+
+    set +e
+    output="$(rpm-ostree install "$@" 2>&1)"
+    status=$?
+    if [ "$errexit_was_set" -eq 1 ]; then
+        set -e
+    else
+        set +e
+    fi
+
+    if [ -n "$output" ]; then
+        if [ "$status" -ne 0 ]; then
+            printf '%s\n' "$output" >&2
+        else
+            printf '%s\n' "$output"
+        fi
+    fi
+
+    if [ "$status" -ne 0 ] && _rpm_ostree_already_requested_output "$output"; then
+        print_warning "rpm-ostree reports that this package is already requested. Reboot your system, then rerun the VR Hotspot installer."
+        return 2
+    fi
+
+    return "$status"
+}
+
 # --- Pre-flight & Cleanup ---
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -365,9 +405,23 @@ install_dependencies() {
             
             if [ ${#needed[@]} -gt 0 ]; then
                 print_info "Installing missing dependencies: ${needed[*]}"
-                if ! rpm-ostree install --apply-live "${needed[@]}"; then
+                if _run_rpm_ostree_install --apply-live "${needed[@]}"; then
+                    :
+                else
+                    local rpm_ostree_status=$?
+                    if [ "$rpm_ostree_status" -eq 2 ]; then
+                        exit 0
+                    fi
                     print_warning "Live install failed. Trying standard install..."
-                    rpm-ostree install "${needed[@]}"
+                    if _run_rpm_ostree_install "${needed[@]}"; then
+                        :
+                    else
+                        rpm_ostree_status=$?
+                        if [ "$rpm_ostree_status" -eq 2 ]; then
+                            exit 0
+                        fi
+                        return "$rpm_ostree_status"
+                    fi
                     print_warning "Dependencies installed. Please REBOOT your system and run this installer again."
                     exit 0
                 fi
@@ -618,5 +672,6 @@ main() {
     fi
 }
 
-main "$@"
-
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
