@@ -103,6 +103,7 @@ Enter the **API token** shown during installation to access the interface.
 - `GET /v1/status` - Current hotspot status
 - `GET /v1/status?include_logs=1` - Status with logs
 - `GET /v1/adapters` - List available WiFi adapters
+- `GET /v1/adapters/readiness` - Adapter Intelligence v2 readiness model
 
 **Diagnostics:**
 - `GET /v1/diagnostics/clients` - Connected clients

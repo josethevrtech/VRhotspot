@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, quote, urlsplit
 
 from vr_hotspotd.adapters.inventory import get_adapters
+from vr_hotspotd.adapters.readiness import build_readiness_model
 from vr_hotspotd.config import load_config, write_config_file
 from vr_hotspotd.lifecycle import (
     repair,
@@ -1070,6 +1071,21 @@ class APIHandler(BaseHTTPRequestHandler):
             if not self._require_auth(cid):
                 return
             self._respond(200, self._envelope(correlation_id=cid, data=get_adapters()))
+            return
+
+        if path == "/v1/adapters/readiness":
+            if not self._require_auth(cid):
+                return
+            inventory = get_adapters()
+            warnings = ["adapter_inventory_error"] if isinstance(inventory, dict) and inventory.get("error") else []
+            self._respond(
+                200,
+                self._envelope(
+                    correlation_id=cid,
+                    data=build_readiness_model(inventory),
+                    warnings=warnings,
+                ),
+            )
             return
 
         if path == "/v1/config":
