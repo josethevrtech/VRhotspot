@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 import ipaddress
+import json
+import posixpath
 import re
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Union
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from vr_hotspotd import __version__
 
@@ -15,6 +19,12 @@ SECRET_PLACEHOLDER = "<redacted-secret>"
 AUTHORIZATION_PLACEHOLDER = "<redacted-authorization>"
 PRIVATE_KEY_PLACEHOLDER = "<redacted-private-key>"
 SUPPORT_BUNDLE_SCHEMA_VERSION = 1
+DEFAULT_SUPPORT_BUNDLE_README = (
+    "VR Hotspot diagnostics support bundle\n\n"
+    "This archive contains already-sanitized diagnostic files. "
+    "Secrets and personal identifiers should be redacted before files are added.\n"
+)
+_ZIP_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
 
 
 class CollectorStatus:
@@ -225,6 +235,36 @@ def redact_support_bundle_data(value: Any) -> Any:
     return _RedactionRun().redact_data(value)
 
 
+def build_support_bundle_archive(
+    manifest: Mapping[str, Any],
+    files: Union[Mapping[str, Union[str, bytes]], Iterable[tuple[str, Union[str, bytes]]]],
+    *,
+    readme: Optional[Union[str, bytes]] = None,
+) -> bytes:
+    """Build a deterministic .zip archive from already-sanitized bundle content."""
+    members: Dict[str, bytes] = {
+        "manifest.json": _json_bytes(manifest),
+        "README.txt": _content_bytes(
+            DEFAULT_SUPPORT_BUNDLE_README if readme is None else readme
+        ),
+    }
+
+    for path, content in _iter_archive_files(files):
+        archive_path = _safe_archive_path(path)
+        if archive_path in members:
+            raise ValueError(f"duplicate support bundle archive path: {archive_path}")
+        members[archive_path] = _content_bytes(content)
+
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        for path in sorted(members):
+            info = ZipInfo(filename=path, date_time=_ZIP_TIMESTAMP)
+            info.compress_type = ZIP_DEFLATED
+            info.external_attr = 0o600 << 16
+            archive.writestr(info, members[path])
+    return buffer.getvalue()
+
+
 def is_sensitive_key(key: Any) -> bool:
     """Return True when a config/log key should be treated as secret-bearing."""
     if not isinstance(key, str):
@@ -241,6 +281,50 @@ def _format_command(command: Union[str, Sequence[str]]) -> str:
     if isinstance(command, str):
         return command
     return " ".join(str(part) for part in command)
+
+
+def _iter_archive_files(
+    files: Union[Mapping[str, Union[str, bytes]], Iterable[tuple[str, Union[str, bytes]]]]
+) -> Iterable[tuple[str, Union[str, bytes]]]:
+    if isinstance(files, Mapping):
+        return files.items()
+    return files
+
+
+def _json_bytes(value: Mapping[str, Any]) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _content_bytes(content: Union[str, bytes]) -> bytes:
+    if isinstance(content, bytes):
+        return content
+    if isinstance(content, str):
+        return content.encode("utf-8")
+    raise TypeError("support bundle archive content must be str or bytes")
+
+
+def _safe_archive_path(path: str) -> str:
+    if not isinstance(path, str):
+        raise TypeError("support bundle archive path must be a string")
+    if not path or "\x00" in path:
+        raise ValueError("support bundle archive path must be non-empty")
+    if "\\" in path:
+        raise ValueError(f"unsafe support bundle archive path: {path}")
+    if path.startswith("/"):
+        raise ValueError(f"unsafe absolute support bundle archive path: {path}")
+    if re.match(r"^[A-Za-z]:", path):
+        raise ValueError(f"unsafe absolute support bundle archive path: {path}")
+
+    normalized = posixpath.normpath(path)
+    if normalized in {"", "."}:
+        raise ValueError("support bundle archive path must name a file")
+    if normalized == ".." or normalized.startswith("../") or "/../" in normalized:
+        raise ValueError(f"unsafe path traversal in support bundle archive path: {path}")
+    if normalized.startswith("/"):
+        raise ValueError(f"unsafe absolute support bundle archive path: {path}")
+    if normalized.endswith("/"):
+        raise ValueError(f"support bundle archive path must name a file: {path}")
+    return normalized
 
 
 class _RedactionRun:
