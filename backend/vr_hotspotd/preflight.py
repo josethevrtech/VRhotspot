@@ -133,7 +133,7 @@ def _check_regdom(
 
 
 def _resolve_hostapd_path() -> Optional[str]:
-    env = supervisor._build_engine_env()
+    env = supervisor._build_engine_env(require_hostapd=False, require_dnsmasq=False)
     override = env.get("HOSTAPD")
     if override and os.path.isfile(override) and os.access(override, os.X_OK):
         return override

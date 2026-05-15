@@ -213,6 +213,67 @@ def _which_in_path(exe: str, path: str) -> Optional[str]:
     return None
 
 
+def _sanitize_probe_reason(value: object) -> str:
+    text = str(value or "").replace("\r", "\n")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    reason = lines[0] if lines else "unknown"
+    return reason[:240]
+
+
+def _probe_dnsmasq_executable(path: Optional[str], *, vendor_lib: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    if not path:
+        return False, "dnsmasq_not_found"
+    env = os.environ.copy()
+    env.setdefault("LC_ALL", "C")
+    env.setdefault("LANG", "C")
+    if vendor_lib and os.path.isdir(vendor_lib):
+        ld = env.get("LD_LIBRARY_PATH", "")
+        if vendor_lib not in ld.split(":"):
+            env["LD_LIBRARY_PATH"] = f"{vendor_lib}:{ld}" if ld else vendor_lib
+    try:
+        p = subprocess.run(
+            [path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "dnsmasq_probe_timeout"
+    except OSError as exc:
+        return False, _sanitize_probe_reason(exc)
+    except Exception as exc:
+        return False, _sanitize_probe_reason(exc)
+
+    out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+    if p.returncode != 0:
+        return False, f"rc={p.returncode}:{_sanitize_probe_reason(out)}"
+    return True, None
+
+
+def _build_selected_binary_path(
+    *,
+    chosen_hostapd: Optional[str],
+    chosen_dnsmasq: Optional[str],
+    sys_path: str,
+    vendor_bin_path: str,
+) -> str:
+    shim = tempfile.mkdtemp(prefix="vrhs-bin-")
+    for name, target in (("hostapd", chosen_hostapd), ("dnsmasq", chosen_dnsmasq)):
+        if not target:
+            continue
+        try:
+            os.symlink(target, os.path.join(shim, name))
+        except FileExistsError:
+            pass
+        except Exception as exc:
+            _note(f"binary_shim_failed name={name} target={target} err={_sanitize_probe_reason(exc)}")
+    pieces = [shim, sys_path]
+    if vendor_bin_path:
+        pieces.append(vendor_bin_path)
+    return ":".join(pieces)
+
+
 def _split_tokens(value: Optional[str]) -> List[str]:
     if not value:
         return []
@@ -227,7 +288,7 @@ def _prefer_vendor_for_platform() -> bool:
     return "cachyos" in tokens
 
 
-def _build_engine_env() -> Dict[str, str]:
+def _build_engine_env(*, require_hostapd: bool = True, require_dnsmasq: bool = True) -> Dict[str, str]:
     """
     Environment for lnxrouter execution.
 
@@ -250,6 +311,7 @@ def _build_engine_env() -> Dict[str, str]:
 
     sys_hostapd = _which_in_path("hostapd", sys_path)
     sys_dnsmasq = _which_in_path("dnsmasq", sys_path)
+    vendor_dnsmasq_reject_reason: Optional[str] = None
 
     force_vendor = env.get("VR_HOTSPOT_FORCE_VENDOR_BIN", "").strip().lower() in (
         "1",
@@ -273,6 +335,16 @@ def _build_engine_env() -> Dict[str, str]:
     vendor_hostapd_ok = bool(vendor_hostapd)
     vendor_dnsmasq_ok = bool(vendor_dnsmasq)
     force_vendor_effective = force_vendor or strict_vendor
+
+    if vendor_dnsmasq_ok:
+        dnsmasq_probe_ok, dnsmasq_probe_reason = _probe_dnsmasq_executable(
+            vendor_dnsmasq,
+            vendor_lib=str(vendor_lib_dir) if vendor_lib_dir else None,
+        )
+        if not dnsmasq_probe_ok:
+            vendor_dnsmasq_ok = False
+            vendor_dnsmasq_reject_reason = dnsmasq_probe_reason or "dnsmasq_probe_failed"
+            _note(f"vendor_dnsmasq_rejected path={vendor_dnsmasq} reason={vendor_dnsmasq_reject_reason}")
 
     prefer_vendor_platform = _prefer_vendor_for_platform()
     prefer_vendor = False
@@ -334,13 +406,14 @@ def _build_engine_env() -> Dict[str, str]:
         chosen_hostapd = sys_hostapd
         chosen_dnsmasq = sys_dnsmasq
     elif force_vendor_effective:
-        if not vendor_hostapd_ok or not vendor_dnsmasq_ok:
+        if not vendor_hostapd_ok or (not vendor_dnsmasq_ok and not sys_dnsmasq):
             selection_result = {
                 "vendor_profile": vendor_profile,
                 "force_vendor": force_vendor_effective,
                 "force_system": force_system,
                 "vendor_hostapd": vendor_hostapd,
                 "vendor_dnsmasq": vendor_dnsmasq,
+                "vendor_dnsmasq_reject_reason": vendor_dnsmasq_reject_reason,
                 "sys_hostapd": sys_hostapd,
                 "sys_dnsmasq": sys_dnsmasq,
                 "chosen_hostapd": None,
@@ -359,7 +432,7 @@ def _build_engine_env() -> Dict[str, str]:
                 }
             )
         chosen_hostapd = vendor_hostapd
-        chosen_dnsmasq = vendor_dnsmasq
+        chosen_dnsmasq = vendor_dnsmasq if vendor_dnsmasq_ok else sys_dnsmasq
         chosen_lib_dir = str(vendor_lib_dir) if vendor_lib_dir else None
     else:
         if prefer_vendor:
@@ -421,6 +494,7 @@ def _build_engine_env() -> Dict[str, str]:
         "force_system": force_system,
         "vendor_hostapd": vendor_hostapd,
         "vendor_dnsmasq": vendor_dnsmasq,
+        "vendor_dnsmasq_reject_reason": vendor_dnsmasq_reject_reason,
         "sys_hostapd": sys_hostapd,
         "sys_dnsmasq": sys_dnsmasq,
         "chosen_hostapd": chosen_hostapd,
@@ -437,6 +511,28 @@ def _build_engine_env() -> Dict[str, str]:
         f"hostapd_select={chosen_hostapd or 'none'} "
         f"dnsmasq_select={chosen_dnsmasq or 'none'} "
         f"LD_LIBRARY_PATH_prefix={vendor_lib_path or 'none'}"
+    )
+
+    required_selected = []
+    if require_hostapd:
+        required_selected.append(("hostapd", chosen_hostapd))
+    if require_dnsmasq:
+        required_selected.append(("dnsmasq", chosen_dnsmasq))
+    missing_selected = [name for name, path in required_selected if not path]
+    if missing_selected:
+        raise VendorSelectionError(
+            {
+                "error": "binary_missing",
+                "missing": missing_selected,
+                "selection": selection_result,
+            }
+        )
+
+    env["PATH"] = _build_selected_binary_path(
+        chosen_hostapd=chosen_hostapd,
+        chosen_dnsmasq=chosen_dnsmasq,
+        sys_path=sys_path,
+        vendor_bin_path=vendor_bin_path,
     )
 
     if chosen_hostapd:
