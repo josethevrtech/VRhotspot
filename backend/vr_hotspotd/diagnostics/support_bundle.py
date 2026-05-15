@@ -141,6 +141,8 @@ class SupportBundleCommandResult:
     timed_out: bool = False
     permission_denied: bool = False
     error_summary: Optional[str] = None
+    stdout_path: Optional[str] = None
+    stderr_path: Optional[str] = None
 
     def to_manifest_dict(self) -> Dict[str, Any]:
         item: Dict[str, Any] = {
@@ -155,6 +157,10 @@ class SupportBundleCommandResult:
             item["permission_denied"] = True
         if self.error_summary:
             item["error_summary"] = self.error_summary
+        if self.stdout_path:
+            item["stdout_path"] = self.stdout_path
+        if self.stderr_path:
+            item["stderr_path"] = self.stderr_path
         return item
 
 
@@ -173,6 +179,15 @@ class CollectedFile:
 
     result: SupportBundleFileResult
     content: str = ""
+
+
+@dataclass(frozen=True)
+class AssembledSupportBundle:
+    """In-memory support bundle archive plus response metadata."""
+
+    archive_bytes: bytes
+    filename: str
+    manifest: Dict[str, Any]
 
 
 SUPPORT_BUNDLE_ARCHIVE_LAYOUT = (
@@ -244,6 +259,123 @@ def make_support_bundle_manifest(
         manifest["hostname_redacted"] = hostname_redacted
 
     return _RedactionRun().redact_data(manifest)
+
+
+def assemble_support_bundle(
+    *,
+    commands: Iterable[CollectedCommand] = (),
+    files: Iterable[CollectedFile] = (),
+    generated_at: Optional[datetime] = None,
+    vr_hotspot_version: str = __version__,
+    platform_summary: Optional[Mapping[str, Any]] = None,
+    hostname_redacted: Optional[bool] = None,
+    hostname_note: Optional[str] = "hostname_not_collected",
+    warnings: Iterable[str] = (),
+    redaction_policy: Optional[Mapping[str, Any]] = None,
+    readme: Optional[Union[str, bytes]] = None,
+) -> AssembledSupportBundle:
+    """Assemble a support bundle from already-sanitized collector results.
+
+    This helper is intentionally pure: it does not run collectors, read source
+    files, or inspect the host system. Callers are responsible for passing only
+    sanitized command/file content.
+    """
+    when = generated_at or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    when_utc = when.astimezone(timezone.utc)
+
+    archive_files: list[tuple[str, Union[str, bytes]]] = []
+    manifest_files: list[SupportBundleFileResult] = []
+    manifest_commands: list[SupportBundleCommandResult] = []
+
+    for collected_file in files:
+        file_result = collected_file.result
+        archive_path = _safe_archive_path(file_result.path)
+        manifest_files.append(
+            SupportBundleFileResult(
+                path=archive_path,
+                collector=file_result.collector,
+                status=file_result.status,
+                content_type=file_result.content_type,
+                size_bytes=file_result.size_bytes,
+                error_summary=file_result.error_summary,
+            )
+        )
+        if file_result.status != CollectorStatus.REDACTION_FAILED:
+            archive_files.append((archive_path, collected_file.content))
+
+    for index, collected_command in enumerate(commands, start=1):
+        command_result = collected_command.result
+        collector_name = _format_command(command_result.command)
+        stdout_path: Optional[str] = None
+        stderr_path: Optional[str] = None
+
+        if command_result.status != CollectorStatus.REDACTION_FAILED:
+            if collected_command.stdout:
+                stdout_path = _command_output_archive_path(
+                    index, command_result.command, "stdout"
+                )
+                archive_files.append((stdout_path, collected_command.stdout))
+                manifest_files.append(
+                    SupportBundleFileResult(
+                        path=stdout_path,
+                        collector=collector_name,
+                        status=command_result.status,
+                        content_type="text/plain",
+                        size_bytes=len(collected_command.stdout.encode("utf-8")),
+                    )
+                )
+            if collected_command.stderr:
+                stderr_path = _command_output_archive_path(
+                    index, command_result.command, "stderr"
+                )
+                archive_files.append((stderr_path, collected_command.stderr))
+                manifest_files.append(
+                    SupportBundleFileResult(
+                        path=stderr_path,
+                        collector=collector_name,
+                        status=command_result.status,
+                        content_type="text/plain",
+                        size_bytes=len(collected_command.stderr.encode("utf-8")),
+                    )
+                )
+
+        manifest_commands.append(
+            SupportBundleCommandResult(
+                command=command_result.command,
+                status=command_result.status,
+                exit_code=command_result.exit_code,
+                timed_out=command_result.timed_out,
+                permission_denied=command_result.permission_denied,
+                error_summary=command_result.error_summary,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+        )
+
+    manifest = make_support_bundle_manifest(
+        files=manifest_files,
+        command_results=manifest_commands,
+        generated_at=when_utc,
+        vr_hotspot_version=vr_hotspot_version,
+        platform_summary=platform_summary,
+        hostname_redacted=hostname_redacted,
+        hostname_note=hostname_note,
+        warnings=warnings,
+        redaction_policy=redaction_policy,
+    )
+    archive_bytes = build_support_bundle_archive(
+        manifest,
+        archive_files,
+        readme=readme,
+    )
+    filename = f"vr-hotspot-support-bundle-{when_utc:%Y%m%d-%H%M%S}.zip"
+    return AssembledSupportBundle(
+        archive_bytes=archive_bytes,
+        filename=filename,
+        manifest=manifest,
+    )
 
 
 def redact_support_bundle_text(text: str) -> str:
@@ -615,6 +747,20 @@ def _content_bytes(content: Union[str, bytes]) -> bytes:
     if isinstance(content, str):
         return content.encode("utf-8")
     raise TypeError("support bundle archive content must be str or bytes")
+
+
+def _command_output_archive_path(
+    index: int,
+    command: Union[str, Sequence[str]],
+    stream_name: str,
+) -> str:
+    slug = _archive_slug(_format_command(command))
+    return _safe_archive_path(f"commands/{index:03d}-{slug}-{stream_name}.txt")
+
+
+def _archive_slug(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug[:80] or "command"
 
 
 def _safe_archive_path(path: str) -> str:
