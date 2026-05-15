@@ -27,6 +27,12 @@ from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator
 from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
 from vr_hotspotd.diagnostics.platform import collect_platform_matrix
+from vr_hotspotd.diagnostics.support_bundle import (
+    CollectorStatus,
+    assemble_support_bundle,
+    file_collection_result,
+    redact_support_bundle_data,
+)
 from vr_hotspotd import __version__
 from vr_hotspotd import telemetry
 from vr_hotspotd.state import load_state
@@ -409,6 +415,23 @@ class APIHandler(BaseHTTPRequestHandler):
     def _respond_raw(self, code: int, raw: bytes, content_type: str = "application/octet-stream"):
         self.send_response(code)
         self._send_common_headers(content_type, len(raw))
+        self.end_headers()
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
+    def _respond_attachment(
+        self,
+        code: int,
+        raw: bytes,
+        *,
+        content_type: str,
+        filename: str,
+    ):
+        self.send_response(code)
+        self._send_common_headers(content_type, len(raw))
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.end_headers()
         try:
             self.wfile.write(raw)
@@ -902,6 +925,109 @@ class APIHandler(BaseHTTPRequestHandler):
         out["_wpa2_passphrase_redacted"] = passphrase_set
         return out
 
+    def _support_bundle_json_file(
+        self,
+        path: str,
+        collector: str,
+        data: Any,
+        *,
+        status: str = CollectorStatus.OK,
+        error_summary: Optional[str] = None,
+    ):
+        redacted = redact_support_bundle_data(data)
+        return file_collection_result(
+            path,
+            collector,
+            content=json.dumps(redacted, indent=2, sort_keys=True) + "\n",
+            status=status,
+            content_type="application/json",
+            error_summary=error_summary,
+        )
+
+    def _build_support_bundle(self):
+        files = [
+            self._support_bundle_json_file(
+                "vr-hotspot/version.json",
+                "vr hotspot version",
+                {
+                    "version": APP_VERSION,
+                    "server_version": SERVER_VERSION,
+                    "token_configured": bool(self._env_token()),
+                },
+            )
+        ]
+        warnings: list[str] = []
+
+        try:
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/status.json",
+                    "vr hotspot status",
+                    self._status_view(include_logs=False),
+                )
+            )
+        except Exception as exc:
+            warnings.append("status_unavailable")
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/status.json",
+                    "vr hotspot status",
+                    {},
+                    status=CollectorStatus.FAILED,
+                    error_summary=f"status unavailable: {exc}",
+                )
+            )
+
+        inventory: Any = None
+        try:
+            inventory = get_adapters()
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/adapters.json",
+                    "vr hotspot adapters",
+                    inventory,
+                )
+            )
+        except Exception as exc:
+            warnings.append("adapter_inventory_unavailable")
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/adapters.json",
+                    "vr hotspot adapters",
+                    {},
+                    status=CollectorStatus.FAILED,
+                    error_summary=f"adapter inventory unavailable: {exc}",
+                )
+            )
+
+        try:
+            if inventory is None:
+                inventory = get_adapters()
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/readiness.json",
+                    "vr hotspot readiness",
+                    build_readiness_model(inventory),
+                )
+            )
+        except Exception as exc:
+            warnings.append("adapter_readiness_unavailable")
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/readiness.json",
+                    "vr hotspot readiness",
+                    {},
+                    status=CollectorStatus.FAILED,
+                    error_summary=f"adapter readiness unavailable: {exc}",
+                )
+            )
+
+        return assemble_support_bundle(
+            files=files,
+            vr_hotspot_version=APP_VERSION,
+            warnings=warnings,
+        )
+
     def _handle_config_update(self, cid: str, body: Dict[str, Any], body_warnings: list[str]):
         if not self._require_auth(cid):
             return
@@ -1121,6 +1247,18 @@ class APIHandler(BaseHTTPRequestHandler):
                 ap_interface_hint=st.get("ap_interface"),
             )
             self._respond(200, self._envelope(correlation_id=cid, data=snapshot))
+            return
+
+        if path == "/v1/diagnostics/support_bundle":
+            if not self._require_auth(cid):
+                return
+            bundle = self._build_support_bundle()
+            self._respond_attachment(
+                200,
+                bundle.archive_bytes,
+                content_type="application/zip",
+                filename=bundle.filename,
+            )
             return
 
         self._respond(
