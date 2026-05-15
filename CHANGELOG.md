@@ -11,6 +11,19 @@ complete.
 Theme: "It Just Works" update for SteamOS, Bazzite, CachyOS, Arch, Ubuntu,
 Fedora, and Pop!_OS users.
 
+### Completed v1.1.0 work in this branch
+
+- Add authenticated `GET /v1/adapters/readiness` endpoint for Adapter
+  Intelligence v2 summaries, reason codes, Basic Mode recommendation data, and
+  no-adapter responses.
+- Add Adapter Readiness panels to Basic and Pro web UI surfaces.
+- Add authenticated `GET /v1/diagnostics/support_bundle` endpoint that returns
+  a sanitized `.zip` support bundle with version, status, adapter inventory, and
+  readiness data.
+- Add Pro web UI support-bundle download action.
+- Add support bundle redaction, manifest, archive assembly, API, and UI
+  contract tests.
+
 ### Installer reliability
 
 - Plan installer hardening for distro detection, dependency checks, service
@@ -76,4 +89,3 @@ Fedora, and Pop!_OS users.
   before release.
 - Add distro-focused verification notes for SteamOS, Bazzite, CachyOS, Arch,
   Ubuntu, Fedora, and Pop!_OS.
-

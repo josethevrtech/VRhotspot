@@ -1,6 +1,9 @@
 # Adapter Intelligence v2 Design
 
-Status: documentation-only design. This document describes a future adapter readiness and scoring model for VR Hotspot v1.1.0. It does not require runtime or test changes yet.
+Status: implementation-backed design for unreleased VR Hotspot v1.1.0 work.
+The current branch includes the read-only readiness model and endpoint, while
+future work may extend host capability probes, chipset guesses, and UI
+decisioning. This document does not mark v1.1.0 as released.
 
 ## Goals
 
@@ -419,15 +422,17 @@ Reason codes should be stable, lowercase strings. Proposed codes:
 }
 ```
 
-## Future Endpoint
+## Current Endpoint
 
-Adapter Intelligence v2 can become:
+Adapter Intelligence v2 is exposed as an authenticated read-only endpoint:
 
 ```text
 GET /v1/adapters/readiness
 ```
 
-The endpoint should use the existing authenticated API envelope and should not replace `/v1/adapters` immediately. A future response shape:
+The endpoint uses the existing authenticated API envelope and does not replace
+`/v1/adapters`. The implemented response follows this shape, with fields
+populated from the currently available adapter inventory facts:
 
 ```json
 {
@@ -452,18 +457,16 @@ The endpoint should use the existing authenticated API envelope and should not r
 }
 ```
 
-Implementation path:
+Remaining implementation path:
 
-1. Add a pure normalization/scoring module that accepts inventory, `iw` text, regdomain data, hostapd capability probes, and current config.
-2. Add focused unit tests for state mapping, score ordering, reason codes, and no-adapter behavior.
-3. Wire `/v1/adapters/readiness` as read-only.
-4. Update Basic Mode UI to consume `basic_mode_visibility` and explanations.
-5. Keep `/v1/adapters` stable until the UI and tests have migrated.
+1. Extend host capability inputs with hostapd capability probes and current
+   config where useful.
+2. Add stronger chipset/vendor evidence only when sourced from reliable local
+   IDs or maintained tables.
+3. Continue keeping `/v1/adapters` stable while readiness data evolves.
+4. Use readiness fields more deeply in future first-run wizard flows.
 
 ## Non-Goals for This Design Step
 
-- No runtime code changes.
-- No test changes.
-- No change to existing `/v1/adapters` response.
 - No adapter blocklist unless it is backed by local evidence and tests.
 - No claim that a chipset guess is authoritative without a reliable source.

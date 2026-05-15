@@ -8,8 +8,8 @@ or version metadata changes.
 
 - Help a new user move from API-token login to a working VR hotspot with safe
   defaults.
-- Use Adapter Intelligence v2 and `GET /v1/adapters/readiness` to choose the
-  best adapter and explain why.
+- Use the implemented Adapter Intelligence v2 endpoint,
+  `GET /v1/adapters/readiness`, to choose the best adapter and explain why.
 - Keep Basic Mode simple by hiding risky choices when a clearly better adapter
   exists.
 - Give Advanced and Developer users enough context to understand tradeoffs
@@ -85,7 +85,7 @@ The selected level should map to the persisted selected mode:
 
 ### 3. Adapter Selection
 
-The wizard should call `GET /v1/adapters/readiness` and use Adapter
+The wizard should call the current `GET /v1/adapters/readiness` endpoint and use Adapter
 Intelligence v2 fields:
 
 - `recommended`
@@ -527,4 +527,3 @@ Manual hardware checks:
 - 6 GHz-capable adapter with valid readiness.
 - 6 GHz-capable adapter blocked by global or no-IR regulatory state.
 - Headless/MiniPC access from a phone browser.
-

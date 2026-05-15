@@ -44,13 +44,13 @@ Enter the **API token** shown during installation to access the interface.
 **Basic Usage:**
 1. Open the web UI
 2. Enter your API token
-3. Select your WiFi adapter (wlan1 recommended over wlan0)
+3. Select your Wi-Fi adapter (wlan1 recommended over wlan0)
 4. Click **Start** to create your hotspot
 5. Connect your VR headset to the new network
 
 ---
 
-## Supported WiFi Adapters
+## Supported Wi-Fi Adapters
 
 ### ✅ Recommended (Tested & Working)
 - **BrosTrend AXE3000 Tri-Band** (Best Choice) - https://www.amazon.com/dp/B0F6MY7H62
@@ -88,7 +88,7 @@ Enter the **API token** shown during installation to access the interface.
 
 ### 🔧 Smart Adapter Management
 
-- Auto-detects WiFi adapters and recommends the best one
+- Auto-detects Wi-Fi adapters and recommends the best one
 - **Prioritizes wlan1+** over wlan0 (avoids Intel AX200 issues)
 - Hides problematic adapters in Basic Mode
 - Supports multiple bands: 2.4 GHz, 5 GHz, 6 GHz (Wi-Fi 6E)
@@ -102,13 +102,14 @@ Enter the **API token** shown during installation to access the interface.
 **Status & Monitoring:**
 - `GET /v1/status` - Current hotspot status
 - `GET /v1/status?include_logs=1` - Status with logs
-- `GET /v1/adapters` - List available WiFi adapters
+- `GET /v1/adapters` - List available Wi-Fi adapters
 - `GET /v1/adapters/readiness` - Adapter Intelligence v2 readiness model
 
 **Diagnostics:**
 - `GET /v1/diagnostics/clients` - Connected clients
 - `POST /v1/diagnostics/ping` - Ping test
 - `POST /v1/diagnostics/ping_under_load` - Performance under load
+- `GET /v1/diagnostics/support_bundle` - Download a sanitized support bundle
 
 ### 🔥 Firewalld Integration (SteamOS-Friendly)
 
@@ -134,7 +135,7 @@ All binaries are bundled for consistent, portable installations.
 Enable in the web UI under Advanced Mode:
 
 **System Tuning:**
-- `wifi_power_save_disable` - Disable power saving on WiFi
+- `wifi_power_save_disable` - Disable power saving on Wi-Fi
 - `cpu_governor_performance` - Set CPU to performance mode
 - `usb_autosuspend_disable` - Prevent USB adapter suspension
 - `sysctl_tuning` - Kernel network stack optimizations
@@ -269,7 +270,7 @@ curl -s "http://127.0.0.1:8732/v1/status?include_logs=1" -H "X-Api-Token: $TOKEN
 
 ### Common Issues
 
-**1. No WiFi adapters found:**
+**1. No Wi-Fi adapters found:**
 - Check: `iw dev`
 - Ensure adapter supports AP mode: `iw list | grep -A10 "Supported interface modes"`
 
@@ -296,6 +297,19 @@ If the hotspot gets stuck, use the **Repair** button in the web UI or:
 TOKEN=$(sudo awk -F= '/VR_HOTSPOTD_API_TOKEN/{print $2}' /etc/vr-hotspot/env)
 curl -X POST "http://127.0.0.1:8732/v1/repair" -H "X-Api-Token: $TOKEN"
 ```
+
+### Support Bundle
+
+For bug reports, use **Download support bundle** in Pro mode or call the
+authenticated endpoint directly:
+
+```bash
+TOKEN=$(sudo awk -F= '/VR_HOTSPOTD_API_TOKEN/{print $2}' /etc/vr-hotspot/env)
+curl -OJ "http://127.0.0.1:8732/v1/diagnostics/support_bundle" -H "X-Api-Token: $TOKEN"
+```
+
+The bundle is a sanitized `.zip` with version, status, adapter inventory, and
+readiness data. Review it before attaching it to a public issue.
 
 ---
 
@@ -373,10 +387,13 @@ Issues and pull requests are welcome!
 
 **When filing a bug, please include:**
 - OS/distro + kernel version
-- WiFi adapter chipset/model
-- Output of: `sudo journalctl -u vr-hotspotd.service -n 200`
-- Output of: `curl http://127.0.0.1:8732/v1/status?include_logs=1`
-- Redact any API tokens or passwords
+- Wi-Fi adapter chipset/model
+- A sanitized support bundle from Pro mode or
+  `GET /v1/diagnostics/support_bundle`
+- If you cannot generate a support bundle, include
+  `sudo journalctl -u vr-hotspotd.service -n 200` and
+  `curl http://127.0.0.1:8732/v1/status?include_logs=1`
+- Redact any API tokens or passwords from manually collected output
 
 See `CONTRIBUTING.md` for more details.
 
