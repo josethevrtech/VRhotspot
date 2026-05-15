@@ -1878,6 +1878,116 @@ async function api(path, opts = {}) {
   return { ok: res.ok, status: res.status, json, raw: text };
 }
 
+function getAuthenticatedHeaders(opts = {}) {
+  const baseHeaders = {};
+  if (opts.headers) {
+    if (opts.headers instanceof Headers) {
+      opts.headers.forEach((value, key) => { baseHeaders[key] = value; });
+    } else {
+      Object.assign(baseHeaders, opts.headers);
+    }
+  }
+  const headerKeys = Object.keys(baseHeaders).reduce((acc, key) => {
+    acc[key.toLowerCase()] = key;
+    return acc;
+  }, {});
+  if (!headerKeys['x-correlation-id']) baseHeaders['X-Correlation-Id'] = cid();
+  const tokenOverride = (typeof opts.tokenOverride === 'string') ? opts.tokenOverride.trim() : '';
+  const tok = tokenOverride || getToken();
+  const injected = !!(tok && !headerKeys['x-api-token']);
+  if (injected) baseHeaders['X-Api-Token'] = tok;
+  debugTokenLog(injected);
+  return baseHeaders;
+}
+
+async function apiBlob(path, opts = {}) {
+  const tokenOverride = (typeof opts.tokenOverride === 'string') ? opts.tokenOverride.trim() : '';
+  const skipAuthHandling = !!opts.skipAuthHandling;
+  if (!tokenOverride && !skipAuthHandling && !isAuthenticated) {
+    return { ok: false, status: 401, blob: null, headers: new Headers() };
+  }
+  const fetchOpts = Object.assign({}, opts);
+  delete fetchOpts.tokenOverride;
+  delete fetchOpts.skipAuthHandling;
+  const headers = getAuthenticatedHeaders(fetchOpts);
+  const res = await fetch(BASE + path, Object.assign({}, fetchOpts, { headers }));
+  if (!skipAuthHandling && isUnauthorizedStatus(res.status)) {
+    logoutToSplash('Your session expired. Sign in again to download the support bundle.');
+  }
+  const blob = res.ok ? await res.blob() : null;
+  return { ok: res.ok, status: res.status, blob, headers: res.headers };
+}
+
+function filenameFromContentDisposition(value) {
+  const header = (value || '').trim();
+  if (!header) return '';
+
+  const encoded = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (encoded && encoded[1]) {
+    try {
+      return decodeURIComponent(encoded[1].trim().replace(/^"|"$/g, ''));
+    } catch { }
+  }
+
+  const quoted = header.match(/filename\s*=\s*"([^"]+)"/i);
+  if (quoted && quoted[1]) return quoted[1].trim();
+
+  const bare = header.match(/filename\s*=\s*([^;]+)/i);
+  return bare && bare[1] ? bare[1].trim() : '';
+}
+
+function safeZipFilename(name) {
+  const fallback = 'vr-hotspot-support-bundle.zip';
+  const cleaned = (name || '').split(/[\\/]/).pop().trim();
+  if (!cleaned) return fallback;
+  return cleaned.toLowerCase().endsWith('.zip') ? cleaned : `${cleaned}.zip`;
+}
+
+async function downloadSupportBundle() {
+  const btn = document.getElementById('btnDownloadSupportBundle');
+  const msg = document.getElementById('supportBundleMsg');
+  if (btn) btn.disabled = true;
+  if (msg) {
+    msg.textContent = 'Preparing support bundle...';
+    msg.className = 'small';
+  }
+
+  try {
+    const res = await apiBlob('/v1/diagnostics/support_bundle', { method: 'GET' });
+    if (!res.ok) {
+      const text = isUnauthorizedStatus(res.status)
+        ? 'Session expired. Sign in again to download the support bundle.'
+        : `Support bundle download failed (HTTP ${res.status}).`;
+      if (msg) {
+        msg.textContent = text;
+        msg.className = 'small error-text';
+      }
+      return;
+    }
+
+    const filename = safeZipFilename(filenameFromContentDisposition(res.headers.get('Content-Disposition')));
+    const url = URL.createObjectURL(res.blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    if (msg) {
+      msg.textContent = `Downloaded ${filename}`;
+      msg.className = 'small success-text';
+    }
+  } catch {
+    if (msg) {
+      msg.textContent = 'Support bundle download failed. Check the connection and try again.';
+      msg.className = 'small error-text';
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function setMsg(text, kind = '') {
   const els = [document.getElementById('msg'), document.getElementById('msgBasic')];
   for (const el of els) {
@@ -3184,6 +3294,10 @@ function bootstrapAuthenticatedUi() {
       const ok = await copyToClipboard(text);
       setMsg(ok ? 'Command copied.' : 'Copy failed.', ok ? '' : 'dangerText');
     });
+  }
+  const btnDownloadSupportBundle = document.getElementById('btnDownloadSupportBundle');
+  if (btnDownloadSupportBundle) {
+    btnDownloadSupportBundle.addEventListener('click', downloadSupportBundle);
   }
   const btnStartBasic = document.getElementById('btnStartBasic');
   if (btnStartBasic) btnStartBasic.addEventListener('click', async () => {
