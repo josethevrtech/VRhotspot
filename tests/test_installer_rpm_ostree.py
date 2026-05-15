@@ -95,3 +95,69 @@ def test_cachyos_dependency_plan_installs_dnsmasq_fallback():
     deps = result.stdout.strip().split()
     assert "dnsmasq" in deps
     assert "hostapd" not in deps
+
+
+def test_installer_auto_mode_is_non_interactive_without_tty():
+    result = run_bash(
+        f"""
+        source {INSTALLER}
+        unset CI GITHUB_ACTIONS GITLAB_CI BUILDKITE TF_BUILD
+        resolve_interactive_mode auto
+        echo "interactive=$INTERACTIVE"
+        echo "reason=$NON_INTERACTIVE_REASON"
+        """
+    )
+
+    assert result.returncode == 0
+    assert "interactive=0" in result.stdout
+    assert "reason=no usable terminal detected" in result.stdout
+
+
+def test_installer_non_interactive_flags_disable_prompts():
+    result = run_bash(
+        f"""
+        source {INSTALLER}
+        unset CI GITHUB_ACTIONS GITLAB_CI BUILDKITE TF_BUILD
+        resolve_interactive_mode non-interactive
+        echo "interactive=$INTERACTIVE"
+        echo "reason=$NON_INTERACTIVE_REASON"
+        """
+    )
+
+    assert result.returncode == 0
+    assert "interactive=0" in result.stdout
+    assert "reason=requested by command-line flag" in result.stdout
+
+
+def test_installer_ci_overrides_requested_interactive_mode():
+    env = os.environ.copy()
+    env["CI"] = "true"
+
+    result = run_bash(
+        f"""
+        source {INSTALLER}
+        resolve_interactive_mode interactive
+        echo "interactive=$INTERACTIVE"
+        echo "reason=$NON_INTERACTIVE_REASON"
+        """,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert "interactive=0" in result.stdout
+    assert "reason=CI environment detected" in result.stdout
+
+
+def test_installer_help_documents_interactivity_flags():
+    result = subprocess.run(
+        ["bash", str(INSTALLER), "--help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "--interactive" in result.stdout
+    assert "--non-interactive" in result.stdout
+    assert "--yes" in result.stdout

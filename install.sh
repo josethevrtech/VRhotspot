@@ -38,6 +38,79 @@ print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 print_error() { echo -e "${RED}✗ $1${NC}"; }
 print_info() { echo -e "${CYAN}ℹ $1${NC}"; }
 
+usage() {
+    cat <<'USAGE'
+VR Hotspot Installer
+
+Usage:
+  sudo ./install.sh [options]
+  curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh | sudo bash
+
+Options:
+  --interactive       Prompt for installer choices when a real TTY is available
+  --non-interactive   Disable prompts and use safe defaults
+  --yes, -y           Alias for --non-interactive
+  --check-os          Detect OS and print dependency plan only
+  --no-clear          Do not clear the terminal before output
+  -h, --help          Show this help
+USAGE
+}
+
+is_truthy() {
+    case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on|y) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_ci_environment() {
+    is_truthy "${CI:-}" || \
+        is_truthy "${GITHUB_ACTIONS:-}" || \
+        is_truthy "${GITLAB_CI:-}" || \
+        is_truthy "${BUILDKITE:-}" || \
+        is_truthy "${TF_BUILD:-}"
+}
+
+prompt_tty_available() {
+    [ -t 0 ] && [ -t 1 ] && [ -r /dev/tty ]
+}
+
+resolve_interactive_mode() {
+    local requested_mode="${1:-auto}"
+
+    INTERACTIVE=0
+    NON_INTERACTIVE_REASON=""
+
+    if is_ci_environment; then
+        NON_INTERACTIVE_REASON="CI environment detected"
+        return 0
+    fi
+
+    case "$requested_mode" in
+        interactive)
+            if prompt_tty_available; then
+                INTERACTIVE=1
+            else
+                NON_INTERACTIVE_REASON="--interactive requested, but no usable terminal was detected"
+            fi
+            ;;
+        non-interactive)
+            NON_INTERACTIVE_REASON="requested by command-line flag"
+            ;;
+        auto)
+            if prompt_tty_available; then
+                INTERACTIVE=1
+            else
+                NON_INTERACTIVE_REASON="no usable terminal detected"
+            fi
+            ;;
+        *)
+            print_error "Internal error: unknown interactive mode '$requested_mode'."
+            exit 1
+            ;;
+    esac
+}
+
 interactive_read() {
     if [ -c /dev/tty ]; then
         read -r "$@" < /dev/tty
@@ -620,25 +693,41 @@ show_completion() {
 main() {
     CHECK_ONLY=0
     SKIP_CLEAR=0
+    REQUESTED_INTERACTIVE_MODE="auto"
+
     for arg in "$@"; do
         case "$arg" in
+            --interactive)
+                REQUESTED_INTERACTIVE_MODE="interactive"
+                ;;
+            --non-interactive|--yes|-y)
+                REQUESTED_INTERACTIVE_MODE="non-interactive"
+                ;;
             --check-os)
                 CHECK_ONLY=1
                 ;;
             --no-clear)
                 SKIP_CLEAR=1
                 ;;
+            -h|--help)
+                usage
+                return 0
+                ;;
             *)
                 ;;
         esac
     done
 
-    [ -t 1 ] && INTERACTIVE=1 || INTERACTIVE=0
+    resolve_interactive_mode "$REQUESTED_INTERACTIVE_MODE"
     
-    if [ "$SKIP_CLEAR" -eq 0 ]; then
+    if [ "$SKIP_CLEAR" -eq 0 ] && [ -t 1 ]; then
         clear
     fi
     print_header
+
+    if [ "$INTERACTIVE" -eq 0 ] && [ -n "$NON_INTERACTIVE_REASON" ]; then
+        print_info "Non-interactive mode selected ($NON_INTERACTIVE_REASON); prompts are disabled and defaults will be used."
+    fi
 
     if [ "$CHECK_ONLY" -eq 1 ]; then
         detect_os
