@@ -1225,6 +1225,17 @@ canvas {
   flex-wrap: wrap;
 }
 
+.support-bundle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.support-bundle-row #supportBundleMsg {
+  min-height: 18px;
+}
+
 .mini-select {
   width: auto;
   min-width: 68px;
