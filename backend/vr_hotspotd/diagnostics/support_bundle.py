@@ -7,9 +7,13 @@ from datetime import datetime, timezone
 from io import BytesIO
 import ipaddress
 import json
+from pathlib import Path
 import posixpath
 import re
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Union
+import shlex
+import subprocess
+from subprocess import CompletedProcess, TimeoutExpired
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Union
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from vr_hotspotd import __version__
@@ -154,6 +158,23 @@ class SupportBundleCommandResult:
         return item
 
 
+@dataclass(frozen=True)
+class CollectedCommand:
+    """Sanitized command collector output plus manifest metadata."""
+
+    result: SupportBundleCommandResult
+    stdout: str = ""
+    stderr: str = ""
+
+
+@dataclass(frozen=True)
+class CollectedFile:
+    """Sanitized file collector output plus manifest metadata."""
+
+    result: SupportBundleFileResult
+    content: str = ""
+
+
 SUPPORT_BUNDLE_ARCHIVE_LAYOUT = (
     ArchiveFileMetadata("manifest.json", "manifest", "application/json"),
     ArchiveFileMetadata("README.txt", "readme"),
@@ -235,6 +256,276 @@ def redact_support_bundle_data(value: Any) -> Any:
     return _RedactionRun().redact_data(value)
 
 
+def command_collection_result(
+    command: Union[str, Sequence[str]],
+    *,
+    stdout: str = "",
+    stderr: str = "",
+    exit_code: Optional[int] = 0,
+    status: str = CollectorStatus.OK,
+    timed_out: bool = False,
+    permission_denied: bool = False,
+    error_summary: Optional[str] = None,
+    redactor: Optional[Callable[[str], str]] = None,
+) -> CollectedCommand:
+    """Create a sanitized command collection result."""
+    try:
+        redact = redactor or _RedactionRun().redact_text
+        sanitized_stdout = redact(_text_from_subprocess_value(stdout))
+        sanitized_stderr = redact(_text_from_subprocess_value(stderr))
+        sanitized_error = redact(error_summary) if error_summary else None
+    except Exception:
+        return CollectedCommand(
+            result=SupportBundleCommandResult(
+                command=command,
+                status=CollectorStatus.REDACTION_FAILED,
+                exit_code=exit_code,
+                timed_out=timed_out,
+                permission_denied=permission_denied,
+                error_summary="redaction failed; raw command output omitted",
+            )
+        )
+
+    return CollectedCommand(
+        result=SupportBundleCommandResult(
+            command=command,
+            status=status,
+            exit_code=exit_code,
+            timed_out=timed_out,
+            permission_denied=permission_denied,
+            error_summary=sanitized_error,
+        ),
+        stdout=sanitized_stdout,
+        stderr=sanitized_stderr,
+    )
+
+
+def missing_command_result(
+    command: Union[str, Sequence[str]],
+    *,
+    error_summary: Optional[str] = None,
+    redactor: Optional[Callable[[str], str]] = None,
+) -> CollectedCommand:
+    """Create a missing-command collector result."""
+    return command_collection_result(
+        command,
+        exit_code=None,
+        status=CollectorStatus.MISSING_COMMAND,
+        error_summary=error_summary or f"{_command_name(command)} not found",
+        redactor=redactor,
+    )
+
+
+def permission_denied_command_result(
+    command: Union[str, Sequence[str]],
+    *,
+    exit_code: Optional[int] = None,
+    stdout: str = "",
+    stderr: str = "",
+    error_summary: Optional[str] = None,
+    redactor: Optional[Callable[[str], str]] = None,
+) -> CollectedCommand:
+    """Create a permission-denied command collector result."""
+    return command_collection_result(
+        command,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
+        status=CollectorStatus.PERMISSION_DENIED,
+        permission_denied=True,
+        error_summary=error_summary or "permission denied",
+        redactor=redactor,
+    )
+
+
+def timeout_command_result(
+    command: Union[str, Sequence[str]],
+    *,
+    timeout: float,
+    stdout: Union[str, bytes, None] = "",
+    stderr: Union[str, bytes, None] = "",
+    redactor: Optional[Callable[[str], str]] = None,
+) -> CollectedCommand:
+    """Create a timed-out command collector result."""
+    return command_collection_result(
+        command,
+        stdout=_text_from_subprocess_value(stdout),
+        stderr=_text_from_subprocess_value(stderr),
+        exit_code=None,
+        status=CollectorStatus.TIMEOUT,
+        timed_out=True,
+        error_summary=f"collector timed out after {timeout:g}s",
+        redactor=redactor,
+    )
+
+
+def failed_command_result(
+    command: Union[str, Sequence[str]],
+    *,
+    exit_code: Optional[int],
+    stdout: str = "",
+    stderr: str = "",
+    error_summary: Optional[str] = None,
+    redactor: Optional[Callable[[str], str]] = None,
+) -> CollectedCommand:
+    """Create a failed command collector result."""
+    return command_collection_result(
+        command,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
+        status=CollectorStatus.FAILED,
+        error_summary=error_summary or f"command exited with status {exit_code}",
+        redactor=redactor,
+    )
+
+
+def collect_command(
+    command: Union[str, Sequence[str]],
+    *,
+    timeout: float,
+    runner: Callable[..., CompletedProcess[str]] = subprocess.run,
+    redactor: Optional[Callable[[str], str]] = None,
+) -> CollectedCommand:
+    """Run a bounded command collector and return sanitized output metadata."""
+    args = _command_args(command)
+    try:
+        completed = runner(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return missing_command_result(command, error_summary=str(exc), redactor=redactor)
+    except PermissionError as exc:
+        return permission_denied_command_result(
+            command,
+            error_summary=str(exc),
+            redactor=redactor,
+        )
+    except TimeoutExpired as exc:
+        return timeout_command_result(
+            command,
+            timeout=timeout,
+            stdout=exc.output,
+            stderr=exc.stderr,
+            redactor=redactor,
+        )
+
+    stdout = _text_from_subprocess_value(completed.stdout)
+    stderr = _text_from_subprocess_value(completed.stderr)
+    exit_code = completed.returncode
+    if exit_code == 0:
+        return command_collection_result(
+            command,
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+            status=CollectorStatus.OK,
+            redactor=redactor,
+        )
+
+    if _looks_permission_denied(stderr) or _looks_permission_denied(stdout):
+        return permission_denied_command_result(
+            command,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            error_summary="permission denied",
+            redactor=redactor,
+        )
+
+    return failed_command_result(
+        command,
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        redactor=redactor,
+    )
+
+
+def file_collection_result(
+    path: str,
+    collector: str,
+    *,
+    content: str = "",
+    status: str = CollectorStatus.OK,
+    content_type: str = "text/plain",
+    error_summary: Optional[str] = None,
+    redactor: Optional[Callable[[str], str]] = None,
+) -> CollectedFile:
+    """Create a sanitized file collection result."""
+    try:
+        redact = redactor or _RedactionRun().redact_text
+        sanitized_content = redact(content)
+        sanitized_error = redact(error_summary) if error_summary else None
+    except Exception:
+        return CollectedFile(
+            result=SupportBundleFileResult(
+                path=path,
+                collector=collector,
+                status=CollectorStatus.REDACTION_FAILED,
+                content_type=content_type,
+                size_bytes=0,
+                error_summary="redaction failed; raw file content omitted",
+            )
+        )
+
+    return CollectedFile(
+        result=SupportBundleFileResult(
+            path=path,
+            collector=collector,
+            status=status,
+            content_type=content_type,
+            size_bytes=len(sanitized_content.encode("utf-8")),
+            error_summary=sanitized_error,
+        ),
+        content=sanitized_content,
+    )
+
+
+def collect_file(
+    source_path: Union[str, Path],
+    bundle_path: str,
+    *,
+    collector: Optional[str] = None,
+    content_type: str = "text/plain",
+    redactor: Optional[Callable[[str], str]] = None,
+) -> CollectedFile:
+    """Read and sanitize one text file for a future support bundle."""
+    source = Path(source_path)
+    collector_name = collector or str(source)
+    try:
+        content = source.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return file_collection_result(
+            bundle_path,
+            collector_name,
+            status=CollectorStatus.NOT_APPLICABLE,
+            content_type=content_type,
+            error_summary=f"file not found: {source}",
+        )
+    except PermissionError:
+        return file_collection_result(
+            bundle_path,
+            collector_name,
+            status=CollectorStatus.PERMISSION_DENIED,
+            content_type=content_type,
+            error_summary=f"permission denied reading {source}",
+        )
+
+    return file_collection_result(
+        bundle_path,
+        collector_name,
+        content=content,
+        status=CollectorStatus.OK,
+        content_type=content_type,
+        redactor=redactor,
+    )
+
+
 def build_support_bundle_archive(
     manifest: Mapping[str, Any],
     files: Union[Mapping[str, Union[str, bytes]], Iterable[tuple[str, Union[str, bytes]]]],
@@ -281,6 +572,29 @@ def _format_command(command: Union[str, Sequence[str]]) -> str:
     if isinstance(command, str):
         return command
     return " ".join(str(part) for part in command)
+
+
+def _command_args(command: Union[str, Sequence[str]]) -> Sequence[str]:
+    if isinstance(command, str):
+        return shlex.split(command)
+    return [str(part) for part in command]
+
+
+def _command_name(command: Union[str, Sequence[str]]) -> str:
+    args = _command_args(command)
+    return args[0] if args else ""
+
+
+def _text_from_subprocess_value(value: Union[str, bytes, None]) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _looks_permission_denied(text: str) -> bool:
+    return "permission denied" in text.lower()
 
 
 def _iter_archive_files(
