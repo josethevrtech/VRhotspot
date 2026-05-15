@@ -718,7 +718,7 @@ function applyUiMode(mode, opts = {}) {
   const adapterLbl = document.querySelector('label[for="ap_adapter"]');
   const adapterTip = document.getElementById('adapterLabelTip');
   if (adapterLbl) {
-    adapterLbl.textContent = (mode === 'basic') ? 'USB WiFi Adapter' : 'AP adapter';
+    adapterLbl.textContent = (mode === 'basic') ? 'USB Wi-Fi adapter' : 'AP adapter';
   }
   if (adapterTip) {
     const tipText = (mode === 'basic')
@@ -2908,7 +2908,7 @@ async function loadAdapters() {
     if (mode === 'basic') {
       basicUsbCount++;
       const recStr = (a.ifname === rec) ? ' (Recommended)' : '';
-      opt.textContent = `USB WiFi ${basicUsbCount}${recStr}`;
+      opt.textContent = `USB Wi-Fi ${basicUsbCount}${recStr}`;
     } else {
       const ap = a.supports_ap ? 'AP' : 'no-AP';
       const caps = capsLabel(a);

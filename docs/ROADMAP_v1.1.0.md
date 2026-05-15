@@ -35,6 +35,21 @@ driver details.
 - Do not make distro-specific behavior opaque; explain platform decisions where
   the system can detect them.
 
+## Current Implementation Snapshot
+
+This branch includes early v1.1.0 implementation work while the release remains
+unreleased:
+
+- `GET /v1/adapters/readiness` exposes Adapter Intelligence v2 readiness data
+  from the existing adapter inventory.
+- Basic and Pro UI surfaces show Adapter Readiness summaries.
+- `GET /v1/diagnostics/support_bundle` returns a sanitized `.zip` support
+  bundle with VR Hotspot version, status, adapter inventory, and readiness JSON.
+- Pro UI includes a support bundle download action.
+
+The installer hardening, first-run wizard, full CLI support-bundle helper, and
+full platform collector set still need completion before release.
+
 ## Phase 1: Release Hygiene and Installer UX
 
 - Audit release metadata so the project consistently reports `v1.0.4` until the
@@ -114,4 +129,3 @@ driver details.
 - Installer smoke tests pass on the target distro set.
 - Support bundle redaction tests pass.
 - GitHub Release notes match the final changelog.
-

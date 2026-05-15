@@ -1,8 +1,9 @@
 # Diagnostics Support Bundle Design
 
-Status: documentation-only design for the planned VR Hotspot v1.1.0 "It Just
-Works" update. This document does not require runtime code, UI, backend, test,
-or version metadata changes.
+Status: implementation-backed design for unreleased VR Hotspot v1.1.0 work.
+The current branch includes a limited authenticated web endpoint and Pro UI
+download action. Full system collectors and a CLI helper remain future work.
+This document does not mark v1.1.0 as released.
 
 ## Goals
 
@@ -18,13 +19,30 @@ or version metadata changes.
 
 ## Non-Goals
 
-- Do not implement bundle generation as part of this design step.
-- Do not add or change API routes yet.
 - Do not add or change CLI commands yet.
-- Do not change runtime code, tests, UI, backend behavior, installer behavior,
-  or version metadata.
+- Do not change installer behavior or version metadata as part of support
+  bundle planning.
 - Do not collect packet captures, browser storage, raw credentials, private
   keys, full home-directory listings, or unrelated application logs.
+
+## Current v1.1.0 Implementation
+
+The implemented web support bundle is intentionally limited but useful:
+
+- `GET /v1/diagnostics/support_bundle` requires the same API token as other
+  diagnostics endpoints.
+- The endpoint returns a `.zip` archive with `Content-Type: application/zip`
+  and a timestamped `vr-hotspot-support-bundle-YYYYMMDD-HHMMSS.zip` filename.
+- Current archive content includes `manifest.json`, `README.txt`,
+  `vr-hotspot/version.json`, `vr-hotspot/status.json`,
+  `vr-hotspot/adapters.json`, and `vr-hotspot/readiness.json`.
+- API tokens, passphrases, private keys, PSKs, emails, usernames, public IPs,
+  and MAC addresses are redacted before files enter the archive.
+- The Pro web UI includes a "Download support bundle" action.
+
+Not yet implemented: CLI export, full systemd/journal/firewall/wireless command
+collectors, tar.gz output, query parameters, and user opt-ins for expanded
+client identifiers.
 
 ## Collection Scope
 
@@ -238,9 +256,9 @@ Example manifest shape:
 }
 ```
 
-## Future API Endpoint
+## Current API Endpoint
 
-Future authenticated endpoint:
+Authenticated endpoint:
 
 ```text
 GET /v1/diagnostics/support_bundle
@@ -250,8 +268,7 @@ Expected behavior:
 
 - Requires the same authentication model as other sensitive diagnostics routes.
 - Streams the archive as a download.
-- Uses `Content-Type: application/zip` for `.zip` output or
-  `application/gzip` for `.tar.gz`.
+- Uses `Content-Type: application/zip` for the current `.zip` output.
 - Sets a filename with `Content-Disposition`.
 - Generates the bundle on demand.
 - Applies redaction before response streaming.
@@ -397,4 +414,3 @@ Manual tests:
 - System with internal `wlan0` plus external USB adapter.
 - Permission-limited non-root collection followed by elevated CLI collection.
 - User review of a generated archive before attaching it to a GitHub issue.
-
