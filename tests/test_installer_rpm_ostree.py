@@ -78,3 +78,20 @@ def test_rpm_ostree_install_wrapper_reports_reboot_guidance(tmp_path):
         "Reboot your system, then rerun the VR Hotspot installer."
     ) in result.stdout
     assert "Package/capability iw is already requested" in result.stderr
+
+
+def test_cachyos_dependency_plan_installs_dnsmasq_fallback():
+    result = run_bash(
+        f"""
+        source {INSTALLER}
+        PKG_MANAGER=pacman
+        OS_ID=cachyos
+        calculate_dependency_list
+        printf '%s\n' "${{DEPENDENCIES[*]}}"
+        """
+    )
+
+    assert result.returncode == 0
+    deps = result.stdout.strip().split()
+    assert "dnsmasq" in deps
+    assert "hostapd" not in deps

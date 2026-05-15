@@ -286,7 +286,7 @@ calculate_dependency_list() {
         pacman)
             DEPENDENCIES=(python python-pip iw iproute2)
             if [[ "$OS_ID" != "steamos" ]]; then
-                DEPENDENCIES+=("iptables")
+                DEPENDENCIES+=("dnsmasq" "iptables")
             fi
             ;;
         apt)
@@ -322,6 +322,7 @@ install_dependencies() {
             if [[ "$OS_ID" == "steamos" ]]; then
                 : # SteamOS ships iptables-nft by default; don't install iptables packages.
             else
+                deps+=("dnsmasq")
                 if pacman -Qi iptables-nft &>/dev/null || pacman -Si iptables-nft &>/dev/null; then
                     deps+=("iptables-nft")
                 elif pacman -Qi nftables &>/dev/null || command -v nft &>/dev/null; then
