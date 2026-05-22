@@ -27,3 +27,4 @@ backend/vendor/bin/*.debug
 
 # Python venv
 .venv/
+.aider*
