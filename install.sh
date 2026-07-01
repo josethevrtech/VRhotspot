@@ -389,22 +389,34 @@ calculate_dependency_list() {
 
 install_dependencies() {
     print_step "Installing dependencies..."
+    if [[ "$OS_ID" == "steamos" ]]; then
+        local missing=()
+        local cmd
+        for cmd in python python3 iw ip nmcli firewall-cmd nft iptables git openssl; do
+            command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+        done
+
+        if [ "${#missing[@]}" -gt 0 ]; then
+            print_error "SteamOS is missing required base tools: ${missing[*]}"
+            print_info "Not modifying the immutable SteamOS base automatically. Install the missing tools or use a local repo checkout."
+            exit 1
+        fi
+
+        print_success "SteamOS base tools found. Using bundled VRhotspot networking stack."
+        return 0
+    fi
+
     case "$PKG_MANAGER" in
         pacman)
             local deps=(python python-pip iw iproute2)
-            if [[ "$OS_ID" == "steamos" ]]; then
-                : # SteamOS ships iptables-nft by default; don't install iptables packages.
+            deps+=("dnsmasq")
+            if pacman -Qi iptables-nft &>/dev/null || pacman -Si iptables-nft &>/dev/null; then
+                deps+=("iptables-nft")
+            elif pacman -Qi nftables &>/dev/null || command -v nft &>/dev/null; then
+                :
             else
-                deps+=("dnsmasq")
-                if pacman -Qi iptables-nft &>/dev/null || pacman -Si iptables-nft &>/dev/null; then
-                    deps+=("iptables-nft")
-                elif pacman -Qi nftables &>/dev/null || command -v nft &>/dev/null; then
-                    :
-                else
-                    deps+=("iptables")
-                fi
+                deps+=("iptables")
             fi
-            [[ "$OS_ID" == "steamos" ]] && steamos-readonly disable || true
             if [[ ! -r /etc/pacman.d/gnupg/pubring.gpg ]]; then
                 print_info "Initializing pacman keyring..."
                 install -d -m 755 /etc/pacman.d/gnupg
@@ -439,7 +451,6 @@ install_dependencies() {
                 fi
             fi
             pacman -Sy --noconfirm --needed "${deps[@]}"
-            [[ "$OS_ID" == "steamos" ]] && steamos-readonly enable || true
             ;;
         apt)
             _apt_update_with_retry
@@ -521,8 +532,10 @@ get_source_files() {
             exit 1
         fi
         TEMP_INSTALL_DIR="/tmp/vr-hotspot-install-$$"
-        print_info "Cloning repository to $TEMP_INSTALL_DIR..."
-        git clone -q https://github.com/josethevrtech/VRhotspot.git "$TEMP_INSTALL_DIR"
+        local install_ref
+        install_ref="${VR_HOTSPOT_INSTALL_REF:-main}"
+        print_info "Cloning repository ref $install_ref to $TEMP_INSTALL_DIR..."
+        git clone -q --branch "$install_ref" https://github.com/josethevrtech/VRhotspot.git "$TEMP_INSTALL_DIR"
         print_success "Repository cloned."
     fi
 }
@@ -582,6 +595,12 @@ configure_install() {
         # Pop!_OS stability: keep destructive WiFi driver reload recovery disabled by default.
         echo "VR_HOTSPOTD_ENABLE_DRIVER_RELOAD_RECOVERY=0"
     } > "$ENV_FILE"
+    if [ "$OS_ID" = "steamos" ]; then
+        echo "VR_HOTSPOT_VENDOR_PROFILE=steamos" >> "$ENV_FILE"
+        echo "VR_HOTSPOT_FORCE_VENDOR_BIN=1" >> "$ENV_FILE"
+        echo "VR_HOTSPOT_VENDOR_STRICT=1" >> "$ENV_FILE"
+        print_info "SteamOS detected; forcing bundled networking stack."
+    fi
     if [ "$OS_ID" = "bazzite" ]; then
         echo "VR_HOTSPOT_VENDOR_PROFILE=bazzite" >> "$ENV_FILE"
         if [ -x "$TEMP_INSTALL_DIR/backend/vendor/bin/bazzite/hostapd" ]; then
@@ -750,7 +769,7 @@ main() {
     get_source_files
     configure_install
     install_daemon
-    if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID_LIKE" == *"fedora"* ]]; then
+    if [[ "$OS_ID" == "steamos" || "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID_LIKE" == *"fedora"* ]]; then
         enable_firewalld_uplink_forwarding
     fi
     
