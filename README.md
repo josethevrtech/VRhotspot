@@ -10,7 +10,17 @@ Built around **lnxrouter + hostapd + dnsmasq**, with **bundled binaries** (inclu
 
 ## 🚀 Quick Installation
 
-**One-command install**
+**SteamOS install**
+
+SteamOS 3.8.12 stable has been validated with the installer downloaded first
+and then run as a local file. Use this method on SteamOS:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
+sudo bash /tmp/vrhotspot-install.sh --non-interactive
+```
+
+**Other Linux distributions**
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh | sudo bash
@@ -241,6 +251,36 @@ sudo systemctl disable --now vr-hotspot-autostart.service
 ---
 
 ## Troubleshooting
+
+### SteamOS Validation
+
+SteamOS 3.8.12 stable has been validated working with this hotfix branch when
+the installer is downloaded first and run as a file:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
+sudo bash /tmp/vrhotspot-install.sh --non-interactive
+```
+
+Validated result:
+- SteamOS 3.8.12 stable
+- bundled hostapd/dnsmasq/lnxrouter stack
+- AP interface x0wlan1
+- 5 GHz channel 36
+- 80 MHz width
+- client association and WPA handshake confirmed
+- internet and streaming confirmed working
+
+Validation checklist:
+
+```bash
+systemctl status vr-hotspotd.service --no-pager
+ls -lah /var/lib/vr-hotspot/app/backend/vendor/bin
+sudo grep -E 'VR_HOTSPOT.*VENDOR|VR_HOTSPOT_FORCE_VENDOR_BIN|VR_HOTSPOTD_HOST|VR_HOTSPOTD_PORT' /etc/vr-hotspot/env
+curl -fsS http://127.0.0.1:8732/healthz && echo OK
+iw dev
+iw dev x0wlan1 station dump
+```
 
 ### Check Service Status
 
