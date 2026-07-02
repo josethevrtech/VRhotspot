@@ -34,6 +34,10 @@ def add_interface(zone: str, ifname: str) -> Tuple[bool, str]:
     return _run(["--zone", zone, "--add-interface", ifname])
 
 
+def change_interface(zone: str, ifname: str) -> Tuple[bool, str]:
+    return _run(["--zone", zone, "--change-interface", ifname])
+
+
 def remove_interface(zone: str, ifname: str) -> Tuple[bool, str]:
     return _run(["--zone", zone, "--remove-interface", ifname])
 

@@ -208,6 +208,39 @@ def _iface_disconnect(ifname: str) -> None:
     subprocess.run([iw, "dev", ifname, "disconnect"], check=False, capture_output=True, text=True)
 
 
+def _iwctl_station_disconnect(ifname: str) -> None:
+    iwctl = shutil.which("iwctl")
+    if not iwctl:
+        return
+    subprocess.run(
+        [iwctl, "station", ifname, "disconnect"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _iwd_is_active() -> bool:
+    systemctl = shutil.which("systemctl")
+    if systemctl:
+        p = subprocess.run([systemctl, "is-active", "--quiet", "iwd"], capture_output=True, text=True)
+        if p.returncode == 0:
+            return True
+    return bool(shutil.which("iwctl"))
+
+
+def _iface_has_ssid(ifname: str) -> bool:
+    iw = shutil.which("iw") or "/usr/sbin/iw"
+    try:
+        _, out = _run([iw, "dev", ifname, "info"], check=False)
+    except Exception:
+        return False
+    for raw in out.splitlines():
+        if raw.strip().startswith("ssid "):
+            return True
+    return False
+
+
 def _remove_p2p_dev_ifaces(parent_if: str) -> List[str]:
     removed: List[str] = []
     if not parent_if:
@@ -809,6 +842,12 @@ def main() -> int:
 
     try:
         _remove_p2p_dev_ifaces(args.ap_ifname)
+        if _iwd_is_active():
+            _iwctl_station_disconnect(args.ap_ifname)
+            _iface_disconnect(args.ap_ifname)
+            _nm_set_managed(args.ap_ifname, False)
+            if _iface_has_ssid(args.ap_ifname):
+                raise RuntimeError("ap_adapter_still_associated_iwd_autoconnect")
         if not args.no_virt:
             virt = _create_virtual_ap_iface_with_fallback(args.ap_ifname, _mk_virt_name(args.ap_ifname))
             created_virt = True

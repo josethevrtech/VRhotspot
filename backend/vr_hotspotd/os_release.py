@@ -76,6 +76,16 @@ def is_pop_os(info: Optional[Dict[str, str]] = None) -> bool:
     return "pop" in tokens
 
 
+def is_steamos(info: Optional[Dict[str, str]] = None) -> bool:
+    info = info or read_os_release()
+    if not info:
+        return False
+    tokens: List[str] = []
+    for key in ("id", "id_like", "variant_id", "variant", "name"):
+        tokens.extend(_split_like(info.get(key)))
+    return "steamos" in tokens
+
+
 def apply_platform_overrides(
     cfg: Dict[str, Any],
     info: Optional[Dict[str, str]] = None,

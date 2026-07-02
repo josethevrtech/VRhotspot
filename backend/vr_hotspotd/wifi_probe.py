@@ -60,6 +60,10 @@ ERROR_REMEDIATIONS: Dict[str, str] = {
         "NetworkManager is controlling this interface. "
         "Run: nmcli dev set <interface> managed no"
     ),
+    "ap_adapter_still_associated_iwd_autoconnect": (
+        "Disable iwd autoconnect for the AP adapter, or use Ethernet/internal Wi-Fi as upstream "
+        "and reserve USB Wi-Fi for AP."
+    ),
 }
 
 
