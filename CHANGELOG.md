@@ -2,6 +2,17 @@
 
 All notable VR Hotspot release planning and release notes are tracked here.
 
+## v1.0.5 - SteamOS 3.8.12 Hotfix
+
+- Document the validated SteamOS 3.8.12 stable install path that downloads the
+  installer first and runs it as a local file with `--non-interactive`.
+- Document SteamOS validation checks for the service, bundled vendor binaries,
+  vendor-related environment settings, health endpoint, wireless interfaces,
+  and client station association.
+- Record the validated SteamOS result: bundled hostapd/dnsmasq/lnxrouter stack,
+  AP interface `x0wlan1`, 5 GHz channel 36, 80 MHz width, confirmed client
+  association and WPA handshake, and working internet plus streaming.
+
 ## Unreleased - v1.1.0
 
 Planning status: proposed major update. The current stable release remains
