@@ -12,8 +12,23 @@ Built around **lnxrouter + hostapd + dnsmasq**, with **bundled binaries** (inclu
 
 **SteamOS install**
 
-SteamOS 3.8.12 stable has been validated with the installer downloaded first
-and then run as a local file. Use this method on SteamOS:
+For SteamOS, download the installer first and run it as a local file. Do not
+use `curl | bash` on SteamOS.
+
+### Guided install (recommended)
+
+Use the guided installer for normal public SteamOS installs. `--interactive`
+keeps the guided installer prompts enabled.
+
+```bash
+curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
+sudo bash /tmp/vrhotspot-install.sh --interactive
+```
+
+### Unattended install
+
+Use unattended mode only for automation, support, or managed installs.
+`--non-interactive` intentionally skips prompts and uses defaults.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
@@ -254,13 +269,7 @@ sudo systemctl disable --now vr-hotspot-autostart.service
 
 ### SteamOS Validation
 
-SteamOS 3.8.12 stable has been validated working with this hotfix branch when
-the installer is downloaded first and run as a file:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
-sudo bash /tmp/vrhotspot-install.sh --non-interactive
-```
+SteamOS 3.8.12 stable has been validated working with this hotfix branch.
 
 Validated result:
 - SteamOS 3.8.12 stable
