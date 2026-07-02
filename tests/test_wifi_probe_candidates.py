@@ -73,6 +73,31 @@ def test_probe_prefers_primary_channel(monkeypatch):
     assert cand["primary_channel"] == 44
 
 
+def test_probe_80mhz_candidates_keep_channel_36_before_149(monkeypatch):
+    iw_list_36_and_149 = IW_LIST_SAMPLE.replace(
+        "      * 5320 MHz [64] (23.0 dBm) (radar detection)",
+        "\n".join(
+            [
+                "      * 5320 MHz [64] (23.0 dBm) (radar detection)",
+                "      * 5745 MHz [149] (23.0 dBm)",
+                "      * 5765 MHz [153] (23.0 dBm)",
+                "      * 5785 MHz [157] (23.0 dBm)",
+                "      * 5805 MHz [161] (23.0 dBm)",
+            ]
+        ),
+    )
+    monkeypatch.setattr(wifi_probe, "_run_iw_list", lambda: (0, iw_list_36_and_149))
+    monkeypatch.setattr(wifi_probe, "_run_iw_reg_get", lambda: (0, "country US: DFS-FCC"))
+
+    res = wifi_probe.probe_5ghz_80(
+        "wlan0",
+        inventory=_inventory(),
+        allow_dfs=False,
+    )
+
+    assert [c["primary_channel"] for c in res["candidates"][:2]] == [36, 149]
+
+
 def test_probe_requires_dfs_when_only_dfs_available(monkeypatch):
     iw_list_dfs_only = """
 Wiphy phy0

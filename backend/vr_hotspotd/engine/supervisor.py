@@ -595,8 +595,11 @@ def _apply_firewalld(ap_ifname: str, cfg: Dict[str, object]) -> bool:
 
     zone = str(cfg.get("firewalld_zone", "trusted"))
 
-    add_ok, out = firewalld.add_interface(zone, ap_ifname)
-    _note(f"firewalld add-interface zone={zone} if={ap_ifname} ok={add_ok} out={out}")
+    add_ok, out = firewalld.change_interface(zone, ap_ifname)
+    _note(f"firewalld change-interface zone={zone} if={ap_ifname} ok={add_ok} out={out}")
+    if not add_ok:
+        add_ok, out = firewalld.add_interface(zone, ap_ifname)
+        _note(f"firewalld add-interface fallback zone={zone} if={ap_ifname} ok={add_ok} out={out}")
 
     if bool(cfg.get("firewalld_enable_masquerade", True)):
         ok, out = firewalld.enable_masquerade(zone)

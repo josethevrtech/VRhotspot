@@ -189,6 +189,8 @@ _IW_WIDTH_RE = re.compile(r"width:\s*(\d+)\s*mhz", re.IGNORECASE)
 _HOSTAPD_CTRL_DIR_RE = re.compile(r"DIR=(.+)")
 _COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
 _CMD_TIMEOUT_S = 2.5
+_NM_IWD_CONF_DIR = Path("/etc/NetworkManager/conf.d")
+_IWD_ASSOCIATION_ERROR = "ap_adapter_still_associated_iwd_autoconnect"
 
 
 def ensure_hostapd_ctrl_interface_dir(conf_path: str) -> None:
@@ -361,6 +363,16 @@ def _iw_dev_info(ifname: str) -> str:
     if not ifname:
         return ""
     return _run([_iw_bin(), "dev", ifname, "info"])
+
+
+def _iw_iface_has_ssid(ifname: str) -> bool:
+    if not ifname:
+        return False
+    info = _iw_dev_info(ifname)
+    for raw in info.splitlines():
+        if raw.strip().startswith("ssid "):
+            return True
+    return False
 
 
 def _parse_iw_dev_info(iw_text: str) -> Dict[str, Optional[int]]:
@@ -621,6 +633,166 @@ def _nm_disconnect(ifname: str) -> Tuple[bool, Optional[str]]:
     if "device" in low and "not found" in low:
         return True, None
     return False, err or "nmcli_disconnect_failed"
+
+
+def _systemctl_is_active(unit: str) -> bool:
+    systemctl = shutil.which("systemctl")
+    if not systemctl or not unit:
+        return False
+    try:
+        p = subprocess.run(
+            [systemctl, "is-active", "--quiet", unit],
+            capture_output=True,
+            text=True,
+            timeout=_CMD_TIMEOUT_S,
+        )
+    except Exception:
+        return False
+    return p.returncode == 0
+
+
+def _restart_unit(unit: str) -> bool:
+    systemctl = shutil.which("systemctl")
+    if not systemctl or not unit:
+        return False
+    try:
+        p = subprocess.run(
+            [systemctl, "restart", unit],
+            capture_output=True,
+            text=True,
+            timeout=12.0,
+        )
+    except Exception:
+        return False
+    return p.returncode == 0
+
+
+def _iwd_is_active() -> bool:
+    if _systemctl_is_active("iwd"):
+        return True
+    return bool(shutil.which("iwctl"))
+
+
+def _nm_iwd_autoconnect_conf_text(ifname: str) -> str:
+    return "\n".join(
+        [
+            f"[device-vrhotspot-{ifname}]",
+            f"match-device=interface-name:{ifname}",
+            "wifi.backend=iwd",
+            "wifi.iwd.autoconnect=false",
+            "",
+        ]
+    )
+
+
+def _write_nm_iwd_autoconnect_conf(ifname: str, conf_dir: Path = _NM_IWD_CONF_DIR) -> Tuple[bool, Path]:
+    conf_path = conf_dir / f"99-vrhotspot-{ifname}-iwd.conf"
+    desired = _nm_iwd_autoconnect_conf_text(ifname)
+    try:
+        current = conf_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        current = None
+    if current == desired:
+        return False, conf_path
+    conf_dir.mkdir(parents=True, exist_ok=True)
+    conf_path.write_text(desired, encoding="utf-8")
+    try:
+        os.chmod(conf_path, 0o644)
+    except Exception:
+        pass
+    return True, conf_path
+
+
+def _iwctl_station_disconnect(ifname: str) -> Tuple[bool, Optional[str]]:
+    iwctl = shutil.which("iwctl")
+    if not iwctl:
+        return False, "iwctl_not_found"
+    try:
+        p = subprocess.run(
+            [iwctl, "station", ifname, "disconnect"],
+            capture_output=True,
+            text=True,
+            timeout=_CMD_TIMEOUT_S,
+        )
+    except Exception as exc:
+        return False, f"iwctl_error:{type(exc).__name__}"
+    if p.returncode == 0:
+        return True, None
+    err = (p.stderr or p.stdout or "").strip()
+    low = err.lower()
+    if any(tok in low for tok in ("not connected", "not found", "no station")):
+        return True, None
+    return False, err or "iwctl_disconnect_failed"
+
+
+def _iw_dev_disconnect(ifname: str) -> Tuple[bool, Optional[str]]:
+    if not ifname:
+        return False, "invalid_interface"
+    try:
+        p = subprocess.run(
+            [_iw_bin(), "dev", ifname, "disconnect"],
+            capture_output=True,
+            text=True,
+            timeout=_CMD_TIMEOUT_S,
+        )
+    except Exception as exc:
+        return False, f"iw_disconnect_error:{type(exc).__name__}"
+    if p.returncode == 0:
+        return True, None
+    err = (p.stderr or p.stdout or "").strip()
+    low = err.lower()
+    if any(tok in low for tok in ("not connected", "not found", "no such device")):
+        return True, None
+    return False, err or "iw_disconnect_failed"
+
+
+def _reserve_iwd_ap_adapter(
+    ifname: str,
+    *,
+    platform_info: Optional[Dict[str, str]],
+    adapter: Optional[Dict[str, Any]],
+) -> List[str]:
+    warnings: List[str] = []
+    if not ifname or not os_release.is_steamos(platform_info):
+        return warnings
+    if not _iwd_is_active():
+        return warnings
+    if adapter is not None and not bool(adapter.get("supports_ap")):
+        return warnings
+
+    try:
+        changed, conf_path = _write_nm_iwd_autoconnect_conf(ifname)
+    except Exception as exc:
+        warnings.append(f"iwd_autoconnect_config_failed:{type(exc).__name__}")
+        return warnings
+
+    warnings.append(f"iwd_autoconnect_disabled:{conf_path}")
+    if changed:
+        restarted: List[str] = []
+        if _restart_unit("NetworkManager"):
+            restarted.append("NetworkManager")
+        else:
+            warnings.append("iwd_autoconnect_config_restart_failed:NetworkManager")
+        if _restart_unit("iwd"):
+            restarted.append("iwd")
+        else:
+            warnings.append("iwd_autoconnect_config_restart_failed:iwd")
+        if restarted:
+            warnings.append("iwd_autoconnect_config_restarted:" + ",".join(restarted))
+    return warnings
+
+
+def _disconnect_iwd_ap_adapter(ifname: str) -> List[str]:
+    warnings: List[str] = []
+    if not ifname or not _iwd_is_active():
+        return warnings
+    ok, err = _iwctl_station_disconnect(ifname)
+    if not ok and err:
+        warnings.append(f"iwctl_disconnect_failed:{err}")
+    ok, err = _iw_dev_disconnect(ifname)
+    if not ok and err:
+        warnings.append(f"iw_disconnect_failed:{err}")
+    return warnings
 
 
 def _rfkill_unblock_wifi() -> bool:
@@ -3592,6 +3764,14 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         if not a or not a.get("supports_ap"):
             raise RuntimeError("no_ap_capable_adapter_found")
 
+        iwd_warnings = _reserve_iwd_ap_adapter(
+            ap_ifname,
+            platform_info=platform_info,
+            adapter=a,
+        )
+        if iwd_warnings:
+            prestart_warnings.extend(iwd_warnings)
+
         # Pop!_OS + USB adapters are substantially more stable in hostapd_nat
         # no-virt mode (virtual iface naming and busy churn are common otherwise).
         if (
@@ -3634,6 +3814,17 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 if not nm_remediation_error:
                     nm_remediation_error = "still_managed"
                 raise RuntimeError(nm_gate_error)
+
+        if os_release.is_steamos(platform_info) and _iwd_is_active():
+            iwd_disconnect_warnings = _disconnect_iwd_ap_adapter(ap_ifname)
+            if iwd_disconnect_warnings:
+                prestart_warnings.extend(iwd_disconnect_warnings)
+            set_ok, set_err = _nm_set_unmanaged(ap_ifname)
+            if not set_ok and set_err and set_err not in ("not_root", "nmcli_not_found"):
+                prestart_warnings.append(f"nm_set_unmanaged_failed:{set_err}")
+            time.sleep(0.2)
+            if _iw_iface_has_ssid(ap_ifname):
+                raise RuntimeError(_IWD_ASSOCIATION_ERROR)
 
         prep_warnings = _prepare_ap_interface(
             ap_ifname,
@@ -3709,8 +3900,9 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             ERROR_BASIC_MODE_REQUIRES_5GHZ,
             ERROR_BASIC_MODE_REQUIRES_80MHZ_ADAPTER,
             ERROR_NM_INTERFACE_MANAGED,
+            _IWD_ASSOCIATION_ERROR,
         ):
-            context = {"interface": ap_ifname} if err == ERROR_NM_INTERFACE_MANAGED and ap_ifname else {}
+            context = {"interface": ap_ifname} if err in (ERROR_NM_INTERFACE_MANAGED, _IWD_ASSOCIATION_ERROR) and ap_ifname else {}
             error_detail = wifi_probe.build_error_detail(err, context)
             if err == ERROR_NM_INTERFACE_MANAGED:
                 error_detail["remediation_attempted"] = nm_remediation_attempted
