@@ -248,7 +248,9 @@ def test_wait_for_ap_ready_with_expected_ifname_and_log():
         lifecycle._infer_ap_ifname_from_conf = orig_infer
 
 
-def test_wait_for_ap_ready_with_expected_ifname_and_hostapd_ready():
+def test_wait_for_ap_ready_with_expected_ifname_and_hostapd_ready(
+    mock_missing_system_commands,
+):
     calls = {"hostapd": [], "get_tails": []}
 
     def fake_iw_dev_dump():

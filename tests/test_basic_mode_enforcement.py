@@ -7,6 +7,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # Add backend to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
@@ -302,6 +304,7 @@ class TestNmPreStartGate(unittest.TestCase):
         self.assertEqual(result, "nm_interface_managed")
 
 
+@pytest.mark.usefixtures("mock_missing_system_commands")
 class TestNmAutoRemediation(unittest.TestCase):
     """Test NetworkManager auto-remediation on start."""
 
@@ -388,6 +391,7 @@ class TestNmAutoRemediation(unittest.TestCase):
             self.assertEqual(call.args[0], "wlan1")
 
 
+@pytest.mark.usefixtures("mock_missing_system_commands")
 class TestBasicModeFallbackBlocking(unittest.TestCase):
     """Test that Basic Mode blocks 40MHz fallback."""
 
@@ -1317,6 +1321,7 @@ class TestPostStartWidthCheck(unittest.TestCase):
         self.assertEqual(build_nat_no_virt[:2], [True, False])
         self.assertIn("optimized_no_virt_retry_with_virt", state.get("warnings", []))
 
+    @pytest.mark.usefixtures("mock_missing_system_commands")
     def test_start_5ghz_strict_pop_busy_hostapd_nat_fallback_uses_no_virt(self):
         """On Pop!_OS busy fallback from lnxrouter->hostapd_nat should use --no-virt first."""
         from vr_hotspotd import lifecycle
@@ -1492,6 +1497,7 @@ class TestWidthRegexParsing(unittest.TestCase):
         self.assertIsNone(result["channel_width_mhz"])
 
 
+@pytest.mark.usefixtures("mock_missing_system_commands")
 class TestStrictPathWidthFailure(unittest.TestCase):
     """Integration-style test: strict 5GHz start with width mismatch."""
 

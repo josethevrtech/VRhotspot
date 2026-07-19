@@ -121,7 +121,7 @@ def _stubbed_env(monkeypatch, cfg, ap_ready_returns, fallback_candidates=None):
     return state, calls
 
 
-def test_fail_closed_no_fallback_for_5ghz(monkeypatch):
+def test_fail_closed_no_fallback_for_5ghz(monkeypatch, mock_missing_system_commands):
     cfg = {
         "ssid": "Test",
         "wpa2_passphrase": "password123",
@@ -141,7 +141,7 @@ def test_fail_closed_no_fallback_for_5ghz(monkeypatch):
     assert state["attempts"][0]["failure_reason"] == "ap_start_timed_out"
 
 
-def test_pro_mode_allows_40mhz_fallback(monkeypatch):
+def test_pro_mode_allows_40mhz_fallback(monkeypatch, mock_missing_system_commands):
     cfg = {
         "ssid": "Test",
         "wpa2_passphrase": "password123",

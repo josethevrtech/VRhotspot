@@ -9,7 +9,10 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
 
-def test_prepare_ap_interface_force_disconnect_sets_unmanaged(monkeypatch):
+def test_prepare_ap_interface_force_disconnect_sets_unmanaged(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     import vr_hotspotd.lifecycle as lifecycle
 
     calls = []
@@ -69,7 +72,10 @@ def test_nm_disconnect_treats_not_all_devices_found_as_success(monkeypatch):
     assert err is None
 
 
-def test_prepare_ap_interface_reports_removed_p2p_iface(monkeypatch):
+def test_prepare_ap_interface_reports_removed_p2p_iface(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     import vr_hotspotd.lifecycle as lifecycle
 
     monkeypatch.setattr(lifecycle, "_nm_is_running", lambda: True)
@@ -394,7 +400,10 @@ def test_parent_iface_missing_signal_detects_cannot_find_parent_iface():
     assert lifecycle._lines_have_parent_iface_missing_signal(lines, "wlx7419f816af4c") is True
 
 
-def test_start_5ghz_strict_reselects_iface_after_no_virt_parent_missing(monkeypatch):
+def test_start_5ghz_strict_reselects_iface_after_no_virt_parent_missing(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     import vr_hotspotd.lifecycle as lifecycle
 
     candidate = {
@@ -531,7 +540,10 @@ def test_start_5ghz_strict_reselects_iface_after_no_virt_parent_missing(monkeypa
     assert "ap_adapter_reselected_after_reload:wlxOLD->wlxNEW" in state.get("warnings", [])
 
 
-def test_start_5ghz_strict_retries_after_parent_missing_even_when_iface_name_unchanged(monkeypatch):
+def test_start_5ghz_strict_retries_after_parent_missing_even_when_iface_name_unchanged(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     import vr_hotspotd.lifecycle as lifecycle
 
     candidate = {
@@ -694,7 +706,10 @@ def test_hostapd_nat_run_timeout_raises_runtimeerror(monkeypatch):
         eng._run(["ip", "link", "set", "wlan1", "up"], timeout_s=0.01)
 
 
-def test_start_5ghz_strict_pop_degrades_probe_errors_and_uses_default_candidates(monkeypatch):
+def test_start_5ghz_strict_pop_degrades_probe_errors_and_uses_default_candidates(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     import vr_hotspotd.lifecycle as lifecycle
 
     probe_payload = {
@@ -875,7 +890,10 @@ def test_start_5ghz_strict_non_pop_keeps_probe_errors_fatal(monkeypatch):
     assert state.get("last_error") == "driver_no_ap_mode_5ghz"
 
 
-def test_start_5ghz_strict_retries_no_virt_when_virtual_iface_missing(monkeypatch):
+def test_start_5ghz_strict_retries_no_virt_when_virtual_iface_missing(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     import vr_hotspotd.lifecycle as lifecycle
 
     candidate = {
@@ -1002,7 +1020,10 @@ def test_start_5ghz_strict_retries_no_virt_when_virtual_iface_missing(monkeypatc
     assert "virt_iface_missing_retry_no_virt" in state.get("warnings", [])
 
 
-def test_start_5ghz_strict_pop_timeout_retry_handles_hostapd_early_exit(monkeypatch):
+def test_start_5ghz_strict_pop_timeout_retry_handles_hostapd_early_exit(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     import vr_hotspotd.lifecycle as lifecycle
 
     candidate = {

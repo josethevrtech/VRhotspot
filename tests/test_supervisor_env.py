@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
 
-def test_build_engine_env_sets_unbuffered_python(monkeypatch):
+def test_build_engine_env_sets_unbuffered_python(monkeypatch, mock_missing_system_commands):
     import vr_hotspotd.engine.supervisor as supervisor
 
     monkeypatch.setattr(supervisor, "vendor_bin_dirs", lambda: [])
