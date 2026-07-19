@@ -341,7 +341,7 @@ detect_os() {
         exit 1
     fi
     case "$OS_ID" in
-        steamos|cachyos|arch) PKG_MANAGER="pacman" ;;
+        steamos|cachyos|arch|endeavouros) PKG_MANAGER="pacman" ;;
         ubuntu|debian|pop) PKG_MANAGER="apt" ;;
         fedora) PKG_MANAGER="dnf" ;;
         bazzite) PKG_MANAGER="rpm-ostree" ;;
@@ -634,6 +634,29 @@ install_daemon() {
     print_success "Daemon installation complete."
 }
 
+validate_endeavouros_runtime_dependencies() {
+    if [[ "$OS_ID" != "endeavouros" ]]; then
+        return 0
+    fi
+
+    local vendor_bin_dir="$TEMP_INSTALL_DIR/backend/vendor/bin"
+    local -a missing=()
+
+    if ! command -v hostapd >/dev/null 2>&1 && [ ! -x "$vendor_bin_dir/hostapd" ]; then
+        missing+=("hostapd (system or bundled)")
+    fi
+    if ! command -v dnsmasq >/dev/null 2>&1; then
+        missing+=("dnsmasq")
+    fi
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        print_error "EndeavourOS is missing required runtime dependencies: ${missing[*]}"
+        return 1
+    fi
+
+    print_success "EndeavourOS runtime dependencies found (hostapd and dnsmasq)."
+}
+
 enable_firewalld_uplink_forwarding() {
     if ! command -v firewall-cmd >/dev/null 2>&1; then
         print_info "firewalld not installed; skipping uplink forwarding setup"
@@ -767,9 +790,10 @@ main() {
     detect_os
     install_dependencies
     get_source_files
+    validate_endeavouros_runtime_dependencies
     configure_install
     install_daemon
-    if [[ "$OS_ID" == "steamos" || "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID_LIKE" == *"fedora"* ]]; then
+    if [[ "$OS_ID" == "steamos" || "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID" == "endeavouros" || "$OS_ID_LIKE" == *"fedora"* ]]; then
         enable_firewalld_uplink_forwarding
     fi
     

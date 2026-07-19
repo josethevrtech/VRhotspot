@@ -1,12 +1,12 @@
 # Platform Compatibility Guide
 
-This project targets multiple Linux distros (Bazzite, CachyOS, SteamOS, Arch, Fedora, Ubuntu). The goal is to avoid fixes for one OS breaking another.
+This project targets multiple Linux distros (Bazzite, CachyOS, SteamOS, Arch, EndeavourOS, Fedora, Ubuntu). The goal is to avoid fixes for one OS breaking another.
 
 ## Checklist for OS-Specific Changes
 
 - [ ] Does the change modify `install.sh` or distro detection logic?
 - [ ] Are package names/differences accounted for across apt/dnf/pacman/rpm-ostree?
-- [ ] For SteamOS/CachyOS/Arch: do we keep the pacman-specific logic intact?
+- [ ] For SteamOS/CachyOS/Arch/EndeavourOS: do we keep the pacman-specific logic intact while treating immutable SteamOS separately?
 - [ ] For Bazzite (rpm-ostree): do we avoid breaking vendor-bundle or live-layering logic?
 - [ ] If a fix is OS-specific, is it guarded by an OS check or feature flag?
 - [ ] For CachyOS: verify vendor hostapd/dnsmasq preference to avoid system package regressions.

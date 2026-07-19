@@ -205,7 +205,7 @@ enable_firewalld_uplink_forwarding() {
     log "Warning: failed to enable forward for zone $zone (permanent)"
 }
 
-if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID_LIKE" == *"fedora"* ]]; then
+if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID" == "endeavouros" || "$OS_ID_LIKE" == *"fedora"* ]]; then
   enable_firewalld_uplink_forwarding
 fi
 

@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 declare -A OS_NAMES=(
   ["arch"]="Arch Linux"
   ["cachyos"]="CachyOS"
+  ["endeavouros"]="EndeavourOS"
   ["steamos"]="SteamOS"
   ["ubuntu"]="Ubuntu"
   ["fedora"]="Fedora"
