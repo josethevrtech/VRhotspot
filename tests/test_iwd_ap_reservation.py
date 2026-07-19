@@ -40,7 +40,11 @@ def test_steamos_iwd_reservation_writes_per_interface_config(monkeypatch, tmp_pa
     assert any(str(conf) in warning for warning in warnings)
 
 
-def test_hostapd_nat_iwd_disconnects_parent_before_ap_start(monkeypatch, tmp_path):
+def test_hostapd_nat_iwd_disconnects_parent_before_ap_start(
+    monkeypatch,
+    mock_missing_system_commands,
+    tmp_path,
+):
     import vr_hotspotd.engine.hostapd_nat_engine as eng
 
     args = argparse.Namespace(

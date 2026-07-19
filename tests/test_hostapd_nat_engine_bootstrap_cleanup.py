@@ -8,7 +8,11 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
 
-def test_main_bootstrap_failure_restores_managed_state(monkeypatch, tmp_path):
+def test_main_bootstrap_failure_restores_managed_state(
+    monkeypatch,
+    mock_missing_system_commands,
+    tmp_path,
+):
     import vr_hotspotd.engine.hostapd_nat_engine as eng
 
     args = argparse.Namespace(
@@ -44,6 +48,7 @@ def test_main_bootstrap_failure_restores_managed_state(monkeypatch, tmp_path):
     monkeypatch.setattr(eng.argparse.ArgumentParser, "parse_args", lambda self: args)
     monkeypatch.setattr(eng, "_resolve_binary", lambda name, env_key: f"/usr/sbin/{name}")
     monkeypatch.setattr(eng, "_maybe_set_regdom", lambda _country: None)
+    monkeypatch.setattr(eng, "_iwd_is_active", lambda: False)
     monkeypatch.setattr(eng.tempfile, "mkdtemp", lambda prefix, dir: str(conf_dir))
     monkeypatch.setattr(eng, "_is_nm_running", lambda: True)
     monkeypatch.setattr(eng, "_nm_knows", lambda _if: True)

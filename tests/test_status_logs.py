@@ -3,11 +3,14 @@ import sys
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
 from vr_hotspotd.api import APIHandler
 
 
+@pytest.mark.usefixtures("mock_missing_system_commands")
 class TestStatusLogs(unittest.TestCase):
     @patch("vr_hotspotd.api.reconcile_state_with_engine")
     @patch("vr_hotspotd.api.load_state")

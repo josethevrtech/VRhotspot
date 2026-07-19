@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 import vr_hotspotd.lifecycle as lifecycle
 from vr_hotspotd.state import DEFAULT_STATE
 
@@ -141,6 +143,7 @@ def _stubbed_env(cfg, supports_wifi6):
         yield state, calls
 
 
+@pytest.mark.usefixtures("mock_missing_system_commands")
 class TestWifi6Gating(unittest.TestCase):
     def test_wifi6_flag_gated_by_adapter(self):
         cases = [

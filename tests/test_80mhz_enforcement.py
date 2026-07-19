@@ -4,6 +4,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 # Add backend to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
@@ -12,6 +14,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../b
 if "vr_hotspotd.lifecycle" in sys.modules:
     del sys.modules["vr_hotspotd.lifecycle"]
 
+
+@pytest.mark.usefixtures("mock_missing_system_commands")
 class Test80MHzEnforcement(unittest.TestCase):
 
     @patch("vr_hotspotd.lifecycle.load_config")
