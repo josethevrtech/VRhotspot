@@ -4,23 +4,12 @@ import shutil
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
-from vr_hotspotd import qos, nat_accel
+from vr_hotspotd import host_probes, nat_accel, qos
 from vr_hotspotd.engine import ufw
 
 
 def _default_uplink_iface() -> Optional[str]:
-    ip = shutil.which("ip") or "/usr/sbin/ip"
-    try:
-        p = subprocess.run([ip, "route", "show", "default"], capture_output=True, text=True)
-    except Exception:
-        return None
-    for raw in (p.stdout or "").splitlines():
-        parts = raw.strip().split()
-        if "dev" in parts:
-            idx = parts.index("dev")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-    return None
+    return host_probes.probe_default_uplink()
 
 
 def _ethtool_path() -> Optional[str]:

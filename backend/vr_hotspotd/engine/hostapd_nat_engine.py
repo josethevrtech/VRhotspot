@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Optional, List, Tuple
 
-from vr_hotspotd import os_release
+from vr_hotspotd import host_probes, os_release
 
 _CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
 _CMD_TIMEOUT_S = 4.0
@@ -87,15 +87,7 @@ def _is_firewalld_active() -> bool:
 
 
 def _default_uplink_iface() -> Optional[str]:
-    ip = shutil.which("ip") or "/usr/sbin/ip"
-    p = subprocess.run([ip, "route", "show", "default"], capture_output=True, text=True)
-    for raw in (p.stdout or "").splitlines():
-        parts = raw.strip().split()
-        if "dev" in parts:
-            idx = parts.index("dev")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-    return None
+    return host_probes.probe_default_uplink(raise_on_execution_error=True)
 
 
 def _resolve_lnxrouter_tmp_root() -> Path:

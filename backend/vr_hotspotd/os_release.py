@@ -14,7 +14,7 @@ def _strip_quotes(value: str) -> str:
     return value
 
 
-def _parse_os_release(text: str) -> Dict[str, str]:
+def parse_os_release(text: str) -> Dict[str, str]:
     data: Dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
@@ -28,13 +28,17 @@ def _parse_os_release(text: str) -> Dict[str, str]:
     return data
 
 
+# Retain the private name for compatibility with any existing internal callers.
+_parse_os_release = parse_os_release
+
+
 def read_os_release(paths: Optional[Tuple[str, ...]] = None) -> Dict[str, str]:
     for path in paths or _OS_RELEASE_PATHS:
         try:
             text = Path(path).read_text(encoding="utf-8")
         except Exception:
             continue
-        data = _parse_os_release(text)
+        data = parse_os_release(text)
         if data:
             return data
     return {}

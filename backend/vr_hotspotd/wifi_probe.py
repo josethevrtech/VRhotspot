@@ -2,18 +2,11 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
-from vr_hotspotd import os_release
+from vr_hotspotd import host_probes, os_release
 from vr_hotspotd.adapters.inventory import get_adapters
 
-_IW_WIPHY_RE = re.compile(r"^Wiphy\s+(phy\d+)")
-_IW_FREQ_LINE_RE = re.compile(
-    r"^\s*\*\s+(\d+(?:\.\d+)?)\s+MHz\s+\[(\d+)\](.*)$", re.IGNORECASE
-)
-_IW_VHT_WIDTH_RE = re.compile(r"Supported Channel Width:\s*(.+)$", re.IGNORECASE)
-_IW_HE_80_RE = re.compile(r"HE40/HE80(?:/5GHz)?", re.IGNORECASE)
 _COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
 
 ERROR_REMEDIATIONS: Dict[str, str] = {
@@ -76,17 +69,8 @@ def build_error_detail(code: str, context: Optional[Dict[str, Any]] = None) -> D
 
 
 def _run(cmd: List[str], timeout_s: float = 2.0) -> Tuple[int, str]:
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired as exc:
-        out = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-        err = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
-        return 124, (out + "\n" + err).strip()
-    except Exception as exc:
-        return 127, f"{type(exc).__name__}: {exc}"
-
-    out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
-    return p.returncode, out.strip()
+    result = host_probes.run_command(cmd, timeout_s=timeout_s)
+    return result.exit_status, result.combined_output()
 
 
 def _iw_bin() -> str:
@@ -107,258 +91,41 @@ def _run_iw_reg_get() -> Tuple[int, str]:
     return _run([_iw_bin(), "reg", "get"], timeout_s=2.0)
 
 
-def _split_tokens(value: Optional[str]) -> List[str]:
-    if not value:
-        return []
-    return [item.strip().lower() for item in value.replace(",", " ").split() if item.strip()]
-
-
 def detect_os_flavor(info: Optional[Dict[str, str]] = None) -> Dict[str, Optional[str]]:
     info = info or os_release.read_os_release()
-    tokens: List[str] = []
-    for key in ("id", "id_like", "variant_id", "variant", "name"):
-        tokens.extend(_split_tokens(info.get(key)))
-
-    flavor = "unknown"
-    family = None
-    if "steamos" in tokens:
-        flavor = "steamos"
-        family = "arch"
-    elif "bazzite" in tokens:
-        flavor = "bazzite"
-        family = "fedora"
-    elif "fedora" in tokens and any(
-        t in tokens for t in ("silverblue", "kinoite", "sericea", "onyx", "atomic", "ostree")
-    ):
-        flavor = "fedora_atomic"
-        family = "fedora"
-    elif "fedora" in tokens:
-        flavor = "fedora"
-        family = "fedora"
-    elif any(t in tokens for t in ("ubuntu", "debian", "pop", "linuxmint")):
-        flavor = "ubuntu_debian"
-        family = "debian"
-    elif any(t in tokens for t in ("arch", "cachyos")):
-        flavor = "arch"
-        family = "arch"
-
-    return {
-        "id": info.get("id"),
-        "id_like": info.get("id_like"),
-        "variant_id": info.get("variant_id"),
-        "version_id": info.get("version_id"),
-        "name": info.get("name"),
-        "flavor": flavor,
-        "family": family,
-    }
-
-
-def _firewalld_active() -> bool:
-    if not shutil.which("firewall-cmd"):
-        return False
-    rc, out = _run(["firewall-cmd", "--state"], timeout_s=1.0)
-    return rc == 0 and out.strip() == "running"
-
-
-def _ufw_active() -> bool:
-    if not shutil.which("ufw"):
-        return False
-    rc, out = _run(["ufw", "status"], timeout_s=1.5)
-    if rc != 0:
-        return False
-    for line in out.splitlines():
-        if "Status:" in line:
-            return "active" in line.lower()
-    return False
-
-
-def _iptables_variant() -> Optional[str]:
-    ipt = shutil.which("iptables")
-    if not ipt:
-        return None
-    rc, out = _run([ipt, "--version"], timeout_s=1.0)
-    if rc != 0:
-        return "iptables-unknown"
-    low = out.lower()
-    if "nf_tables" in low or "nft" in low:
-        return "iptables-nft"
-    if "legacy" in low:
-        return "iptables-legacy"
-    return "iptables-unknown"
+    return host_probes.classify_os_flavor(info)
 
 
 def detect_firewall_backends() -> Dict[str, Any]:
-    firewalld_active = _firewalld_active()
-    ufw_active = _ufw_active()
-    nft_present = bool(shutil.which("nft"))
-    ipt_variant = _iptables_variant()
-
-    selected = "unknown"
-    rationale = "no_firewall_detected"
-    if firewalld_active:
-        selected = "firewalld"
-        rationale = "firewalld_running"
-    elif ufw_active:
-        selected = "ufw"
-        rationale = "ufw_active"
-    elif nft_present:
-        selected = "nftables"
-        rationale = "nft_present"
-    elif ipt_variant:
-        selected = "iptables"
-        rationale = "iptables_present"
-
-    return {
-        "firewalld": {"available": bool(shutil.which("firewall-cmd")), "active": firewalld_active},
-        "ufw": {"available": bool(shutil.which("ufw")), "active": ufw_active},
-        "nftables": {"available": nft_present},
-        "iptables": {"available": ipt_variant is not None, "variant": ipt_variant},
-        "selected_backend": selected,
-        "rationale": rationale,
-    }
+    return host_probes.probe_firewall_backends()
 
 
 def detect_network_manager() -> Dict[str, Any]:
-    nmcli = shutil.which("nmcli")
-    running = False
-    if nmcli:
-        rc, out = _run([nmcli, "-t", "-f", "RUNNING", "g"], timeout_s=1.0)
-        running = rc == 0 and out.strip() == "running"
-    return {"nmcli": bool(nmcli), "running": running}
+    return host_probes.probe_network_manager()
 
 
 def _split_wiphy_sections(text: str) -> Dict[str, str]:
-    sections: Dict[str, List[str]] = {}
-    current: Optional[str] = None
-    for raw in text.splitlines():
-        line = raw.rstrip("\n")
-        m = _IW_WIPHY_RE.match(line.strip())
-        if m:
-            current = m.group(1)
-            sections.setdefault(current, []).append(line)
-            continue
-        if current is not None:
-            sections[current].append(line)
-    return {phy: "\n".join(lines) for phy, lines in sections.items()}
+    return host_probes.split_wiphy_sections(text)
 
 
 def _parse_supported_interface_modes(text: str) -> Optional[bool]:
-    if not text or "Supported interface modes" not in text:
-        return None
-    in_modes = False
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("Supported interface modes"):
-            in_modes = True
-            continue
-        if in_modes:
-            if line.startswith("*"):
-                mode = line.lstrip("*").strip()
-                if mode in ("AP", "AP/VLAN"):
-                    return True
-            elif line and not line.startswith("*"):
-                break
-    return False
+    return host_probes.supports_ap_mode(text)
 
 
 def _parse_5ghz_channels(text: str) -> List[Dict[str, Any]]:
-    channels: List[Dict[str, Any]] = []
-    in_freqs = False
-    for raw in text.splitlines():
-        line = raw.strip()
-        if line.startswith("Frequencies:"):
-            in_freqs = True
-            continue
-        if in_freqs and line and not line.startswith("*"):
-            in_freqs = False
-        if not in_freqs:
-            continue
-
-        m = _IW_FREQ_LINE_RE.match(raw)
-        if not m:
-            continue
-        try:
-            mhz = int(float(m.group(1)))
-            channel = int(m.group(2))
-        except Exception:
-            continue
-        if not (4900 <= mhz <= 5900):
-            continue
-        flags = (m.group(3) or "").lower()
-        disabled = "disabled" in flags
-        no_ir = "no ir" in flags or "no-ir" in flags or "no_ir" in flags
-        dfs = "radar detection" in flags or "dfs" in flags
-        channels.append(
-            {
-                "channel": channel,
-                "freq_mhz": mhz,
-                "disabled": disabled,
-                "no_ir": no_ir,
-                "dfs": dfs,
-                "flags": flags.strip(),
-            }
-        )
-    return channels
+    return host_probes.parse_5ghz_channels(text)
 
 
 def _parse_vht_supports_80(text: str) -> Optional[bool]:
-    if "VHT Capabilities" not in text:
-        return None
-    for line in text.splitlines():
-        m = _IW_VHT_WIDTH_RE.search(line)
-        if not m:
-            continue
-        value = m.group(1).strip().lower()
-        if "20/40" in value and "80" not in value and "160" not in value:
-            return False
-        return True
-    return True
+    return host_probes.parse_vht_supports_80(text)
 
 
 def _parse_he_supports_80(text: str) -> Optional[bool]:
-    if _IW_HE_80_RE.search(text):
-        return True
-    if "HE Capabilities" in text or "HE Iftypes" in text:
-        return None
-    return None
+    return host_probes.parse_he_supports_80(text)
 
 
 def _parse_iw_reg_get(text: str) -> Dict[str, Any]:
-    global_country: Optional[str] = None
-    global_header: Optional[str] = None
-    phys: Dict[str, Dict[str, Any]] = {}
-
-    current_section = "global"
-    current_phy: Optional[str] = None
-    current_phy_source = "unknown"
-
-    for raw in text.splitlines():
-        s = raw.strip()
-        if s.startswith("phy#"):
-            current_section = "phy"
-            phy_num = s.split()[0].split("#", 1)[1]
-            current_phy = f"phy{phy_num}"
-            current_phy_source = "self-managed" if "self-managed" in s else "kernel-managed"
-            phys.setdefault(current_phy, {"country": None, "source": current_phy_source, "raw_header": None})
-            phys[current_phy]["source"] = current_phy_source
-            continue
-
-        if s.startswith("country "):
-            parts = s.split()
-            cc = parts[1].rstrip(":") if len(parts) >= 2 else None
-            if current_section == "global":
-                global_country = cc
-                global_header = s
-            elif current_section == "phy" and current_phy:
-                phys.setdefault(current_phy, {})
-                phys[current_phy]["country"] = cc
-                phys[current_phy]["raw_header"] = s
-                phys[current_phy].setdefault("source", current_phy_source)
-
-    return {
-        "global": {"country": global_country or "unknown", "raw_header": global_header},
-        "phys": phys,
-    }
+    return host_probes.parse_regulatory_domains(text)
 
 
 def _effective_country(config_country: Optional[str], reg_country: Optional[str]) -> Optional[str]:

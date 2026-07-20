@@ -5,6 +5,8 @@ import re
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
+from vr_hotspotd import host_probes
+
 
 def _iw_bin() -> str:
     iw = shutil.which("iw")
@@ -17,7 +19,21 @@ def _iw_bin() -> str:
 
 
 def _run(cmd: List[str]) -> str:
-    return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+    result = host_probes.run_command(
+        cmd,
+        timeout_s=None,
+        merge_stderr=True,
+    )
+    out = result.stdout or ""
+    if result.exception is not None:
+        raise result.exception
+    if result.exit_status != 0:
+        raise subprocess.CalledProcessError(
+            result.exit_status,
+            cmd,
+            output=out,
+        )
+    return out
 
 
 def _run_iw(args: List[str]) -> str:
@@ -28,20 +44,7 @@ def _parse_iw_dev() -> List[Dict]:
     """
     Parse `iw dev` into a list of interfaces with their phy (phy0, phy1, ...).
     """
-    out = _run_iw(["dev"])
-    items: List[Dict] = []
-    current_phy: Optional[str] = None
-
-    for line in out.splitlines():
-        s = line.strip()
-        if s.startswith("phy#"):
-            n = s.split("#", 1)[1].strip()
-            current_phy = f"phy{n}"
-        elif s.startswith("Interface") and current_phy:
-            ifname = s.split()[1].strip()
-            items.append({"ifname": ifname, "phy": current_phy})
-
-    return items
+    return host_probes.parse_iw_dev_interfaces(_run_iw(["dev"]))
 
 
 def _phy_supports_ap(phy: str) -> bool:
@@ -65,12 +68,12 @@ def _phy_supports_ap(phy: str) -> bool:
                 if mode == "AP" or mode.startswith("AP/") or mode.startswith("AP-"):
                     return True
             elif s and not s.startswith("*"):
-                # Heuristic exit: we've likely left the modes section
+                # Preserve inventory's legacy behavior: leave this block but
+                # continue scanning in case a later modes block is present.
                 in_modes = False
     return False
 
 
-_HE_IFTYPES_RE = re.compile(r"^\s*HE Iftypes:\s*(.+)$", re.IGNORECASE)
 _VIRT_IFACE_RE = re.compile(r"^x\d+.+$")
 
 
@@ -80,28 +83,11 @@ def _he_iftypes_has_ap(iw_text: str) -> Optional[bool]:
     Return False if HE Iftypes exists but does not include AP.
     Return None if HE Iftypes is not present in the output.
     """
-    seen = False
-    for raw in iw_text.splitlines():
-        m = _HE_IFTYPES_RE.search(raw)
-        if not m:
-            continue
-        seen = True
-        for token in m.group(1).split(","):
-            t = token.strip().upper()
-            if t in ("AP", "AP/VLAN", "AP-VLAN"):
-                return True
-    return False if seen else None
+    return host_probes.he_iftypes_has_ap(iw_text)
 
 
 def _supports_wifi6_from_iw(iw_text: str) -> bool:
-    he_ap = _he_iftypes_has_ap(iw_text)
-    if he_ap is True:
-        return True
-    if he_ap is False:
-        return False
-
-    s = iw_text.lower()
-    return ("802.11ax" in s) or ("he capabilities" in s)
+    return host_probes.supports_wifi6(iw_text)
 
 
 @lru_cache(maxsize=64)
@@ -127,28 +113,7 @@ def _phy_supports_80mhz(phy: str) -> bool:
     except Exception:
         return False
     
-    # 1. Check HE (Wi-Fi 6) - HE80
-    if re.search(r"HE40/HE80/5GHz", out, re.IGNORECASE):
-        return True
-    
-    # 2. Check VHT (Wi-Fi 5)
-    vht_section = re.search(r"VHT Capabilities \(.*?\):(.*?)(?:\n\s*[A-Za-z]|\Z)", out, re.DOTALL | re.IGNORECASE)
-    if vht_section:
-        content = vht_section.group(1)
-        width_line = re.search(r"Supported Channel Width:(.*)", content, re.IGNORECASE)
-        if width_line:
-            val = width_line.group(1).strip().lower()
-            if "160" in val or "neither 160 nor 80+80" in val:
-                return True
-            if "20/40" in val:
-                return False
-        # Default VHT usually implies 80MHz support if not explicitly restricted
-        return True
-        
-    return False
-
-
-_FREQ_LINE_RE = re.compile(r"^\s*\*\s+(\d+(?:\.\d+)?)\s+MHz\s+\[(\d+)\].*$")
+    return host_probes.supports_80mhz(out)
 
 
 def _phy_band_support(phy: str) -> Dict[str, bool]:
@@ -163,50 +128,15 @@ def _phy_band_support(phy: str) -> Dict[str, bool]:
     5 GHz:   4900-5900 MHz
     6 GHz:   5925-7125 MHz (covers 6E ranges; some outputs show 5955+)
     """
-    supports = {"supports_2ghz": False, "supports_5ghz": False, "supports_6ghz": False}
-
     try:
         out = _run_iw(["phy", phy, "info"])
     except Exception:
-        return supports
-
-    in_freqs = False
-    for raw in out.splitlines():
-        s = raw.strip()
-
-        if s.startswith("Frequencies:"):
-            in_freqs = True
-            continue
-
-        # Exiting frequencies list (next section header)
-        if in_freqs and s and not s.startswith("*"):
-            in_freqs = False
-
-        if not in_freqs:
-            continue
-
-        m = _FREQ_LINE_RE.match(s)
-        if not m:
-            continue
-
-        try:
-            mhz = int(float(m.group(1)))
-        except Exception:
-            continue
-        line_lower = s.lower()
-        disabled = ("disabled" in line_lower) or ("no ir" in line_lower) or ("no-ir" in line_lower)
-
-        if disabled:
-            continue
-
-        if 2400 <= mhz <= 2500:
-            supports["supports_2ghz"] = True
-        elif 4900 <= mhz <= 5900:
-            supports["supports_5ghz"] = True
-        elif 5925 <= mhz <= 7125:
-            supports["supports_6ghz"] = True
-
-    return supports
+        return {
+            "supports_2ghz": False,
+            "supports_5ghz": False,
+            "supports_6ghz": False,
+        }
+    return host_probes.parse_band_support(out)
 
 
 def _parse_iw_reg_get() -> Dict:
@@ -223,50 +153,7 @@ def _parse_iw_reg_get() -> Dict:
         }
       }
     """
-    out = _run_iw(["reg", "get"])
-
-    global_country: Optional[str] = None
-    global_header: Optional[str] = None
-    phys: Dict[str, Dict] = {}
-
-    current_section = "global"
-    current_phy: Optional[str] = None
-    current_phy_source: str = "unknown"
-
-    for line in out.splitlines():
-        s = line.strip()
-
-        # start of a phy section: "phy#0 (self-managed)"
-        if s.startswith("phy#"):
-            current_section = "phy"
-            # phy#0 -> phy0
-            phy_num = s.split()[0].split("#", 1)[1]
-            current_phy = f"phy{phy_num}"
-            current_phy_source = "self-managed" if "self-managed" in s else "kernel-managed"
-            if current_phy not in phys:
-                phys[current_phy] = {"country": None, "source": current_phy_source, "raw_header": None}
-            else:
-                phys[current_phy]["source"] = current_phy_source
-            continue
-
-        # country line applies to whichever section we're in
-        if s.startswith("country "):
-            parts = s.split()
-            cc = parts[1].rstrip(":") if len(parts) >= 2 else None
-
-            if current_section == "global":
-                global_country = cc
-                global_header = s
-            elif current_section == "phy" and current_phy:
-                phys.setdefault(current_phy, {})
-                phys[current_phy]["country"] = cc
-                phys[current_phy]["raw_header"] = s
-                phys[current_phy].setdefault("source", current_phy_source)
-
-    return {
-        "global": {"country": global_country or "unknown", "raw_header": global_header},
-        "phys": phys
-    }
+    return host_probes.parse_regulatory_domains(_run_iw(["reg", "get"]))
 
 
 def _score_adapter(
