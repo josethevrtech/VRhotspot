@@ -3,6 +3,8 @@ from pathlib import Path
 import stat
 import subprocess
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.sh"
@@ -62,6 +64,43 @@ def test_endeavouros_selects_pacman():
 
     assert result.returncode == 0
     assert "package_manager=pacman" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("os_id", "package_manager"),
+    [
+        ("steamos", "pacman"),
+        ("cachyos", "pacman"),
+        ("arch", "pacman"),
+        ("endeavouros", "pacman"),
+        ("ubuntu", "apt"),
+        ("debian", "apt"),
+        ("pop", "apt"),
+        ("fedora", "dnf"),
+        ("bazzite", "rpm-ostree"),
+    ],
+)
+def test_package_manager_detection_matrix_is_unchanged(os_id, package_manager):
+    env = os.environ.copy()
+    env.update(
+        {
+            "VR_HOTSPOT_OS_ID": os_id,
+            "VR_HOTSPOT_OS_NAME": os_id,
+            "VR_HOTSPOT_OS_ID_LIKE": "",
+        }
+    )
+
+    result = run_bash(
+        f"""
+        source {INSTALLER}
+        detect_os
+        printf 'package_manager=%s\n' "$PKG_MANAGER"
+        """,
+        env=env,
+    )
+
+    assert result.returncode == 0
+    assert f"package_manager={package_manager}" in result.stdout
 
 
 def test_endeavouros_dependency_plan_keeps_vendor_hostapd_and_system_dnsmasq():

@@ -4,9 +4,9 @@ import ipaddress
 import os
 import re
 import shutil
-import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
+from vr_hotspotd import host_probes
 from vr_hotspotd.engine import supervisor
 
 
@@ -16,16 +16,8 @@ _HOSTAPD_HE_RE = re.compile(r"\b(802\.11ax|ieee80211ax|he)\b", re.IGNORECASE)
 
 
 def _run(cmd: List[str], timeout_s: float = 1.2) -> Tuple[int, str]:
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-        out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
-        return p.returncode, out.strip()
-    except subprocess.TimeoutExpired as exc:
-        out = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
-        err = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
-        return 124, (out + "\n" + err).strip()
-    except Exception as exc:
-        return 127, f"{type(exc).__name__}: {exc}"
+    result = host_probes.run_command(cmd, timeout_s=timeout_s)
+    return result.exit_status, result.combined_output()
 
 
 def _parse_rfkill(text: str) -> List[Dict[str, Optional[str]]]:

@@ -26,7 +26,14 @@ from vr_hotspotd.engine.hostapd_bridge_cmd import build_cmd_bridge
 from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running, get_tails
 from vr_hotspotd.engine.channel_scan import select_best_channel
 from vr_hotspotd.engine.tx_power import auto_adjust_tx_power, set_tx_power, get_tx_power
-from vr_hotspotd import system_tuning, preflight, network_tuning, os_release, wifi_probe
+from vr_hotspotd import (
+    host_probes,
+    network_tuning,
+    os_release,
+    preflight,
+    system_tuning,
+    wifi_probe,
+)
 from vr_hotspotd.policy import (
     BASIC_MODE_REQUIRED_BAND,
     ERROR_BASIC_MODE_REQUIRES_5GHZ,
@@ -1305,70 +1312,11 @@ def _parse_iw_dev_ap_ifaces(iw_text: str) -> Set[str]:
     return {ap.ifname for ap in _parse_iw_dev_ap_info(iw_text) if ap.ifname}
 
 def _parse_supported_interface_modes(text: str) -> Optional[bool]:
-    if not text or "Supported interface modes" not in text:
-        return None
-    
-    in_modes = False
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("Supported interface modes"):
-            in_modes = True
-            continue
-        if in_modes:
-            if line.startswith("*"):
-                mode = line.lstrip("*").strip()
-                if mode in ("AP", "AP/VLAN"):
-                    return True
-            elif line and not line.startswith("*"):
-                # End of section
-                break
-    return False
+    return host_probes.supports_ap_mode(text)
 
 
 def _parse_ap_managed_concurrency(text: str) -> Optional[bool]:
-    if not text or "valid interface combinations" not in text:
-        return None
-    
-    # Simple multi-line check: flatten the text or check presence in the relevant section.
-    # We look for a combination that supports AP and Managed handling.
-    # Example snippet:
-    #  * #{ managed } <= 1, #{ AP, P2P-client, P2P-GO } <= 1,
-    #    total <= 2, #channels <= 1
-    
-    found_managed = False
-    found_ap = False
-    found_total = False
-    
-    in_section = False
-    for line in text.splitlines():
-        line = line.strip()
-        if "valid interface combinations" in line:
-            in_section = True
-            continue
-        if not in_section:
-            continue
-            
-        # Stop at next section if any (usually starting with non-indented text or Specific Keywords)
-        # But 'iw phy' output indentation varies. We assume valid combinations block continues until
-        # another header or end of file.
-        
-        if line.startswith("*"):
-            # New combination
-            found_managed = False
-            found_ap = False
-            found_total = False
-        
-        if "#{ managed }" in line:
-            found_managed = True
-        if "AP" in line:
-            found_ap = True
-        if "total <=" in line:
-            found_total = True
-            
-        if found_managed and found_ap and found_total:
-            return True
-            
-    return False
+    return host_probes.parse_ap_managed_concurrency(text)
 
 
 def _band_from_freq_mhz(freq_mhz: Optional[int]) -> Optional[str]:

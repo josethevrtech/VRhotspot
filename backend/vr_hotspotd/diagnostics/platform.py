@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from vr_hotspotd import host_probes
 
 try:
     from vr_hotspotd import os_release as os_release_mod
@@ -21,11 +22,10 @@ except Exception:
 
 def _run_cmd(cmd: List[str], timeout_s: float = 0.5) -> tuple[int, str]:
     """Run a command with timeout, returning (exit_code, stdout). Never raises."""
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
-        return proc.returncode, (proc.stdout or "").strip()
-    except Exception:
+    result = host_probes.run_command(cmd, timeout_s=timeout_s)
+    if result.timed_out or result.error:
         return 127, ""
+    return result.exit_status, result.stdout.strip()
 
 
 def _strip_quotes(value: str) -> str:
@@ -36,6 +36,8 @@ def _strip_quotes(value: str) -> str:
 
 
 def _parse_os_release_text(text: str) -> Dict[str, str]:
+    if os_release_mod and hasattr(os_release_mod, "parse_os_release"):
+        return os_release_mod.parse_os_release(text)
     data: Dict[str, str] = {}
     for raw in text.splitlines():
         line = raw.strip()
@@ -65,18 +67,7 @@ def _read_os_release() -> Dict[str, str]:
 
 
 def _split_like(value: Optional[Any]) -> List[str]:
-    if not value:
-        return []
-    if isinstance(value, list):
-        tokens: List[str] = []
-        for item in value:
-            if item is None:
-                continue
-            tokens.extend(str(item).replace(",", " ").split())
-        return [item.strip().lower() for item in tokens if item.strip()]
-    if not isinstance(value, str):
-        value = str(value)
-    return [item.strip().lower() for item in value.replace(",", " ").split() if item.strip()]
+    return host_probes.split_tokens(value)
 
 
 def _probe_os() -> Dict[str, Any]:
