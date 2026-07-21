@@ -5,15 +5,18 @@ VR streaming typically uses UDP, so this provides more relevant metrics than TCP
 import socket
 import time
 import struct
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from vr_hotspotd.diagnostics import limits
 
 
 def run_udp_latency_test(
     target_ip: str,
-    target_port: int = 12345,
-    duration_s: int = 10,
-    interval_ms: int = 20,
-    packet_size: int = 64,
+    target_port: int = limits.UDP_DEFAULT_PORT,
+    duration_s: int = limits.UDP_DEFAULT_DURATION_S,
+    interval_ms: int = limits.UDP_DEFAULT_INTERVAL_MS,
+    packet_size: int = limits.UDP_DEFAULT_PACKET_SIZE,
+    count: Optional[int] = None,
 ) -> Dict:
     """
     Run UDP latency test by sending UDP packets and measuring round-trip time.
@@ -24,7 +27,40 @@ def run_udp_latency_test(
     """
     if not target_ip:
         return {"error": {"code": "invalid_target", "message": "target_ip is required"}}
-    
+
+    try:
+        target_port = limits.clamp_int(
+            target_port,
+            min_value=limits.UDP_MIN_PORT,
+            max_value=limits.UDP_MAX_PORT,
+        )
+        duration_s = limits.clamp_int(
+            duration_s,
+            min_value=limits.DIAGNOSTIC_MIN_DURATION_S,
+            max_value=limits.DIAGNOSTIC_MAX_DURATION_S,
+        )
+        interval_ms = limits.clamp_int(
+            interval_ms,
+            min_value=limits.DIAGNOSTIC_MIN_INTERVAL_MS,
+            max_value=limits.DIAGNOSTIC_MAX_INTERVAL_MS,
+        )
+        packet_size = limits.clamp_int(
+            packet_size,
+            min_value=limits.DIAGNOSTIC_MIN_PACKET_SIZE,
+            max_value=limits.DIAGNOSTIC_MAX_PACKET_SIZE,
+        )
+        packet_count = (
+            limits.packet_count_for_budget(duration_s, interval_ms)
+            if count is None
+            else limits.clamp_int(
+                count,
+                min_value=limits.DIAGNOSTIC_MIN_PACKET_COUNT,
+                max_value=limits.DIAGNOSTIC_MAX_PACKET_COUNT,
+            )
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        return {"error": {"code": "invalid_params", "message": str(exc)}}
+
     samples: List[float] = []
     sent = 0
     received = 0
@@ -37,9 +73,12 @@ def run_udp_latency_test(
         sock.settimeout(interval_s * 2)
         
         seq = 0
-        while time.time() < deadline:
+        while sent < packet_count and time.time() < deadline:
             send_time = time.time()
             seq += 1
+
+            remaining_s = deadline - send_time
+            sock.settimeout(max(0.001, min(interval_s * 2, remaining_s)))
             
             # Send UDP packet with sequence number and timestamp
             payload = struct.pack("!Qd", seq, send_time)  # 8 bytes seq + 8 bytes timestamp

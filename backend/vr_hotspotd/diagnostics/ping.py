@@ -4,7 +4,9 @@ import shutil
 import subprocess
 from typing import Dict, List, Optional
 
-_MAX_SAMPLES = 2000
+from vr_hotspotd.diagnostics import limits
+
+_MAX_SAMPLES = limits.DIAGNOSTIC_MAX_PACKET_COUNT
 
 
 def ping_available() -> bool:
@@ -67,34 +69,87 @@ def _parse_ping_output(text: str) -> Dict[str, Optional[float]]:
 
 def run_ping(
     target_ip: str,
-    duration_s: int = 10,
-    interval_ms: int = 20,
-    timeout_s: int = 2,
+    duration_s: int = limits.PING_DEFAULT_DURATION_S,
+    interval_ms: int = limits.PING_DEFAULT_INTERVAL_MS,
+    timeout_s: int = limits.PING_DEFAULT_REPLY_TIMEOUT_S,
+    count: Optional[int] = None,
+    packet_size: int = limits.PING_DEFAULT_PACKET_SIZE,
 ) -> dict:
     if not target_ip:
         return {"error": {"code": "invalid_target", "message": "target_ip is required"}}
+
+    try:
+        duration_s = limits.clamp_int(
+            duration_s,
+            min_value=limits.DIAGNOSTIC_MIN_DURATION_S,
+            max_value=limits.DIAGNOSTIC_MAX_DURATION_S,
+        )
+        interval_ms = limits.clamp_int(
+            interval_ms,
+            min_value=limits.DIAGNOSTIC_MIN_INTERVAL_MS,
+            max_value=limits.DIAGNOSTIC_MAX_INTERVAL_MS,
+        )
+        reply_timeout_s = limits.clamp_int(
+            timeout_s,
+            min_value=limits.PING_MIN_REPLY_TIMEOUT_S,
+            max_value=limits.PING_MAX_REPLY_TIMEOUT_S,
+        )
+        packet_size = limits.clamp_int(
+            packet_size,
+            min_value=limits.DIAGNOSTIC_MIN_PACKET_SIZE,
+            max_value=limits.DIAGNOSTIC_MAX_PACKET_SIZE,
+        )
+        packet_count = (
+            limits.packet_count_for_budget(duration_s, interval_ms)
+            if count is None
+            else limits.clamp_int(
+                count,
+                min_value=limits.DIAGNOSTIC_MIN_PACKET_COUNT,
+                max_value=limits.DIAGNOSTIC_MAX_PACKET_COUNT,
+            )
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        return {"error": {"code": "invalid_params", "message": str(exc)}}
 
     ping_bin = shutil.which("ping")
     if not ping_bin:
         return {"error": {"code": "ping_not_found", "message": "ping not found in PATH"}}
 
+    interval_s = interval_ms / 1000.0
+    cmd = [
+        ping_bin,
+        "-n",
+        "-c",
+        str(packet_count),
+        "-i",
+        f"{interval_s:.3f}",
+        "-w",
+        str(duration_s),
+        "-W",
+        str(reply_timeout_s),
+        "-s",
+        str(packet_size),
+        target_ip,
+    ]
+
+    subprocess_timeout_s = duration_s + limits.PING_SUBPROCESS_GRACE_S
     try:
-        interval_s = max(1, int(interval_ms)) / 1000.0
-        cmd = [
-            ping_bin,
-            "-n",
-            "-i",
-            f"{interval_s:.3f}",
-            "-w",
-            str(int(duration_s)),
-            "-W",
-            str(int(timeout_s)),
-            target_ip,
-        ]
-    except Exception as exc:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=subprocess_timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "error": {
+                "code": "ping_timeout",
+                "message": "ping exceeded the diagnostic execution budget",
+            }
+        }
+    except OSError as exc:
         return {"error": {"code": "ping_failed", "message": str(exc)}}
 
-    proc = subprocess.run(cmd, capture_output=True, text=True)
     output = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
 
     if proc.returncode != 0:
