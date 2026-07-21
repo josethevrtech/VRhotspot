@@ -200,6 +200,9 @@
           <li class="nav-item" data-tab="telemetry">
             <span class="icon">📈</span> Telemetry
           </li>
+          <li class="nav-item" data-tab="diagnostics">
+            <span class="icon">🩺</span> Diagnostics
+          </li>
           <li class="nav-item" data-tab="logs">
             <span class="icon">📜</span> Logs
           </li>
@@ -717,6 +720,96 @@
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Tab: Diagnostics -->
+        <div id="tab-diagnostics" class="tab-pane">
+          <div class="preflight-page">
+            <div class="preflight-header">
+              <div>
+                <h2>Preflight Diagnostics</h2>
+                <div class="small faded mt-6">Read-only readiness report collected on demand.</div>
+              </div>
+              <div class="action-group">
+                <button class="btn secondary" id="btnRefreshPreflight" type="button">Refresh</button>
+                <button class="btn secondary" id="btnExportPreflight" type="button" disabled>Export JSON</button>
+              </div>
+            </div>
+
+            <div id="preflightStatus" class="preflight-status" data-state="idle" role="status" aria-live="polite">
+              Open this view or select Refresh to collect the canonical preflight report.
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h2>Readiness &amp; Host Summary</h2>
+                <div id="preflightReadiness" class="preflight-readiness" data-readiness="unknown">Not collected</div>
+              </div>
+              <div class="card-body">
+                <div class="kv-grid preflight-summary-grid">
+                  <div class="kv-item">
+                    <div class="kv-label">Selected adapter</div>
+                    <div class="kv-value" id="preflightSelectedAdapter">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Default route / uplink</div>
+                    <div class="kv-value" id="preflightUplink">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Platform</div>
+                    <div class="kv-value" id="preflightPlatform">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">Firewall</div>
+                    <div class="kv-value" id="preflightFirewall">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">NetworkManager</div>
+                    <div class="kv-value" id="preflightNetworkManager">--</div>
+                  </div>
+                  <div class="kv-item">
+                    <div class="kv-label">iwd</div>
+                    <div class="kv-value" id="preflightIwd">--</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="preflight-issue-grid">
+              <div class="card">
+                <div class="card-header">
+                  <h2>Blocking Issues</h2>
+                </div>
+                <div class="card-body">
+                  <ul id="preflightBlockingIssues" class="preflight-list"></ul>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header">
+                  <h2>Warnings</h2>
+                </div>
+                <div class="card-body">
+                  <ul id="preflightWarningIssues" class="preflight-list"></ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h2>Recommended Actions</h2>
+              </div>
+              <div class="card-body">
+                <ol id="preflightActions" class="preflight-list preflight-actions"></ol>
+              </div>
+            </div>
+
+            <details class="debug-accordion preflight-raw">
+              <summary>Raw canonical report JSON</summary>
+              <div class="accordion-body">
+                <pre id="preflightRawJson" class="mono-box code-block preflight-raw-json"></pre>
+              </div>
+            </details>
           </div>
         </div>
 
