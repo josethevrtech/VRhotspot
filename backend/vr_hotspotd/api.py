@@ -382,10 +382,26 @@ class APIHandler(BaseHTTPRequestHandler):
     def _is_authorized(self) -> bool:
         tok = self._env_token()
         if not tok:
-            return True
+            return False
         return self._get_req_token() == tok
 
     def _require_auth(self, cid: str) -> bool:
+        if not self._env_token():
+            self._respond(
+                503,
+                self._envelope(
+                    correlation_id=cid,
+                    result_code="api_token_missing",
+                    warnings=["api_token_not_configured"],
+                    data={
+                        "hint": (
+                            "Configure VR_HOTSPOTD_API_TOKEN in the daemon environment "
+                            "and restart the service"
+                        )
+                    },
+                ),
+            )
+            return False
         if self._is_authorized():
             return True
         self._respond(
@@ -1186,23 +1202,20 @@ class APIHandler(BaseHTTPRequestHandler):
             self._respond_raw(200, b"ok\n", "text/plain; charset=utf-8")
             return
 
+        if (path == "/v1" or path.startswith("/v1/")) and not self._require_auth(cid):
+            return
+
         if path == "/v1/status":
             include_logs = self._qbool(qs, "include_logs", False)
-            if not self._require_auth(cid):
-                return
             st = self._status_view(include_logs=include_logs)
             self._respond(200, self._envelope(correlation_id=cid, data=st))
             return
 
         if path == "/v1/adapters":
-            if not self._require_auth(cid):
-                return
             self._respond(200, self._envelope(correlation_id=cid, data=get_adapters()))
             return
 
         if path == "/v1/adapters/readiness":
-            if not self._require_auth(cid):
-                return
             inventory = get_adapters()
             warnings = ["adapter_inventory_error"] if isinstance(inventory, dict) and inventory.get("error") else []
             self._respond(
@@ -1216,16 +1229,12 @@ class APIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/v1/config":
-            if not self._require_auth(cid):
-                return
             include_secrets = self._qbool(qs, "include_secrets", False)
             cfg = self._config_view(include_secrets=include_secrets)
             self._respond(200, self._envelope(correlation_id=cid, data=cfg))
             return
 
         if path == "/v1/info":
-            if not self._require_auth(cid):
-                return
             data = {
                 "version": APP_VERSION,
                 "server_version": SERVER_VERSION,
@@ -1239,8 +1248,6 @@ class APIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/v1/diagnostics/clients":
-            if not self._require_auth(cid):
-                return
             st = load_state()
             ap_ifname = st.get("adapter")
             snapshot = get_clients_snapshot(
@@ -1251,15 +1258,11 @@ class APIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/v1/diagnostics/preflight":
-            if not self._require_auth(cid):
-                return
             report = collect_preflight_report(config=load_config_snapshot())
             self._respond(200, self._envelope(correlation_id=cid, data=report))
             return
 
         if path == "/v1/diagnostics/support_bundle":
-            if not self._require_auth(cid):
-                return
             bundle = self._build_support_bundle()
             self._respond_attachment(
                 200,

@@ -404,6 +404,23 @@ readiness data. Review it before attaching it to a public issue.
 
 ## Security & Privacy
 
+### Privileged API Threat Model
+
+The portal shell, static assets, favicon, and `/healthz` are public. Every
+`/v1/*` route controls or exposes privileged daemon state and requires both a
+configured `VR_HOTSPOTD_API_TOKEN` and a matching `X-Api-Token` or Bearer token.
+If the daemon token is absent or blank, privileged requests fail closed with
+HTTP 503 and `result_code: api_token_missing`; supplying a token in the browser
+cannot repair a missing daemon configuration. Configure the token in the daemon
+environment (normally `/etc/vr-hotspot/env`) and restart the service.
+
+The daemon runs as root, so the token protects network mutation, diagnostics,
+configuration, and passphrase-reveal operations from other local processes as
+well as network clients. Tokenless non-loopback binds are refused. Remote access
+still uses plain HTTP and is trusted-network-only: use it only on a network where
+traffic cannot be observed or modified. This project does not currently provide
+built-in TLS termination.
+
 ### API Token Protection
 
 - **Treat the token like a password** - don't share it publicly
@@ -422,7 +439,8 @@ readiness data. Review it before attaching it to a public issue.
 
 - By default, the web UI only listens on `127.0.0.1` (local only)
 - To allow remote access: `sudo ./install.sh --bind 0.0.0.0`
-- **Important**: Keep token enforcement enabled and use a strong token
+- **Important**: A strong token is mandatory, but remote HTTP is still suitable
+  only for a trusted network
 
 ---
 
