@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.adapters.readiness import build_readiness_model
-from vr_hotspotd.config import load_config, write_config_file
+from vr_hotspotd.config import load_config, load_config_snapshot, write_config_file
 from vr_hotspotd.lifecycle import (
     repair,
     start_hotspot,
@@ -27,6 +27,7 @@ from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator
 from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
 from vr_hotspotd.diagnostics.platform import collect_platform_matrix
+from vr_hotspotd.diagnostics.preflight_report import collect_preflight_report
 from vr_hotspotd.diagnostics.support_bundle import (
     CollectorStatus,
     assemble_support_bundle,
@@ -1247,6 +1248,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 ap_interface_hint=st.get("ap_interface"),
             )
             self._respond(200, self._envelope(correlation_id=cid, data=snapshot))
+            return
+
+        if path == "/v1/diagnostics/preflight":
+            if not self._require_auth(cid):
+                return
+            report = collect_preflight_report(config=load_config_snapshot())
+            self._respond(200, self._envelope(correlation_id=cid, data=report))
             return
 
         if path == "/v1/diagnostics/support_bundle":

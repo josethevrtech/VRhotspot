@@ -201,6 +201,14 @@ def _apply_migrations(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def load_config_snapshot() -> Dict[str, Any]:
+    """Return the migrated config view without writing migration changes."""
+
+    cfg = DEFAULT_CONFIG.copy()
+    cfg.update(read_config_file())
+    return _apply_migrations(cfg)
+
+
 def load_config() -> Dict[str, Any]:
     """
     Returns DEFAULT_CONFIG merged with on-disk config.
