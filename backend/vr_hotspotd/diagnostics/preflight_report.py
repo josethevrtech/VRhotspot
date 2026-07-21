@@ -19,6 +19,7 @@ from vr_hotspotd.adapters.readiness import build_readiness_model
 from vr_hotspotd.config import DEFAULT_CONFIG
 from vr_hotspotd.diagnostics.platform import collect_platform_matrix
 from vr_hotspotd.engine import supervisor
+from vr_hotspotd.policy import ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
 from vr_hotspotd.vendor_paths import vendor_bin_dirs
 
 
@@ -44,7 +45,7 @@ _ISSUE_MESSAGES = {
     "binary_selection_failed": "The configured binary selection constraints could not be satisfied by read-only inspection.",
     "firewall_backend_not_detected": "No supported firewall backend was detected for internet sharing.",
     "default_uplink_not_detected": "No active default-route interface was detected for internet sharing.",
-    "ap_adapter_is_active_uplink": "The selected AP adapter is also the active uplink; VRhotspot does not yet support using one radio for both roles safely.",
+    ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK: "The selected AP adapter is also the active uplink; VRhotspot does not yet support using one radio for both roles safely.",
     "platform_family_unknown": "The Linux distribution family could not be classified.",
     "rfkill_blocked": "A Wi-Fi radio is blocked by rfkill.",
     "rfkill_not_found": "rfkill is unavailable, so radio block state could not be checked.",
@@ -81,7 +82,7 @@ _ACTION_MESSAGES = {
     "binary_selection_failed": "Review VR_HOTSPOT_FORCE_SYSTEM_BIN, VR_HOTSPOT_FORCE_VENDOR_BIN, and the installed binaries.",
     "firewall_backend_not_detected": "Install or enable a supported firewall backend before sharing the uplink.",
     "default_uplink_not_detected": "Connect the host to an upstream network or disable internet sharing.",
-    "ap_adapter_is_active_uplink": "Use a separate Wi-Fi adapter for the AP, preferably with Ethernet or another interface as the uplink.",
+    ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK: "Use a separate Wi-Fi adapter for the AP, or use Ethernet or another interface as the uplink.",
     "platform_family_unknown": "Confirm that this distribution is supported and that /etc/os-release is readable.",
     "rfkill_blocked": "Unblock the Wi-Fi radio with the host's normal radio or rfkill controls.",
     "rfkill_not_found": "Install rfkill if radio-block diagnostics are needed.",
@@ -519,7 +520,7 @@ def build_preflight_report(
     if internet_required and not active_uplink_interface:
         add_issue("default_uplink_not_detected", "warning")
     if report_adapter and report_adapter == active_uplink_interface:
-        add_issue("ap_adapter_is_active_uplink", "warning")
+        add_issue(ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK, "blocked")
     if not os_family:
         add_issue("platform_family_unknown", "warning")
 

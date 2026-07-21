@@ -110,7 +110,10 @@ def test_hostapd_nat_iwd_disconnects_parent_before_ap_start(
     ]
 
 
-def test_steamos_iwd_still_associated_fails_with_clear_error(monkeypatch):
+def test_steamos_iwd_still_associated_fails_with_clear_error(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     from vr_hotspotd import lifecycle
 
     states = []

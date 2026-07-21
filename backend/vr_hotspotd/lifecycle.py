@@ -36,6 +36,7 @@ from vr_hotspotd import (
 )
 from vr_hotspotd.policy import (
     BASIC_MODE_REQUIRED_BAND,
+    ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK,
     ERROR_BASIC_MODE_REQUIRES_5GHZ,
     ERROR_BASIC_MODE_REQUIRES_80MHZ_ADAPTER,
     ERROR_NM_INTERFACE_MANAGED,
@@ -1823,8 +1824,36 @@ def _start_hotspot_5ghz_strict(
     iface_up_grace_s: float = 0.0,
     ap_ready_nohint_retry_s: float = 0.0,
     pop_timeout_retry_no_virt: bool = False,
+    active_uplink_interface: Optional[str] = None,
 ) -> LifecycleResult:
     attempts: List[Dict[str, Any]] = []
+
+    def _active_uplink_reselection_failure() -> LifecycleResult:
+        last_error = ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
+        warnings = list(start_warnings)
+        warnings.extend(_safe_revert_tuning(tuning_state))
+        state = update_state(
+            phase="error",
+            running=False,
+            adapter=ap_ifname,
+            ap_interface=None,
+            last_error=last_error,
+            last_error_detail=wifi_probe.build_error_detail(
+                last_error,
+                {
+                    "ap_adapter": ap_ifname,
+                    "active_uplink_interface": active_uplink_interface,
+                },
+            ),
+            last_correlation_id=correlation_id,
+            fallback_reason=None,
+            warnings=warnings,
+            attempts=attempts,
+            tuning={},
+            network_tuning={},
+        )
+        return LifecycleResult(last_error, state)
+
     preferred_primary_channel: Optional[int] = None
     if enforced_channel_5g is not None:
         preferred_primary_channel = enforced_channel_5g
@@ -2097,6 +2126,8 @@ def _start_hotspot_5ghz_strict(
                 platform_is_pop=True,
                 prep_warnings=["ap_iface_not_up_prestart"],
             )
+            if active_uplink_interface and ap_ifname == active_uplink_interface:
+                return _active_uplink_reselection_failure()
             if reselect_warnings:
                 start_warnings.extend(reselect_warnings)
             if ap_ifname != old_ifname:
@@ -2225,6 +2256,8 @@ def _start_hotspot_5ghz_strict(
                         platform_is_pop=True,
                         prep_warnings=["ap_iface_not_up_post_driver_reload"],
                     )
+                    if active_uplink_interface and ap_ifname == active_uplink_interface:
+                        return _active_uplink_reselection_failure()
                     if reselect_warnings:
                         start_warnings.extend(reselect_warnings)
                     # Retry once more after parent-iface recovery even when the
@@ -3557,8 +3590,6 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     if state.get("phase") in ("starting", "running") and is_running():
         return LifecycleResult("already_running", state)
 
-    _repair_impl(correlation_id=correlation_id)
-
     state = update_state(
         phase="starting",
         last_op="start",
@@ -3672,6 +3703,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             return LifecycleResult("start_failed", state)
 
     ap_ifname = None
+    active_uplink_interface: Optional[str] = None
     nm_remediation_attempted = False
     nm_remediation_error: Optional[str] = None
     prestart_warnings: List[str] = []
@@ -3711,6 +3743,33 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         a = _get_adapter(inv, ap_ifname)
         if not a or not a.get("supports_ap"):
             raise RuntimeError("no_ap_capable_adapter_found")
+
+        active_uplink_interface = host_probes.probe_default_uplink()
+        if active_uplink_interface and ap_ifname == active_uplink_interface:
+            raise RuntimeError(ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK)
+
+        # All host mutation stays behind the active-uplink role guard. Repair
+        # can stop engines, revert tuning/firewall state, and remove virtual
+        # interfaces, so it must not run until the selected AP role is safe.
+        _repair_impl(correlation_id=correlation_id)
+        state = update_state(
+            phase="starting",
+            last_op="start",
+            last_correlation_id=correlation_id,
+            last_error=None,
+            mode=None,
+            fallback_reason=None,
+            warnings=[],
+            ap_interface=None,
+            engine={"ap_logs_tail": []},
+            attempts=[],
+            selected_band=None,
+            selected_width_mhz=None,
+            selected_channel=None,
+            selected_country=None,
+            pro_mode_allow_fallback_40mhz=allow_fallback_40mhz,
+            last_error_detail=None,
+        )
 
         iwd_warnings = _reserve_iwd_ap_adapter(
             ap_ifname,
@@ -3801,6 +3860,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 platform_is_pop=platform_is_pop,
                 prep_warnings=prep_warnings,
             )
+            if active_uplink_interface and ap_ifname == active_uplink_interface:
+                raise RuntimeError(ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK)
             if reselect_warnings:
                 prestart_warnings.extend(reselect_warnings)
             if ap_ifname != old_ifname:
@@ -3849,8 +3910,20 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             ERROR_BASIC_MODE_REQUIRES_80MHZ_ADAPTER,
             ERROR_NM_INTERFACE_MANAGED,
             _IWD_ASSOCIATION_ERROR,
+            ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK,
         ):
-            context = {"interface": ap_ifname} if err in (ERROR_NM_INTERFACE_MANAGED, _IWD_ASSOCIATION_ERROR) and ap_ifname else {}
+            if err == ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK:
+                context = {
+                    "ap_adapter": ap_ifname,
+                    "active_uplink_interface": active_uplink_interface,
+                }
+            else:
+                context = (
+                    {"interface": ap_ifname}
+                    if err in (ERROR_NM_INTERFACE_MANAGED, _IWD_ASSOCIATION_ERROR)
+                    and ap_ifname
+                    else {}
+                )
             error_detail = wifi_probe.build_error_detail(err, context)
             if err == ERROR_NM_INTERFACE_MANAGED:
                 error_detail["remediation_attempted"] = nm_remediation_attempted
@@ -3874,7 +3947,12 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 "ap_logs_tail": [],
             },
         )
-        return LifecycleResult("start_failed", state)
+        result_code = (
+            ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
+            if err == ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
+            else "start_failed"
+        )
+        return LifecycleResult(result_code, state)
 
     wifi6_setting = cfg.get("wifi6", "auto")
     if isinstance(wifi6_setting, str):
@@ -3992,6 +4070,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             iface_up_grace_s=iface_up_grace_s,
             ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
             pop_timeout_retry_no_virt=platform_is_pop,
+            active_uplink_interface=active_uplink_interface,
         )
 
     # Attempt 1: requested band

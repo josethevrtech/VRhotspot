@@ -65,7 +65,10 @@ def _common_start_mocks(monkeypatch, cfg):
     return lifecycle
 
 
-def test_start_autoprovisions_missing_passphrase(monkeypatch):
+def test_start_autoprovisions_missing_passphrase(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     lifecycle = _common_start_mocks(
         monkeypatch,
         {"wpa2_passphrase": "", "band_preference": "5ghz"},
@@ -94,7 +97,10 @@ def test_start_autoprovisions_missing_passphrase(monkeypatch):
     assert strict_calls.get("passphrase") == generated
 
 
-def test_start_does_not_autoprovision_when_short_override_provided(monkeypatch):
+def test_start_does_not_autoprovision_when_short_override_provided(
+    monkeypatch,
+    mock_missing_system_commands,
+):
     lifecycle = _common_start_mocks(
         monkeypatch,
         {"wpa2_passphrase": "", "band_preference": "5ghz"},
