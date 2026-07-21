@@ -29,11 +29,12 @@ BASIC_MODE_REQUIRED_PHY: Literal["wifi5+", "wifi6+"] = "wifi5+"
 # =============================================================================
 # Error Codes
 # =============================================================================
-# Basic Mode enforcement error codes (must match wifi_probe.ERROR_REMEDIATIONS)
+# Lifecycle enforcement error codes (must match wifi_probe.ERROR_REMEDIATIONS)
 
 ERROR_BASIC_MODE_REQUIRES_5GHZ = "basic_mode_requires_5ghz"
 ERROR_BASIC_MODE_REQUIRES_80MHZ_ADAPTER = "basic_mode_requires_80mhz_adapter"
 ERROR_NM_INTERFACE_MANAGED = "nm_interface_managed"
+ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK = "ap_adapter_is_active_uplink"
 
 
 # =============================================================================

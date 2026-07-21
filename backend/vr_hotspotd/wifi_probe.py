@@ -6,10 +6,15 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from vr_hotspotd import host_probes, os_release
 from vr_hotspotd.adapters.inventory import get_adapters
+from vr_hotspotd.policy import ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
 
 _COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
 
 ERROR_REMEDIATIONS: Dict[str, str] = {
+    ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK: (
+        "Use a separate Wi-Fi adapter for the AP, or use Ethernet or another interface "
+        "as the uplink."
+    ),
     "regdom_unknown_or_global_00": (
         "Set a valid 2-letter country code (config `country`) and ensure `iw reg get` "
         "no longer reports 00; replug the adapter or reboot if needed."

@@ -1,9 +1,12 @@
 import json
 from collections import deque
 
+import pytest
+
 from vr_hotspotd import config as config_module
 from vr_hotspotd import host_probes
 from vr_hotspotd.diagnostics import preflight_report
+from vr_hotspotd.policy import ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
 
 
 PLATFORM = {
@@ -305,22 +308,69 @@ def test_report_normalizes_parameterized_issue_code_and_separates_context():
     assert all("(" not in item["code"] and ":" not in item["code"] for item in report["issues"])
 
 
-def test_same_radio_uplink_is_warning_not_internal_wifi_gating():
-    report = _build(active_uplink_interface="wlan1")
+@pytest.mark.parametrize(
+    "config",
+    (
+        {
+            "band_preference": "5ghz",
+            "channel_width": "80",
+            "allow_fallback_40mhz": False,
+            "enable_internet": True,
+        },
+        {
+            "ap_adapter": "wlan1",
+            "band_preference": "5ghz",
+            "channel_width": "80",
+            "allow_fallback_40mhz": False,
+            "enable_internet": True,
+        },
+    ),
+    ids=("recommended_adapter", "configured_adapter"),
+)
+def test_same_radio_uplink_is_blocking_even_with_concurrency_evidence(config):
+    report = _build(active_uplink_interface="wlan1", config=config)
 
-    assert report["overall_readiness"] == "warning"
+    assert report["overall_readiness"] == "blocked"
     issue = next(
         item
         for item in report["issues"]
-        if item["code"] == "ap_adapter_is_active_uplink"
+        if item["code"] == ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
     )
-    assert issue["severity"] == "warning"
+    assert issue["severity"] == "blocked"
     assert "does not yet support" in issue["message"]
+    action = next(
+        item
+        for item in report["recommended_actions"]
+        if item["code"] == ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
+    )
+    assert "separate Wi-Fi adapter" in action["message"]
+    assert "Ethernet or another interface" in action["message"]
     assert report["wifi"]["adapters"][0]["is_active_uplink"] is True
     assert (
         report["wifi"]["adapters"][0]["capabilities"]["supports_sta_ap_concurrency"]
         is True
     )
+
+
+@pytest.mark.parametrize(
+    ("active_uplink_interface", "expected_readiness"),
+    (
+        (None, "warning"),
+        ("enp4s0", "ready"),
+        ("wlan0", "ready"),
+    ),
+    ids=("no_uplink", "separate_ethernet_uplink", "separate_wifi_uplink"),
+)
+def test_non_conflicting_uplink_does_not_trigger_role_guard(
+    active_uplink_interface,
+    expected_readiness,
+):
+    report = _build(active_uplink_interface=active_uplink_interface)
+
+    assert report["overall_readiness"] == expected_readiness
+    assert ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK not in {
+        item["code"] for item in report["issues"]
+    }
 
 
 def test_collector_uses_mocked_read_only_probe_results(monkeypatch):

@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
 
+@pytest.mark.usefixtures("mock_missing_system_commands")
 class TestBasicModeEnforcement(unittest.TestCase):
     """Test Basic Mode VR enforcement: requires 5GHz and 80MHz adapter."""
 
@@ -162,6 +163,7 @@ class TestBasicModeEnforcement(unittest.TestCase):
         self.assertTrue(found_error, f"Expected 80MHz requirement error. Calls: {mock_update_state.call_args_list}")
 
 
+@pytest.mark.usefixtures("mock_missing_system_commands")
 class TestNmPreStartGate(unittest.TestCase):
     """Test NetworkManager pre-start gate functionality."""
 
