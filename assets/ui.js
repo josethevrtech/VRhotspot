@@ -1,4 +1,5 @@
 const BASE = '';
+const PREFLIGHT_REPORT_PATH = '/v1/diagnostics/preflight';
 const STORE = (function () {
   try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); return localStorage; } catch { return sessionStorage; }
 })();
@@ -356,6 +357,8 @@ let passphraseDirty = false;
 let lastCfg = null;
 let lastAdapters = null;
 let lastStatus = null;
+let lastPreflightReport = null;
+let preflightRequestInFlight = false;
 
 const CFG_IDS = [
   "ssid", "wpa2_passphrase", "band_preference", "ap_security", "channel_6g", "country", "country_sel",
@@ -1988,6 +1991,228 @@ async function downloadSupportBundle() {
   }
 }
 
+// --- Canonical preflight diagnostics view
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function canonicalPreflightReportFromPayload(payload) {
+  if (!isRecord(payload) || !isRecord(payload.data)) return null;
+  const report = payload.data;
+  const readiness = report.overall_readiness;
+  if (report.schema_version !== 1) return null;
+  if (!['ready', 'warning', 'blocked'].includes(readiness)) return null;
+  if (!Array.isArray(report.issues) || !Array.isArray(report.recommended_actions)) return null;
+  return report;
+}
+
+function preflightDisplayValue(value, fallback = 'Not reported') {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value).trim();
+  return text || fallback;
+}
+
+function preflightSummary(parts, fallback = 'Not reported') {
+  const values = parts
+    .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map((value) => labelizeKey(String(value).trim()));
+  return values.length ? values.join(' · ') : fallback;
+}
+
+function preflightServiceSummary(service) {
+  const data = isRecord(service) ? service : {};
+  if (data.status !== null && data.status !== undefined && String(data.status).trim()) {
+    return labelizeKey(data.status);
+  }
+  if (data.active === true) return 'Active';
+  if (data.present === true) return 'Present, inactive';
+  if (data.present === false) return 'Not installed';
+  return 'Not reported';
+}
+
+function setPreflightStatus(message, state = 'idle') {
+  const el = document.getElementById('preflightStatus');
+  if (!el) return;
+  el.textContent = message;
+  el.dataset.state = state;
+}
+
+function renderPreflightList(containerId, entries, emptyText) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const fragment = document.createDocumentFragment();
+
+  if (!entries.length) {
+    const empty = document.createElement('li');
+    empty.className = 'preflight-list-empty';
+    empty.textContent = emptyText;
+    fragment.appendChild(empty);
+  } else {
+    for (const entry of entries) {
+      const item = isRecord(entry) ? entry : {};
+      const li = document.createElement('li');
+      li.className = 'preflight-list-item';
+
+      const message = document.createElement('div');
+      message.className = 'preflight-list-message';
+      message.textContent = preflightDisplayValue(item.message, 'No description provided.');
+      li.appendChild(message);
+
+      if (item.code !== null && item.code !== undefined && String(item.code).trim()) {
+        const code = document.createElement('div');
+        code.className = 'preflight-list-code';
+        code.textContent = String(item.code);
+        li.appendChild(code);
+      }
+      fragment.appendChild(li);
+    }
+  }
+
+  container.replaceChildren(fragment);
+}
+
+function clearPreflightReportView() {
+  setTextById('preflightSelectedAdapter', null);
+  setTextById('preflightUplink', null);
+  setTextById('preflightPlatform', null);
+  setTextById('preflightFirewall', null);
+  setTextById('preflightNetworkManager', null);
+  setTextById('preflightIwd', null);
+
+  const readiness = document.getElementById('preflightReadiness');
+  if (readiness) {
+    readiness.textContent = 'Not collected';
+    readiness.dataset.readiness = 'unknown';
+  }
+  renderPreflightList('preflightBlockingIssues', [], 'No report collected.');
+  renderPreflightList('preflightWarningIssues', [], 'No report collected.');
+  renderPreflightList('preflightActions', [], 'No report collected.');
+  const raw = document.getElementById('preflightRawJson');
+  if (raw) raw.textContent = '';
+  const exportButton = document.getElementById('btnExportPreflight');
+  if (exportButton) exportButton.disabled = true;
+}
+
+function renderPreflightReport(report) {
+  const platform = isRecord(report.platform) ? report.platform : {};
+  const firewall = isRecord(report.firewall) ? report.firewall : {};
+  const services = isRecord(report.services) ? report.services : {};
+  const network = isRecord(report.network) ? report.network : {};
+  const wifi = isRecord(report.wifi) ? report.wifi : {};
+  const issues = report.issues;
+  const blockingIssues = issues.filter((issue) => isRecord(issue) && issue.severity === 'blocked');
+  const warningIssues = issues.filter((issue) => !isRecord(issue) || issue.severity !== 'blocked');
+
+  const readinessValue = String(report.overall_readiness).toLowerCase();
+  const readiness = document.getElementById('preflightReadiness');
+  if (readiness) {
+    readiness.textContent = labelizeKey(readinessValue);
+    readiness.dataset.readiness = readinessValue;
+  }
+
+  setTextById('preflightSelectedAdapter', preflightDisplayValue(wifi.selected_adapter));
+  setTextById('preflightUplink', preflightDisplayValue(network.active_uplink_interface));
+  setTextById(
+    'preflightPlatform',
+    preflightSummary([
+      platform.os_name,
+      platform.os_version,
+      platform.host_kind || platform.os_family,
+    ]),
+  );
+  setTextById('preflightFirewall', preflightSummary([firewall.backend, firewall.status]));
+  setTextById('preflightNetworkManager', preflightServiceSummary(services.network_manager));
+  setTextById('preflightIwd', preflightServiceSummary(services.iwd));
+
+  renderPreflightList('preflightBlockingIssues', blockingIssues, 'No blocking issues.');
+  renderPreflightList('preflightWarningIssues', warningIssues, 'No warnings.');
+  renderPreflightList('preflightActions', report.recommended_actions, 'No actions recommended.');
+
+  const raw = document.getElementById('preflightRawJson');
+  if (raw) raw.textContent = JSON.stringify(report, null, 2);
+  const exportButton = document.getElementById('btnExportPreflight');
+  if (exportButton) exportButton.disabled = false;
+  setPreflightStatus('Canonical preflight report collected.', 'success');
+}
+
+function renderPreflightError(message) {
+  lastPreflightReport = null;
+  clearPreflightReportView();
+  setPreflightStatus(message, 'error');
+}
+
+async function loadPreflightReport() {
+  if (preflightRequestInFlight) return;
+  if (!isAuthenticated) {
+    renderPreflightError('Sign in to collect the preflight diagnostics report.');
+    return;
+  }
+
+  const refreshButton = document.getElementById('btnRefreshPreflight');
+  preflightRequestInFlight = true;
+  if (refreshButton) refreshButton.disabled = true;
+  lastPreflightReport = null;
+  clearPreflightReportView();
+  setPreflightStatus('Collecting the preflight diagnostics report...', 'loading');
+
+  try {
+    const response = await api(PREFLIGHT_REPORT_PATH, {
+      method: 'GET',
+      skipAuthHandling: true,
+    });
+    if (isUnauthorizedStatus(response.status)) {
+      const message = 'Your session expired. Sign in again to view diagnostics.';
+      renderPreflightError(message);
+      logoutToSplash(message);
+      return;
+    }
+    if (!isAuthenticated) return;
+    if (!response.ok) {
+      const resultCode = isRecord(response.json) && typeof response.json.result_code === 'string'
+        ? `: ${response.json.result_code}`
+        : '';
+      renderPreflightError(`Preflight report request failed (HTTP ${response.status}${resultCode}).`);
+      return;
+    }
+
+    const report = canonicalPreflightReportFromPayload(response.json);
+    if (!report) {
+      renderPreflightError('The service returned a malformed preflight report. Refresh to try again.');
+      return;
+    }
+
+    lastPreflightReport = report;
+    renderPreflightReport(report);
+  } catch {
+    if (isAuthenticated) {
+      renderPreflightError('Unable to reach the service. Check the connection and try again.');
+    }
+  } finally {
+    preflightRequestInFlight = false;
+    if (refreshButton) refreshButton.disabled = false;
+  }
+}
+
+function exportPreflightReport() {
+  if (!lastPreflightReport) {
+    setPreflightStatus('Collect a valid preflight report before exporting JSON.', 'error');
+    return;
+  }
+
+  const json = `${JSON.stringify(lastPreflightReport, null, 2)}\n`;
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'vr-hotspot-preflight-report.json';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setPreflightStatus('Exported the canonical preflight report JSON.', 'success');
+}
+// --- End canonical preflight diagnostics view
+
 function setMsg(text, kind = '') {
   const els = [document.getElementById('msg'), document.getElementById('msgBasic')];
   for (const el of els) {
@@ -3225,6 +3450,9 @@ function wireTabs() {
     if (targetPane) {
       targetPane.classList.add('active');
     }
+    if (targetName === 'diagnostics') {
+      void loadPreflightReport();
+    }
   }
 
   tabs.forEach(tab => {
@@ -3298,6 +3526,14 @@ function bootstrapAuthenticatedUi() {
   const btnDownloadSupportBundle = document.getElementById('btnDownloadSupportBundle');
   if (btnDownloadSupportBundle) {
     btnDownloadSupportBundle.addEventListener('click', downloadSupportBundle);
+  }
+  const btnRefreshPreflight = document.getElementById('btnRefreshPreflight');
+  if (btnRefreshPreflight) {
+    btnRefreshPreflight.addEventListener('click', loadPreflightReport);
+  }
+  const btnExportPreflight = document.getElementById('btnExportPreflight');
+  if (btnExportPreflight) {
+    btnExportPreflight.addEventListener('click', exportPreflightReport);
   }
   const btnStartBasic = document.getElementById('btnStartBasic');
   if (btnStartBasic) btnStartBasic.addEventListener('click', async () => {

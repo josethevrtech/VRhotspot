@@ -1236,6 +1236,143 @@ canvas {
   min-height: 18px;
 }
 
+/* On-demand preflight diagnostics */
+.preflight-page {
+  width: min(100%, 1000px);
+  margin: 0 auto;
+  display: grid;
+  gap: 18px;
+}
+
+.preflight-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.preflight-header h2 {
+  color: var(--text-main);
+  font-size: 22px;
+}
+
+.preflight-status {
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.preflight-status[data-state="loading"] {
+  border-color: rgba(0, 243, 255, 0.35);
+  color: var(--accent-primary);
+}
+
+.preflight-status[data-state="success"] {
+  border-color: rgba(0, 255, 157, 0.35);
+  color: var(--success);
+}
+
+.preflight-status[data-state="error"] {
+  border-color: rgba(255, 0, 85, 0.45);
+  color: var(--danger);
+}
+
+.preflight-readiness {
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.preflight-readiness[data-readiness="ready"] {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.preflight-readiness[data-readiness="warning"] {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.preflight-readiness[data-readiness="blocked"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.preflight-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.preflight-issue-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.preflight-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.preflight-list-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.preflight-list-message {
+  color: var(--text-main);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.preflight-list-code {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.preflight-list-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.preflight-raw {
+  margin-top: 0;
+}
+
+.preflight-raw-json {
+  max-height: 520px;
+  margin: 0;
+  overflow: auto;
+}
+
+@media (max-width: 700px) {
+  .preflight-issue-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preflight-header .action-group,
+  .preflight-header .btn {
+    width: 100%;
+  }
+}
+
 .mini-select {
   width: auto;
   min-width: 68px;
