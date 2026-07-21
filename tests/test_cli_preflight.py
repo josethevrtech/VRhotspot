@@ -457,6 +457,26 @@ def test_preflight_command_reports_auth_failure_without_token_leak(
     assert secret not in captured.err
 
 
+def test_preflight_command_reports_missing_daemon_token_as_configuration_error(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    _mocked_http_error(monkeypatch, 503, "api_token_missing")
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["preflight", *_missing_env_args(tmp_path)])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 1
+    assert "HTTP 503: api_token_missing" in captured.err
+    assert "daemon has no configured API token" in captured.err
+    assert "VR_HOTSPOTD_API_TOKEN in /etc/vr-hotspot/env" in captured.err
+    assert "restart vr-hotspotd" in captured.err
+    assert "--token-stdin" not in captured.err
+    assert captured.out == ""
+
+
 def test_preflight_command_reports_generic_non_200(monkeypatch, tmp_path, capsys):
     _mocked_http_error(monkeypatch, 500, "internal_error")
 

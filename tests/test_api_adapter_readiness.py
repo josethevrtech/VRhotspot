@@ -37,10 +37,11 @@ def _response_json(handler):
 
 
 def test_adapter_readiness_endpoint_exists(monkeypatch):
-    monkeypatch.delenv("VR_HOTSPOTD_API_TOKEN", raising=False)
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
     monkeypatch.setattr(api, "get_adapters", lambda: {"adapters": [], "recommended": None})
 
     handler = _make_handler()
+    handler.headers["X-Api-Token"] = "secret"
     handler.do_GET()
 
     payload = _response_json(handler)
@@ -61,7 +62,7 @@ def test_adapter_readiness_requires_auth(monkeypatch):
 
 
 def test_adapter_readiness_calls_model_with_inventory(monkeypatch):
-    monkeypatch.delenv("VR_HOTSPOTD_API_TOKEN", raising=False)
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
     inventory = {
         "recommended": "wlan1",
         "global_regdom": {"country": "US"},
@@ -77,6 +78,7 @@ def test_adapter_readiness_calls_model_with_inventory(monkeypatch):
     monkeypatch.setattr(api, "build_readiness_model", fake_build_readiness_model)
 
     handler = _make_handler()
+    handler.headers["X-Api-Token"] = "secret"
     handler.do_GET()
 
     assert handler._last_code == 200
@@ -85,7 +87,7 @@ def test_adapter_readiness_calls_model_with_inventory(monkeypatch):
 
 
 def test_adapter_readiness_no_adapter_response_shape(monkeypatch):
-    monkeypatch.delenv("VR_HOTSPOTD_API_TOKEN", raising=False)
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
     monkeypatch.setattr(
         api,
         "get_adapters",
@@ -97,6 +99,7 @@ def test_adapter_readiness_no_adapter_response_shape(monkeypatch):
     )
 
     handler = _make_handler()
+    handler.headers["X-Api-Token"] = "secret"
     handler.do_GET()
 
     data = _response_json(handler)["data"]
@@ -112,11 +115,12 @@ def test_adapter_readiness_no_adapter_response_shape(monkeypatch):
 
 
 def test_adapters_endpoint_output_unchanged(monkeypatch):
-    monkeypatch.delenv("VR_HOTSPOTD_API_TOKEN", raising=False)
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
     inventory = {"recommended": "wlan1", "adapters": [{"ifname": "wlan1"}]}
     monkeypatch.setattr(api, "get_adapters", lambda: inventory)
 
     handler = _make_handler("/v1/adapters")
+    handler.headers["X-Api-Token"] = "secret"
     handler.do_GET()
 
     assert handler._last_code == 200

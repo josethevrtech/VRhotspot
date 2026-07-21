@@ -148,6 +148,24 @@ def _api_error_detail(raw: bytes, *, secret: str = "") -> Optional[str]:
     return detail
 
 
+def _api_failure_cli_error(status: int, raw: bytes, *, token: str) -> CLIError:
+    detail = _api_error_detail(raw, secret=token)
+    suffix = f": {detail}" if detail else ""
+    if detail == "api_token_missing":
+        return CLIError(
+            f"API request failed (HTTP {status}{suffix}). The daemon has no configured "
+            f"API token; configure VR_HOTSPOTD_API_TOKEN in {DEFAULT_ENV_FILE} and "
+            "restart vr-hotspotd."
+        )
+    auth_hint = (
+        " Use VR_HOTSPOTD_API_TOKEN or --token-stdin, or run with permission "
+        f"to read {DEFAULT_ENV_FILE}."
+        if status in {401, 403}
+        else ""
+    )
+    return CLIError(f"API request failed (HTTP {status}{suffix}).{auth_hint}")
+
+
 def _contains_secret(value: Any, secret: str) -> bool:
     if not secret:
         return False
@@ -198,15 +216,7 @@ def _transport_cli_error(
             return CLIError(f"Unable to read the VR Hotspot API response: {safe_error}")
         if 300 <= exc.code < 400:
             return _redirect_error(exc.code)
-        detail = _api_error_detail(raw, secret=token)
-        suffix = f": {detail}" if detail else ""
-        auth_hint = (
-            " Use VR_HOTSPOTD_API_TOKEN or --token-stdin, or run with permission "
-            f"to read {DEFAULT_ENV_FILE}."
-            if exc.code in {401, 403}
-            else ""
-        )
-        return CLIError(f"API request failed (HTTP {exc.code}{suffix}).{auth_hint}")
+        return _api_failure_cli_error(exc.code, raw, token=token)
     if isinstance(exc, URLError):
         reason = getattr(exc, "reason", exc)
         safe_reason = _redacted_error_text(reason, token)
@@ -261,9 +271,7 @@ def fetch_preflight_report(
     if 300 <= status < 400:
         raise _redirect_error(status)
     if status != 200:
-        detail = _api_error_detail(raw, secret=token)
-        suffix = f": {detail}" if detail else ""
-        raise CLIError(f"API request failed (HTTP {status}{suffix}).")
+        raise _api_failure_cli_error(status, raw, token=token)
 
     invalid_json = False
     try:
