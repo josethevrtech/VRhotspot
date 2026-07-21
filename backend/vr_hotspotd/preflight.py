@@ -136,9 +136,10 @@ def _resolve_hostapd_path() -> Optional[str]:
     return shutil.which("hostapd")
 
 
-def _hostapd_caps() -> Dict[str, Optional[bool]]:
-    caps: Dict[str, Optional[bool]] = {"sae": None, "he": None}
-    hostapd = _resolve_hostapd_path()
+def probe_hostapd_capabilities(hostapd: str) -> Dict[str, Any]:
+    """Inspect one resolved hostapd binary using its read-only version output."""
+
+    caps: Dict[str, Any] = {"sae": None, "he": None}
     if not hostapd:
         caps["error"] = "hostapd_not_found"
         return caps
@@ -156,15 +157,28 @@ def _hostapd_caps() -> Dict[str, Optional[bool]]:
     return caps
 
 
+def _hostapd_caps() -> Dict[str, Any]:
+    hostapd = _resolve_hostapd_path()
+    if not hostapd:
+        return {
+            "sae": None,
+            "he": None,
+            "error": "hostapd_not_found",
+        }
+    return probe_hostapd_capabilities(hostapd)
+
+
 def _check_hostapd_features(
     band: str,
     ap_security: str,
+    *,
+    capabilities: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[str], List[str], Dict[str, Any]]:
     errors: List[str] = []
     warnings: List[str] = []
     details: Dict[str, Any] = {}
 
-    caps = _hostapd_caps()
+    caps = dict(capabilities) if isinstance(capabilities, dict) else _hostapd_caps()
     details.update(caps)
 
     need_sae = ap_security == "wpa3_sae" or band == "6ghz"
@@ -273,6 +287,7 @@ def run(
     band: str,
     ap_security: str,
     enable_internet: bool,
+    hostapd_capabilities: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     errors: List[str] = []
     warnings: List[str] = []
@@ -293,7 +308,14 @@ def run(
     warnings += reg_warn
     details["regdom"] = reg_details
 
-    hp_err, hp_warn, hp_details = _check_hostapd_features(band, ap_security)
+    if hostapd_capabilities is None:
+        hp_err, hp_warn, hp_details = _check_hostapd_features(band, ap_security)
+    else:
+        hp_err, hp_warn, hp_details = _check_hostapd_features(
+            band,
+            ap_security,
+            capabilities=hostapd_capabilities,
+        )
     errors += hp_err
     warnings += hp_warn
     details["hostapd"] = hp_details

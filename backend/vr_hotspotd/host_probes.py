@@ -561,6 +561,49 @@ def probe_network_manager(
     return {"nmcli": bool(nmcli), "running": running}
 
 
+def probe_iwd(
+    *,
+    which: Optional[Which] = None,
+    runner: Optional[Runner] = None,
+) -> Dict[str, Any]:
+    """Report iwd installation and service state without changing either."""
+
+    resolve = which or shutil.which
+    systemctl = resolve("systemctl")
+    iwctl = resolve("iwctl")
+    iwd = resolve("iwd")
+    active = False
+    service_state = "unknown"
+
+    if systemctl:
+        result = run_command(
+            [systemctl, "is-active", "iwd"],
+            timeout_s=1.0,
+            runner=runner,
+        )
+        output = result.combined_output().splitlines()
+        if output:
+            service_state = output[0].strip().lower() or "unknown"
+        active = result.exit_status == 0 and service_state == "active"
+
+    present = bool(iwd or iwctl or active)
+    if not present:
+        status = "not_installed"
+    elif active:
+        status = "active"
+    elif service_state not in ("", "unknown"):
+        status = service_state
+    else:
+        status = "unknown"
+
+    return {
+        "present": present,
+        "active": active,
+        "status": status,
+        "iwctl": bool(iwctl),
+    }
+
+
 def probe_firewall_backends(
     *,
     which: Optional[Which] = None,

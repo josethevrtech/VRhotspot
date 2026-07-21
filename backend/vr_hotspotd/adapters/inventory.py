@@ -139,6 +139,16 @@ def _phy_band_support(phy: str) -> Dict[str, bool]:
     return host_probes.parse_band_support(out)
 
 
+def probe_ap_managed_concurrency(phy: str) -> Optional[bool]:
+    """Return informational STA+AP capability evidence for one wireless phy."""
+
+    try:
+        out = _run_iw(["phy", phy, "info"])
+    except Exception:
+        return None
+    return host_probes.parse_ap_managed_concurrency(out)
+
+
 def _parse_iw_reg_get() -> Dict:
     """
     Parse `iw reg get` to extract:

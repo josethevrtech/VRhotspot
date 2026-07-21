@@ -132,6 +132,7 @@ Enter the **API token** shown during installation to access the interface.
 
 **Diagnostics:**
 - `GET /v1/diagnostics/clients` - Connected clients
+- `GET /v1/diagnostics/preflight` - Canonical read-only host readiness report
 - `POST /v1/diagnostics/ping` - Ping test
 - `POST /v1/diagnostics/ping_under_load` - Performance under load
 - `GET /v1/diagnostics/support_bundle` - Download a sanitized support bundle

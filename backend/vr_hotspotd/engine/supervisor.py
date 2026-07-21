@@ -288,6 +288,90 @@ def _prefer_vendor_for_platform() -> bool:
     return "cachyos" in tokens
 
 
+def inspect_runtime_binaries() -> Dict[str, object]:
+    """Resolve runtime binary paths without validation or state changes.
+
+    This is the read-only inspection counterpart to ``_build_engine_env``.  It
+    only reads environment flags, OS metadata, and executable paths; it does not
+    execute binaries, create shims or probe files, or append supervisor notes.
+    Lifecycle startup deliberately continues to use ``_build_engine_env`` and
+    its existing validation policy.
+    """
+
+    vendor_resolved, vendor_lib_dir, vendor_profile, _vendor_missing = resolve_vendor_required(
+        ["hostapd", "dnsmasq"]
+    )
+    vendor_hostapd = vendor_resolved.get("hostapd")
+    vendor_dnsmasq = vendor_resolved.get("dnsmasq")
+    sys_path = "/usr/sbin:/usr/bin:/sbin:/bin"
+    sys_hostapd = _which_in_path("hostapd", sys_path)
+    sys_dnsmasq = _which_in_path("dnsmasq", sys_path)
+
+    force_vendor = os.environ.get("VR_HOTSPOT_FORCE_VENDOR_BIN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    force_system = os.environ.get("VR_HOTSPOT_FORCE_SYSTEM_BIN", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    strict_vendor = os.environ.get("VR_HOTSPOT_VENDOR_STRICT", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    force_vendor_effective = force_vendor or strict_vendor
+    prefer_vendor = (
+        not force_system
+        and (force_vendor_effective or bool(vendor_profile) or _prefer_vendor_for_platform())
+    )
+
+    chosen_hostapd: Optional[str] = None
+    chosen_dnsmasq: Optional[str] = None
+    selection_error: Optional[str] = None
+
+    if force_system:
+        if sys_hostapd and sys_dnsmasq:
+            chosen_hostapd = sys_hostapd
+            chosen_dnsmasq = sys_dnsmasq
+        else:
+            selection_error = "force_system_missing"
+    elif force_vendor_effective:
+        if vendor_hostapd and (vendor_dnsmasq or sys_dnsmasq):
+            chosen_hostapd = vendor_hostapd
+            chosen_dnsmasq = vendor_dnsmasq or sys_dnsmasq
+        else:
+            selection_error = "force_vendor_missing"
+    elif prefer_vendor:
+        chosen_hostapd = vendor_hostapd or sys_hostapd
+        chosen_dnsmasq = vendor_dnsmasq or sys_dnsmasq
+    else:
+        chosen_hostapd = sys_hostapd or vendor_hostapd
+        chosen_dnsmasq = sys_dnsmasq or vendor_dnsmasq
+
+    probe_environment: Dict[str, str] = {"LC_ALL": "C", "LANG": "C"}
+    vendor_libs = vendor_lib_dirs(preferred_profile=vendor_profile)
+    vendor_lib_path = ":".join(str(path) for path in vendor_libs if path)
+    if vendor_lib_path:
+        inherited = os.environ.get("LD_LIBRARY_PATH", "")
+        probe_environment["LD_LIBRARY_PATH"] = (
+            f"{vendor_lib_path}:{inherited}" if inherited else vendor_lib_path
+        )
+
+    return {
+        "hostapd": chosen_hostapd,
+        "dnsmasq": chosen_dnsmasq,
+        "selection_error": selection_error,
+        "probe_environment": probe_environment,
+        "vendor_lib_dir": str(vendor_lib_dir) if vendor_lib_dir else None,
+    }
+
+
 def _build_engine_env(*, require_hostapd: bool = True, require_dnsmasq: bool = True) -> Dict[str, str]:
     """
     Environment for lnxrouter execution.
