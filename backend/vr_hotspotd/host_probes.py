@@ -604,6 +604,16 @@ def probe_iwd(
     }
 
 
+def parse_ufw_status(output: object) -> bool:
+    """Return true only when UFW's status field is exactly ``active``."""
+
+    for raw_line in _subprocess_text(output).splitlines():
+        label, separator, value = raw_line.partition(":")
+        if separator and label.strip().casefold() == "status":
+            return value.strip().casefold() == "active"
+    return False
+
+
 def probe_firewall_backends(
     *,
     which: Optional[Which] = None,
@@ -629,12 +639,7 @@ def probe_firewall_backends(
     if ufw:
         result = run_command(["ufw", "status"], timeout_s=1.5, runner=runner)
         if result.exit_status == 0:
-            for line in result.combined_output().splitlines():
-                if "Status:" in line:
-                    # Compatibility: the legacy probe used this substring
-                    # check, so "inactive" also evaluates as active.
-                    ufw_active = "active" in line.lower()
-                    break
+            ufw_active = parse_ufw_status(result.combined_output())
 
     nft_present = bool(resolve("nft"))
     iptables = resolve("iptables")

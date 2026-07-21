@@ -218,7 +218,33 @@ def test_os_flavor_characterization(info, flavor, family):
     assert wifi_probe.detect_os_flavor(info) == expected
 
 
-def _firewall_probe(*, firewalld, ufw, nft, iptables_output):
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        pytest.param("Status: active\n", True, id="active"),
+        pytest.param("Status: inactive\n", False, id="inactive"),
+        pytest.param("  StAtUs \t: \tAcTiVe  \n", True, id="active-case-whitespace"),
+        pytest.param("\tSTATUS: INACTIVE \n", False, id="inactive-case-whitespace"),
+        pytest.param("Status: hyperactive\n", False, id="active-substring-in-value"),
+        pytest.param("UFW is active\n", False, id="active-on-unrelated-line"),
+        pytest.param("NotStatus: active\n", False, id="active-in-unrelated-field"),
+        pytest.param("Status: active now\n", False, id="active-with-extra-text"),
+        pytest.param("Status active\n", False, id="malformed-status-line"),
+    ],
+)
+def test_parse_ufw_status_requires_exact_active_value(output, expected):
+    assert host_probes.parse_ufw_status(output) is expected
+
+
+def _firewall_probe(
+    *,
+    firewalld,
+    ufw_output,
+    nft,
+    iptables_output,
+    ufw_returncode=0,
+    ufw_exception=None,
+):
     paths = {
         "firewall-cmd": "/usr/bin/firewall-cmd",
         "ufw": "/usr/sbin/ufw",
@@ -227,7 +253,7 @@ def _firewall_probe(*, firewalld, ufw, nft, iptables_output):
     }
     if firewalld is None:
         paths.pop("firewall-cmd")
-    if ufw is None:
+    if ufw_output is None:
         paths.pop("ufw")
     if not nft:
         paths.pop("nft")
@@ -246,9 +272,11 @@ def _firewall_probe(*, firewalld, ufw, nft, iptables_output):
                 stderr="",
             )
         if command == ("ufw", "status"):
+            if ufw_exception is not None:
+                raise ufw_exception
             return SimpleNamespace(
-                returncode=0,
-                stdout=f"Status: {'active' if ufw else 'inactive'}\n",
+                returncode=ufw_returncode,
+                stdout=ufw_output,
                 stderr="",
             )
         if command == ("/usr/sbin/iptables", "--version"):
@@ -265,7 +293,7 @@ def _firewall_probe(*, firewalld, ufw, nft, iptables_output):
 def test_firewall_priority_prefers_running_firewalld():
     result = _firewall_probe(
         firewalld=True,
-        ufw=True,
+        ufw_output="Status: active\n",
         nft=True,
         iptables_output="iptables v1.8.10 (nf_tables)",
     )
@@ -275,35 +303,89 @@ def test_firewall_priority_prefers_running_firewalld():
     assert result["iptables"]["variant"] == "iptables-nft"
 
 
-def test_firewall_priority_falls_through_ufw_nft_and_iptables():
+def test_firewall_priority_uses_active_ufw_before_nftables():
     ufw_result = _firewall_probe(
         firewalld=False,
-        ufw=True,
+        ufw_output="Status: active\n",
         nft=True,
         iptables_output="iptables v1.8.10 (legacy)",
     )
+
+    assert ufw_result["ufw"] == {"available": True, "active": True}
+    assert ufw_result["selected_backend"] == "ufw"
+    assert ufw_result["rationale"] == "ufw_active"
+
+
+def test_firewall_priority_corrects_legacy_inactive_ufw_substring_behavior():
     inactive_ufw_result = _firewall_probe(
         firewalld=False,
-        ufw=False,
+        ufw_output="Status: inactive\n",
         nft=True,
         iptables_output="iptables v1.8.10 (legacy)",
     )
+
+    assert inactive_ufw_result["ufw"] == {"available": True, "active": False}
+    assert inactive_ufw_result["selected_backend"] == "nftables"
+    assert inactive_ufw_result["rationale"] == "nft_present"
+
+
+def test_firewall_priority_falls_through_inactive_ufw_to_iptables():
+    result = _firewall_probe(
+        firewalld=False,
+        ufw_output="Status: inactive\n",
+        nft=False,
+        iptables_output="iptables v1.8.10 (legacy)",
+    )
+
+    assert result["ufw"] == {"available": True, "active": False}
+    assert result["selected_backend"] == "iptables"
+    assert result["rationale"] == "iptables_present"
+    assert result["iptables"]["variant"] == "iptables-legacy"
+
+
+@pytest.mark.parametrize(
+    ("ufw_output", "ufw_returncode", "ufw_exception", "available"),
+    [
+        pytest.param(None, 0, None, False, id="missing-command"),
+        pytest.param("Status: active\n", 1, None, True, id="nonzero-result"),
+        pytest.param("", 0, PermissionError("denied"), True, id="permission-error"),
+        pytest.param("Status active\n", 0, None, True, id="malformed-output"),
+    ],
+)
+def test_firewall_probe_keeps_unavailable_or_failing_ufw_inactive(
+    ufw_output,
+    ufw_returncode,
+    ufw_exception,
+    available,
+):
+    result = _firewall_probe(
+        firewalld=False,
+        ufw_output=ufw_output,
+        ufw_returncode=ufw_returncode,
+        ufw_exception=ufw_exception,
+        nft=True,
+        iptables_output="iptables v1.8.10 (legacy)",
+    )
+
+    assert result["ufw"] == {"available": available, "active": False}
+    assert result["selected_backend"] == "nftables"
+    assert result["rationale"] == "nft_present"
+
+
+def test_firewall_priority_falls_through_missing_ufw_nft_and_iptables():
     nft_result = _firewall_probe(
         firewalld=False,
-        ufw=None,
+        ufw_output=None,
         nft=True,
         iptables_output="iptables v1.8.10 (legacy)",
     )
     iptables_result = _firewall_probe(
         firewalld=None,
-        ufw=None,
+        ufw_output=None,
         nft=False,
         iptables_output="iptables v1.8.10 (legacy)",
     )
 
-    assert ufw_result["selected_backend"] == "ufw"
-    # Preserve the existing substring behavior: "inactive" contains "active".
-    assert inactive_ufw_result["selected_backend"] == "ufw"
     assert nft_result["selected_backend"] == "nftables"
     assert iptables_result["selected_backend"] == "iptables"
     assert iptables_result["iptables"]["variant"] == "iptables-legacy"
