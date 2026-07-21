@@ -73,6 +73,11 @@ _OP_LOCK = threading.Lock()
 _WATCHDOG_THREAD: Optional[threading.Thread] = None
 _WATCHDOG_STOP = threading.Event()
 _WATCHDOG_BACKOFF_MAX_S = 30.0
+_WATCHDOG_CHANNEL_CONFIG_KEY_BY_BAND = {
+    "2.4ghz": "fallback_channel_2g",
+    "5ghz": "channel_5g",
+    "6ghz": "channel_6g",
+}
 _AUTOGEN_PASSPHRASE_CACHE: Optional[str] = None
 _AUTOGEN_PASSPHRASE_TS: float = 0.0
 
@@ -3245,14 +3250,10 @@ def _restart_from_watchdog(reason: str) -> None:
             try:
                 best_channel = select_best_channel(adapter_ifname, band)
                 if best_channel:
-                    # Update config with new channel
-                    if band == "6ghz":
-                        cfg["channel_6g"] = best_channel
-                    elif band == "2.4ghz":
-                        cfg["fallback_channel_2g"] = best_channel
-                    # Note: For 5GHz, channel selection is handled by lnxrouter
-                    from vr_hotspotd.config import write_config_file
-                    write_config_file({"channel_6g" if band == "6ghz" else "fallback_channel_2g": best_channel})
+                    config_key = _WATCHDOG_CHANNEL_CONFIG_KEY_BY_BAND.get(band)
+                    if config_key:
+                        cfg[config_key] = best_channel
+                        write_config_file({config_key: best_channel})
             except Exception:
                 pass  # Best-effort
     
