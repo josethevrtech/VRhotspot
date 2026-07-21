@@ -119,6 +119,16 @@ install_autostart_helper() {
   install -m 755 "$wait_src" "$BIN_DIR/wait-healthy.sh"
 }
 
+install_cli_launcher() {
+  local cli_src="$VENV_DIR/bin/vr-hotspot"
+  local cli_dst="$BIN_DIR/vr-hotspot"
+
+  [[ -x "$cli_src" ]] || die "Installed CLI not found: $cli_src"
+  log "Installing read-only CLI launcher -> $cli_dst"
+  install -d -m 755 "$BIN_DIR"
+  ln -sfn "$cli_src" "$cli_dst"
+}
+
 install_systemd_units() {
   local template_dir="$BACKEND_SRC/systemd"
   local unit template tmp
@@ -216,6 +226,7 @@ log "Installing Python dependencies..."
 "$VENV_DIR/bin/pip" install --no-cache-dir -U pip &>/dev/null
 "$VENV_DIR/bin/pip" install --no-cache-dir "$INSTALL_DIR" &>/dev/null
 
+install_cli_launcher
 install_autostart_helper
 install_systemd_units
 cleanup_legacy_systemd_units

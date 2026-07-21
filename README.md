@@ -133,6 +133,7 @@ Enter the **API token** shown during installation to access the interface.
 **Diagnostics:**
 - `GET /v1/diagnostics/clients` - Connected clients
 - `GET /v1/diagnostics/preflight` - Canonical read-only host readiness report
+- `vr-hotspot preflight` - Print or export that same canonical report through the authenticated API
 - `POST /v1/diagnostics/ping` - Ping test
 - `POST /v1/diagnostics/ping_under_load` - Performance under load
 - `GET /v1/diagnostics/support_bundle` - Download a sanitized support bundle
@@ -317,6 +318,44 @@ TOKEN=$(sudo awk -F= '/VR_HOTSPOTD_API_TOKEN/{print $2}' /etc/vr-hotspot/env)
 # Check status
 curl -s "http://127.0.0.1:8732/v1/status?include_logs=1" -H "X-Api-Token: $TOKEN" | python3 -m json.tool
 ```
+
+### Preflight Diagnostics
+
+Installed systems provide a read-only CLI that calls the existing authenticated
+preflight endpoint. Running it with `sudo` lets it read the protected daemon
+token from `/etc/vr-hotspot/env` without putting the token in shell history or
+process arguments:
+
+```bash
+# Print the canonical report as formatted JSON
+sudo /var/lib/vr-hotspot/bin/vr-hotspot preflight
+
+# Export through stdout into a new private, user-owned directory and file
+report_dir="$(mktemp -d "${TMPDIR:-/tmp}/vr-hotspot-preflight.XXXXXX")"
+(umask 077; sudo /var/lib/vr-hotspot/bin/vr-hotspot preflight \
+  > "$report_dir/preflight.json")
+```
+
+`--output PATH` is also available when the CLI should create the file directly.
+It creates a new file with mode `0600` and refuses existing paths and symlinks;
+choose a private destination rather than a predictable shared `/tmp` filename.
+
+For development or custom API locations, use `--api-url` and provide the token
+through `VR_HOTSPOTD_API_TOKEN` or stdin. For a one-off prompt that does not echo
+the token or store it in shell history:
+
+```bash
+read -rsp 'VR Hotspot API token: ' API_TOKEN && echo
+printf '%s\n' "$API_TOKEN" | vr-hotspot preflight \
+  --api-url http://127.0.0.1:8732 --token-stdin
+unset API_TOKEN
+```
+
+The `--token` option is available for automation compatibility, but its value is
+visible in process arguments and may be retained in shell history; prefer the
+protected env file, environment variable, or `--token-stdin`. The CLI rejects
+redirects and only performs `GET /v1/diagnostics/preflight`; it does not probe
+the host directly or mutate hotspot state.
 
 ### Common Issues
 

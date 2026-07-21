@@ -727,6 +727,7 @@ show_completion() {
     echo -e "${CYAN}🔧 ${BOLD}Useful Commands:${NC}"
     echo -e "   - Status:      ${BOLD}sudo systemctl status $DAEMON_UNIT${NC}"
     echo -e "   - Logs:        ${BOLD}sudo journalctl -u $DAEMON_UNIT -f${NC}"
+    echo -e "   - Preflight:   ${BOLD}sudo $INSTALL_ROOT/bin/vr-hotspot preflight${NC}"
     echo -e "   - Uninstall:   ${BOLD}sudo bash $APP_DIR/uninstall.sh${NC}"
     echo
 }
