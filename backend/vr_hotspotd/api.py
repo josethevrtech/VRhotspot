@@ -24,8 +24,9 @@ from vr_hotspotd.lifecycle import (
 from vr_hotspotd.engine.supervisor import get_tails
 from vr_hotspotd.diagnostics.clients import get_clients_snapshot
 from vr_hotspotd.diagnostics.ping import run_ping, ping_available
-from vr_hotspotd.diagnostics.load import LoadGenerator
+from vr_hotspotd.diagnostics.load import LoadGenerator, validate_curl_url, validate_network_host
 from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
+from vr_hotspotd.diagnostics import limits as diagnostic_limits
 from vr_hotspotd.diagnostics.platform import collect_platform_matrix
 from vr_hotspotd.diagnostics.preflight_report import collect_preflight_report
 from vr_hotspotd.diagnostics.support_bundle import (
@@ -222,7 +223,11 @@ def _clamp_int(
         parsed = int(value)
     except Exception as exc:
         raise ValueError(f"{name}_invalid") from exc
-    clamped = max(min_val, min(max_val, parsed))
+    clamped = diagnostic_limits.clamp_int(
+        parsed,
+        min_value=min_val,
+        max_value=max_val,
+    )
     if clamped != parsed:
         warnings.append(f"{name}_clamped")
     return clamped
@@ -243,7 +248,14 @@ def _clamp_float(
         parsed = float(value)
     except Exception as exc:
         raise ValueError(f"{name}_invalid") from exc
-    clamped = max(min_val, min(max_val, parsed))
+    try:
+        clamped = diagnostic_limits.clamp_float(
+            parsed,
+            min_value=min_val,
+            max_value=max_val,
+        )
+    except ValueError as exc:
+        raise ValueError(f"{name}_invalid") from exc
     if clamped != parsed:
         warnings.append(f"{name}_clamped")
     return clamped
@@ -1475,25 +1487,25 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 duration_s = _clamp_int(
                     body.get("duration_s"),
-                    default=10,
-                    min_val=3,
-                    max_val=20,
+                    default=diagnostic_limits.PING_DEFAULT_DURATION_S,
+                    min_val=diagnostic_limits.LOAD_MIN_DURATION_S,
+                    max_val=diagnostic_limits.LOAD_MAX_DURATION_S,
                     warnings=warnings,
                     name="duration_s",
                 )
                 interval_ms = _clamp_int(
                     body.get("interval_ms"),
-                    default=20,
-                    min_val=10,
-                    max_val=200,
+                    default=diagnostic_limits.PING_DEFAULT_INTERVAL_MS,
+                    min_val=diagnostic_limits.LOAD_MIN_INTERVAL_MS,
+                    max_val=diagnostic_limits.LOAD_MAX_INTERVAL_MS,
                     warnings=warnings,
                     name="interval_ms",
                 )
             except ValueError:
                 data = {
                     "target_ip": target_ip,
-                    "duration_s": 10,
-                    "interval_ms": 20,
+                    "duration_s": diagnostic_limits.PING_DEFAULT_DURATION_S,
+                    "interval_ms": diagnostic_limits.PING_DEFAULT_INTERVAL_MS,
                     "load": {
                         "method": "none",
                         "requested_mbps": 0.0,
@@ -1552,9 +1564,9 @@ class APIHandler(BaseHTTPRequestHandler):
             try:
                 mbps = _clamp_float(
                     load_cfg.get("mbps"),
-                    default=150.0,
-                    min_val=10.0,
-                    max_val=400.0,
+                    default=diagnostic_limits.LOAD_DEFAULT_MBPS,
+                    min_val=diagnostic_limits.LOAD_MIN_MBPS,
+                    max_val=diagnostic_limits.LOAD_MAX_MBPS,
                     warnings=warnings,
                     name="mbps",
                 )
@@ -1577,11 +1589,26 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._respond(400, self._envelope(correlation_id=cid, result_code="error", data=data, warnings=warnings))
                 return
 
-            url = str(load_cfg.get("url") or "").strip()
-            iperf3_host = str(load_cfg.get("iperf3_host") or "").strip()
+            url = ""
+            iperf3_host = ""
+            iperf3_port = diagnostic_limits.LOAD_DEFAULT_IPERF3_PORT
             try:
-                iperf3_port = int(load_cfg.get("iperf3_port") or 5201)
-            except Exception:
+                if method == "curl":
+                    url = validate_curl_url(load_cfg.get("url"))
+                else:
+                    iperf3_host = validate_network_host(load_cfg.get("iperf3_host"))
+                    iperf3_port = _clamp_int(
+                        load_cfg.get("iperf3_port"),
+                        default=diagnostic_limits.LOAD_DEFAULT_IPERF3_PORT,
+                        min_val=diagnostic_limits.LOAD_MIN_PORT,
+                        max_val=diagnostic_limits.LOAD_MAX_PORT,
+                        warnings=warnings,
+                        name="iperf3_port",
+                    )
+            except ValueError as exc:
+                invalid_message = str(exc)
+                if invalid_message == "iperf3_port_invalid":
+                    invalid_message = "invalid iperf3_port"
                 data = {
                     "target_ip": target_ip,
                     "duration_s": duration_s,
@@ -1593,9 +1620,9 @@ class APIHandler(BaseHTTPRequestHandler):
                         "notes": [],
                         "started": False,
                     },
-                    "ping": {"error": {"code": "invalid_params", "message": "invalid iperf3_port"}},
+                    "ping": {"error": {"code": "invalid_params", "message": invalid_message}},
                     "classification": {"grade": "unusable", "reason": "invalid_params"},
-                    "error": {"code": "invalid_params", "message": "invalid iperf3_port"},
+                    "error": {"code": "invalid_params", "message": invalid_message},
                 }
                 self._respond(400, self._envelope(correlation_id=cid, result_code="error", data=data, warnings=warnings))
                 return
@@ -1709,10 +1736,9 @@ class APIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/v1/diagnostics/ping":
-            target_ip = (body.get("target_ip") or "").strip() if isinstance(body, dict) else ""
-            duration_s = body.get("duration_s") if isinstance(body, dict) else None
-            interval_ms = body.get("interval_ms") if isinstance(body, dict) else None
-            timeout_s = body.get("timeout_s") if isinstance(body, dict) else None
+            warnings = list(body_warnings)
+            request_body = body if isinstance(body, dict) else {}
+            target_ip = str(request_body.get("target_ip") or "").strip()
 
             try:
                 ipaddress.IPv4Address(target_ip)
@@ -1727,34 +1753,80 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 return
 
+            raw_count = request_body.get("count")
+            if raw_count is None:
+                raw_count = request_body.get("packets")
             try:
-                duration_s = int(duration_s) if duration_s is not None else 10
-            except Exception:
-                duration_s = 10
-            try:
-                interval_ms = int(interval_ms) if interval_ms is not None else 20
-            except Exception:
-                interval_ms = 20
-            try:
-                timeout_s = int(timeout_s) if timeout_s is not None else 2
-            except Exception:
-                timeout_s = 2
+                duration_s = _clamp_int(
+                    request_body.get("duration_s"),
+                    default=diagnostic_limits.PING_DEFAULT_DURATION_S,
+                    min_val=diagnostic_limits.DIAGNOSTIC_MIN_DURATION_S,
+                    max_val=diagnostic_limits.DIAGNOSTIC_MAX_DURATION_S,
+                    warnings=warnings,
+                    name="duration_s",
+                )
+                interval_ms = _clamp_int(
+                    request_body.get("interval_ms"),
+                    default=diagnostic_limits.PING_DEFAULT_INTERVAL_MS,
+                    min_val=diagnostic_limits.DIAGNOSTIC_MIN_INTERVAL_MS,
+                    max_val=diagnostic_limits.DIAGNOSTIC_MAX_INTERVAL_MS,
+                    warnings=warnings,
+                    name="interval_ms",
+                )
+                timeout_s = _clamp_int(
+                    request_body.get("timeout_s"),
+                    default=diagnostic_limits.PING_DEFAULT_REPLY_TIMEOUT_S,
+                    min_val=diagnostic_limits.PING_MIN_REPLY_TIMEOUT_S,
+                    max_val=diagnostic_limits.PING_MAX_REPLY_TIMEOUT_S,
+                    warnings=warnings,
+                    name="timeout_s",
+                )
+                packet_size = _clamp_int(
+                    request_body.get("packet_size"),
+                    default=diagnostic_limits.PING_DEFAULT_PACKET_SIZE,
+                    min_val=diagnostic_limits.DIAGNOSTIC_MIN_PACKET_SIZE,
+                    max_val=diagnostic_limits.DIAGNOSTIC_MAX_PACKET_SIZE,
+                    warnings=warnings,
+                    name="packet_size",
+                )
+                count = (
+                    diagnostic_limits.packet_count_for_budget(duration_s, interval_ms)
+                    if raw_count is None
+                    else _clamp_int(
+                        raw_count,
+                        default=diagnostic_limits.DIAGNOSTIC_MIN_PACKET_COUNT,
+                        min_val=diagnostic_limits.DIAGNOSTIC_MIN_PACKET_COUNT,
+                        max_val=diagnostic_limits.DIAGNOSTIC_MAX_PACKET_COUNT,
+                        warnings=warnings,
+                        name="count",
+                    )
+                )
+            except ValueError:
+                self._respond(
+                    400,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code="invalid_request",
+                        warnings=warnings + ["invalid_diagnostic_params"],
+                    ),
+                )
+                return
 
             res = run_ping(
                 target_ip=target_ip,
                 duration_s=duration_s,
                 interval_ms=interval_ms,
                 timeout_s=timeout_s,
+                count=count,
+                packet_size=packet_size,
             )
-            self._respond(200, self._envelope(correlation_id=cid, data=res))
+            self._respond(200, self._envelope(correlation_id=cid, data=res, warnings=warnings))
             return
 
         if path == "/v1/diagnostics/udp_latency":
-            target_ip = (body.get("target_ip") or "").strip() if isinstance(body, dict) else ""
-            duration_s = body.get("duration_s") if isinstance(body, dict) else None
-            interval_ms = body.get("interval_ms") if isinstance(body, dict) else None
-            target_port = body.get("target_port") if isinstance(body, dict) else None
-            packet_size = body.get("packet_size") if isinstance(body, dict) else None
+            warnings = list(body_warnings)
+            request_body = body if isinstance(body, dict) else {}
+            target_ip = str(request_body.get("target_ip") or "").strip()
 
             try:
                 ipaddress.IPv4Address(target_ip)
@@ -1769,22 +1841,64 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 return
 
+            raw_count = request_body.get("count")
+            if raw_count is None:
+                raw_count = request_body.get("packets")
             try:
-                duration_s = int(duration_s) if duration_s is not None else 10
-            except Exception:
-                duration_s = 10
-            try:
-                interval_ms = int(interval_ms) if interval_ms is not None else 20
-            except Exception:
-                interval_ms = 20
-            try:
-                target_port = int(target_port) if target_port is not None else 12345
-            except Exception:
-                target_port = 12345
-            try:
-                packet_size = int(packet_size) if packet_size is not None else 64
-            except Exception:
-                packet_size = 64
+                duration_s = _clamp_int(
+                    request_body.get("duration_s"),
+                    default=diagnostic_limits.UDP_DEFAULT_DURATION_S,
+                    min_val=diagnostic_limits.DIAGNOSTIC_MIN_DURATION_S,
+                    max_val=diagnostic_limits.DIAGNOSTIC_MAX_DURATION_S,
+                    warnings=warnings,
+                    name="duration_s",
+                )
+                interval_ms = _clamp_int(
+                    request_body.get("interval_ms"),
+                    default=diagnostic_limits.UDP_DEFAULT_INTERVAL_MS,
+                    min_val=diagnostic_limits.DIAGNOSTIC_MIN_INTERVAL_MS,
+                    max_val=diagnostic_limits.DIAGNOSTIC_MAX_INTERVAL_MS,
+                    warnings=warnings,
+                    name="interval_ms",
+                )
+                target_port = _clamp_int(
+                    request_body.get("target_port"),
+                    default=diagnostic_limits.UDP_DEFAULT_PORT,
+                    min_val=diagnostic_limits.UDP_MIN_PORT,
+                    max_val=diagnostic_limits.UDP_MAX_PORT,
+                    warnings=warnings,
+                    name="target_port",
+                )
+                packet_size = _clamp_int(
+                    request_body.get("packet_size"),
+                    default=diagnostic_limits.UDP_DEFAULT_PACKET_SIZE,
+                    min_val=diagnostic_limits.DIAGNOSTIC_MIN_PACKET_SIZE,
+                    max_val=diagnostic_limits.DIAGNOSTIC_MAX_PACKET_SIZE,
+                    warnings=warnings,
+                    name="packet_size",
+                )
+                count = (
+                    diagnostic_limits.packet_count_for_budget(duration_s, interval_ms)
+                    if raw_count is None
+                    else _clamp_int(
+                        raw_count,
+                        default=diagnostic_limits.DIAGNOSTIC_MIN_PACKET_COUNT,
+                        min_val=diagnostic_limits.DIAGNOSTIC_MIN_PACKET_COUNT,
+                        max_val=diagnostic_limits.DIAGNOSTIC_MAX_PACKET_COUNT,
+                        warnings=warnings,
+                        name="count",
+                    )
+                )
+            except ValueError:
+                self._respond(
+                    400,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code="invalid_request",
+                        warnings=warnings + ["invalid_diagnostic_params"],
+                    ),
+                )
+                return
 
             res = run_udp_latency_test(
                 target_ip=target_ip,
@@ -1792,8 +1906,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 duration_s=duration_s,
                 interval_ms=interval_ms,
                 packet_size=packet_size,
+                count=count,
             )
-            self._respond(200, self._envelope(correlation_id=cid, data=res))
+            self._respond(200, self._envelope(correlation_id=cid, data=res, warnings=warnings))
             return
 
         self._respond(
