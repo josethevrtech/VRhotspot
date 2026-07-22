@@ -1,5 +1,8 @@
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from vr_hotspotd.adapters.inventory import inventory_from_host_facts_snapshot
+from vr_hotspotd.host_facts import HostFactsSnapshot
+
 
 READINESS_EXCELLENT = "excellent_for_vr"
 READINESS_GOOD = "good_for_vr"
@@ -15,13 +18,25 @@ SIX_GHZ_UNKNOWN = "unknown"
 SIX_GHZ_NOT_SUPPORTED = "not_supported"
 
 
-def build_readiness_model(inventory: Dict[str, Any]) -> Dict[str, Any]:
+def build_readiness_model(
+    inventory: Optional[Dict[str, Any]] = None,
+    *,
+    host_facts_snapshot: Optional[HostFactsSnapshot] = None,
+) -> Dict[str, Any]:
     """
     Build Adapter Intelligence v2 readiness data from an existing inventory dict.
 
-    This function is intentionally pure. It only consumes dictionaries that callers
-    provide and does not probe sysfs, run iw, or inspect host state.
+    This function is intentionally pure. It consumes a supplied inventory or a
+    supplied immutable snapshot and does not probe sysfs, run iw, or inspect host
+    state. When both are supplied, the snapshot wins so scoring uses one factual
+    generation.
+
+    Non-adapter snapshot sections are deliberately not projected into this
+    adapter-only model and cannot be mistaken for host-service readiness claims.
     """
+    if host_facts_snapshot is not None:
+        inventory = inventory_from_host_facts_snapshot(host_facts_snapshot)
+
     adapters_in = inventory.get("adapters") if isinstance(inventory, dict) else []
     adapters = list(adapters_in) if isinstance(adapters_in, list) else []
     global_regdom = _normalize_global_regdom(inventory.get("global_regdom") if isinstance(inventory, dict) else None)

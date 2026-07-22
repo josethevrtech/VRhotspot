@@ -1,6 +1,10 @@
+from dataclasses import replace
 from unittest.mock import patch
 
+import pytest
+
 import vr_hotspotd.adapters.inventory as inventory
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
 
 
 def test_get_adapters_skips_virtual_ifname():
@@ -16,3 +20,20 @@ def test_get_adapters_skips_virtual_ifname():
         result = inventory.get_adapters()
         assert result["adapters"] == []
         assert result["recommended"] is None
+
+
+@pytest.mark.parametrize(
+    ("ifname", "bus"),
+    (("x0wlan1", "usb"), ("wlan1", "virtual")),
+)
+def test_snapshot_inventory_keeps_virtual_interface_filtering(ifname, bus):
+    snapshot = make_host_facts_snapshot()
+    snapshot = replace(
+        snapshot,
+        adapters=(replace(snapshot.adapters[0], ifname=ifname, bus=bus),),
+    )
+
+    result = inventory.get_adapters(host_facts_snapshot=snapshot)
+
+    assert result["adapters"] == []
+    assert result["recommended"] is None

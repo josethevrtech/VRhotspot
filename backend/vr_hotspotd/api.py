@@ -37,6 +37,7 @@ from vr_hotspotd.diagnostics.support_bundle import (
 )
 from vr_hotspotd import __version__
 from vr_hotspotd import telemetry
+from vr_hotspotd.host_facts_builder import build_host_facts_snapshot
 from vr_hotspotd.state import load_state
 
 log = logging.getLogger("vr_hotspotd.api")
@@ -1224,17 +1225,20 @@ class APIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/v1/adapters":
-            self._respond(200, self._envelope(correlation_id=cid, data=get_adapters()))
+            snapshot = build_host_facts_snapshot(operation_kind="adapter_inventory")
+            inventory = get_adapters(host_facts_snapshot=snapshot)
+            self._respond(200, self._envelope(correlation_id=cid, data=inventory))
             return
 
         if path == "/v1/adapters/readiness":
-            inventory = get_adapters()
+            snapshot = build_host_facts_snapshot(operation_kind="adapter_readiness")
+            inventory = get_adapters(host_facts_snapshot=snapshot)
             warnings = ["adapter_inventory_error"] if isinstance(inventory, dict) and inventory.get("error") else []
             self._respond(
                 200,
                 self._envelope(
                     correlation_id=cid,
-                    data=build_readiness_model(inventory),
+                    data=build_readiness_model(host_facts_snapshot=snapshot),
                     warnings=warnings,
                 ),
             )

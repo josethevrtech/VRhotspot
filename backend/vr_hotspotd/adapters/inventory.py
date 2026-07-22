@@ -3,9 +3,10 @@ import shutil
 import subprocess
 import re
 from functools import lru_cache
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from vr_hotspotd import host_probes
+from vr_hotspotd.host_facts import HostFactsSnapshot
 
 
 def _iw_bin() -> str:
@@ -250,14 +251,156 @@ def _detect_bus_type(ifname: str) -> str:
     return "unknown"
 
 
+def _legacy_inventory_bus(bus: str) -> str:
+    """Keep the existing public bus vocabulary for snapshot projections."""
 
-def get_adapters():
+    return bus if bus in ("usb", "pci", "virtual") else "unknown"
+
+
+def _snapshot_probe_failed(snapshot: HostFactsSnapshot, probe_id: str) -> bool:
+    return any(error.probe_id == probe_id for error in snapshot.probe_errors)
+
+
+def inventory_from_host_facts_snapshot(
+    snapshot: HostFactsSnapshot,
+) -> Dict[str, Any]:
+    """Project immutable adapter facts into the existing inventory response."""
+
+    if not isinstance(snapshot, HostFactsSnapshot):
+        raise TypeError("host_facts_snapshot must be a HostFactsSnapshot")
+
+    iw_dev_failed = _snapshot_probe_failed(snapshot, "iw.dev")
+    if iw_dev_failed and not snapshot.adapters:
+        return {
+            "error": "snapshot_iw_dev_unavailable",
+            "adapters": [],
+            "recommended": None,
+            "global_regdom": None,
+        }
+
+    regulatory_failed = _snapshot_probe_failed(snapshot, "iw.regulatory")
+    global_country = (
+        snapshot.regulatory.global_country
+        if not regulatory_failed and snapshot.regulatory.global_country
+        else "unknown"
+    )
+    global_raw_header = (
+        snapshot.regulatory.global_raw_header if not regulatory_failed else None
+    )
+    regulatory_by_phy = (
+        {item.phy: item for item in snapshot.regulatory.phys}
+        if not regulatory_failed
+        else {}
+    )
+    phys_by_name = {item.phy: item for item in snapshot.iw_phys}
+
+    enriched: List[Dict] = []
+    recommended: Optional[str] = None
+    best_score: Optional[int] = None
+
+    for facts in snapshot.adapters:
+        ifname = facts.ifname
+        if _VIRT_IFACE_RE.match(ifname):
+            continue
+
+        bus_type = _legacy_inventory_bus(facts.bus)
+        if bus_type == "virtual":
+            continue
+
+        phy = facts.phy
+        phy_facts_available = bool(
+            phy
+            and phy in phys_by_name
+            and not _snapshot_probe_failed(snapshot, f"iw.phy.{phy}")
+        )
+        supports_ap = facts.supports_ap if phy_facts_available else None
+        supports_wifi6 = facts.supports_wifi6 if phy_facts_available else None
+        supports_2ghz = facts.supports_2ghz if phy_facts_available else None
+        supports_5ghz = facts.supports_5ghz if phy_facts_available else None
+        supports_6ghz = facts.supports_6ghz if phy_facts_available else None
+        supports_80mhz = facts.supports_80mhz if phy_facts_available else None
+
+        phy_reg = regulatory_by_phy.get(phy or "")
+        reg_country = (
+            facts.regulatory_country
+            if not regulatory_failed and facts.regulatory_country
+            else global_country
+        )
+        reg_source = (
+            facts.regulatory_source
+            if not regulatory_failed and facts.regulatory_source
+            else ("global" if global_country != "unknown" else "unknown")
+        )
+
+        score, breakdown, warnings = _score_adapter(
+            ifname=ifname,
+            supports_ap=supports_ap is True,
+            reg_country=reg_country,
+            reg_source=reg_source,
+            supports_5ghz=supports_5ghz is True,
+            supports_6ghz=supports_6ghz is True,
+            supports_80mhz=supports_80mhz is True,
+        )
+
+        item = {
+            "id": ifname,
+            "ifname": ifname,
+            "phy": phy,
+            "bus": bus_type,
+            "supports_ap": supports_ap,
+            "supports_wifi6": supports_wifi6,
+            "supports_2ghz": supports_2ghz,
+            "supports_5ghz": supports_5ghz,
+            "supports_6ghz": supports_6ghz,
+            "supports_80mhz": supports_80mhz,
+            "regdom": {
+                "country": reg_country,
+                "source": reg_source,
+                "global_country": global_country,
+                "raw_phy": phy_reg.raw_header if phy_reg is not None else None,
+                "raw_global": global_raw_header,
+            },
+            "score": score,
+            "score_breakdown": breakdown,
+            "warnings": warnings,
+        }
+        enriched.append(item)
+
+        if supports_ap is True:
+            if best_score is None or score > best_score:
+                best_score = score
+                recommended = ifname
+
+    projected: Dict[str, Any] = {
+        "global_regdom": {"country": global_country, "raw": global_raw_header},
+        "recommended": recommended,
+        "adapters": enriched,
+        "notes": [
+            "Selection is capability-based (AP mode + band support + regulatory context), not chipset-based.",
+            "supports_6ghz is inferred from enabled 6 GHz frequencies in `iw phy <phy> info`.",
+        ],
+    }
+    if iw_dev_failed:
+        projected["error"] = "snapshot_iw_dev_unavailable"
+    return projected
+
+
+def get_adapters(
+    host_facts_snapshot: Optional[HostFactsSnapshot] = None,
+) -> Dict[str, Any]:
     """
     Returns:
       - adapters: inventory with AP support + band support + regdom + score + explanation
       - recommended: best AP-capable adapter by score
       - global_regdom: global country
+
+    Passing a snapshot selects the read-only compatibility projection and never
+    invokes the legacy direct probes. The no-argument path intentionally remains
+    available for lifecycle until its separately planned cutover.
     """
+    if host_facts_snapshot is not None:
+        return inventory_from_host_facts_snapshot(host_facts_snapshot)
+
     try:
         devs = _parse_iw_dev()
     except Exception as e:
