@@ -1,14 +1,21 @@
+from typing import Optional
+
 from vr_hotspotd import host_facts
 
 
-def make_host_facts_snapshot() -> host_facts.HostFactsSnapshot:
+def make_host_facts_snapshot(
+    *,
+    snapshot_id: str = "adapter-snapshot-test-1",
+    operation_kind: str = "adapter-test",
+    default_uplink_interface: Optional[str] = "enp4s0",
+) -> host_facts.HostFactsSnapshot:
     """Return one internally consistent, known-good adapter snapshot fixture."""
 
     return host_facts.HostFactsSnapshot(
         schema_version=1,
         metadata=host_facts.SnapshotMetadata(
-            snapshot_id="adapter-snapshot-test-1",
-            operation_kind="adapter-test",
+            snapshot_id=snapshot_id,
+            operation_kind=operation_kind,
             source="test",
             started_at_utc="2026-07-22T12:00:00.000Z",
             completed_at_utc="2026-07-22T12:00:00.050Z",
@@ -31,15 +38,17 @@ def make_host_facts_snapshot() -> host_facts.HostFactsSnapshot:
             source_probe_id="platform.os_release",
         ),
         default_uplink=host_facts.DefaultUplinkFacts(
-            selected_interface="enp4s0",
+            selected_interface=default_uplink_interface,
             routes=(
                 host_facts.DefaultRouteFact(
-                    interface="enp4s0",
+                    interface=default_uplink_interface,
                     gateway="192.0.2.1",
                     metric=100,
                     protocol="dhcp",
                 ),
-            ),
+            )
+            if default_uplink_interface
+            else (),
             source_probe_id="network.default_uplink",
         ),
         iw_dev=host_facts.IwDevFacts(
@@ -183,6 +192,19 @@ def make_host_facts_snapshot() -> host_facts.HostFactsSnapshot:
                 ),
             ),
         ),
-        probe_records=(),
+        probe_records=(
+            host_facts.ProbeRecord(
+                probe_id="network.default_uplink",
+                source_kind="command",
+                source=("/usr/sbin/ip", "route", "show", "default"),
+                started_offset_ms=10,
+                completed_offset_ms=11,
+                exit_status=0,
+                timed_out=False,
+                missing=False,
+                permission_denied=False,
+                output_truncated=False,
+            ),
+        ),
         probe_errors=(),
     )
