@@ -1,11 +1,14 @@
+import ipaddress
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping, Sequence
 
 CONFIG_PATH = Path("/var/lib/vr-hotspot/config.json")
 CONFIG_TMP = Path("/var/lib/vr-hotspot/config.json.tmp")
 CONFIG_SCHEMA_VERSION = 4
+INVALID_NETWORK_CONFIG = "invalid_network_config"
+_LAN_IPV4_PREFIX_LENGTH = 24
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "version": CONFIG_SCHEMA_VERSION,
@@ -93,6 +96,61 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Autostart behavior (persisted)
     "autostart": False,
 }
+
+
+class ConfigValidationError(ValueError):
+    def __init__(self, errors: Sequence[str]):
+        self.errors = tuple(dict.fromkeys(str(error) for error in errors if str(error)))
+        super().__init__(f"{INVALID_NETWORK_CONFIG}:" + ",".join(self.errors))
+
+
+def validate_network_config(config: Mapping[str, Any]) -> list[str]:
+    """Validate the effective fixed-/24 LAN and strictly increasing DHCP range."""
+
+    cfg = DEFAULT_CONFIG.copy()
+    if isinstance(config, Mapping):
+        cfg.update(config)
+
+    errors: list[str] = []
+    parsed: Dict[str, ipaddress.IPv4Address] = {}
+    for field in ("lan_gateway_ip", "dhcp_start_ip", "dhcp_end_ip"):
+        value = cfg.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"invalid_ip:{field}")
+            continue
+        try:
+            parsed[field] = ipaddress.IPv4Address(value.strip())
+        except ipaddress.AddressValueError:
+            errors.append(f"invalid_ip:{field}")
+
+    if errors:
+        return errors
+
+    gateway = parsed["lan_gateway_ip"]
+    start = parsed["dhcp_start_ip"]
+    end = parsed["dhcp_end_ip"]
+    network = ipaddress.IPv4Network(
+        f"{gateway}/{_LAN_IPV4_PREFIX_LENGTH}",
+        strict=False,
+    )
+
+    ordered = start < end
+    if not ordered:
+        errors.append("dhcp_range_invalid")
+
+    in_gateway_subnet = start in network and end in network
+    if not in_gateway_subnet:
+        errors.append("dhcp_range_not_in_gateway_subnet")
+
+    if ordered and in_gateway_subnet:
+        if start <= gateway <= end:
+            errors.append("dhcp_range_includes_gateway")
+        if start <= network.network_address <= end:
+            errors.append("dhcp_range_includes_network_address")
+        if start <= network.broadcast_address <= end:
+            errors.append("dhcp_range_includes_broadcast_address")
+
+    return errors
 
 
 def read_config_file() -> Dict[str, Any]:
@@ -216,7 +274,11 @@ def load_config() -> Dict[str, Any]:
     cfg = DEFAULT_CONFIG.copy()
     cfg.update(read_config_file())
     migrated = _apply_migrations(cfg)
-    if migrated != cfg and CONFIG_PATH.exists():
+    if (
+        migrated != cfg
+        and CONFIG_PATH.exists()
+        and not validate_network_config(migrated)
+    ):
         _write_atomic(CONFIG_PATH, CONFIG_TMP, json.dumps(migrated, indent=2))
         try:
             os.chmod(CONFIG_PATH, 0o600)
@@ -240,6 +302,10 @@ def write_config_file(partial_updates: Dict[str, Any]) -> Dict[str, Any]:
     merged.update(existing)
     merged.update(partial_updates)
     merged["version"] = CONFIG_SCHEMA_VERSION
+
+    validation_errors = validate_network_config(merged)
+    if validation_errors:
+        raise ConfigValidationError(validation_errors)
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     _write_atomic(CONFIG_PATH, CONFIG_TMP, json.dumps(merged, indent=2))

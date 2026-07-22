@@ -17,7 +17,13 @@ from typing import Optional, Set, Dict, Any, List, Tuple
 from vr_hotspotd.state import load_state, update_state
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.adapters.profiles import apply_adapter_profile
-from vr_hotspotd.config import load_config, ensure_config_file, write_config_file
+from vr_hotspotd.config import (
+    INVALID_NETWORK_CONFIG,
+    ensure_config_file,
+    load_config,
+    validate_network_config,
+    write_config_file,
+)
 from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
 from vr_hotspotd.engine import lnxrouter_conf
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
@@ -3335,6 +3341,19 @@ def _restart_from_watchdog(reason: str) -> None:
     
     # Check if auto channel switch is enabled and reason is quality-related
     cfg = load_config()
+    network_validation_errors = validate_network_config(cfg)
+    if network_validation_errors:
+        warnings = list(st_guard.get("warnings") or [])
+        for error in network_validation_errors:
+            if error not in warnings:
+                warnings.append(error)
+        update_state(
+            last_error=INVALID_NETWORK_CONFIG,
+            last_error_detail={"errors": network_validation_errors},
+            last_correlation_id=cid,
+            warnings=warnings,
+        )
+        return
     auto_switch = bool(cfg.get("auto_channel_switch", False))
     
     if auto_switch and "connection_quality" in reason:
@@ -3700,6 +3719,23 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     if state.get("phase") in ("starting", "running") and is_running():
         return LifecycleResult("already_running", state)
 
+    cfg = load_config()
+    cfg = _apply_start_overrides(cfg, overrides)
+    network_validation_errors = validate_network_config(cfg)
+    if network_validation_errors:
+        state = update_state(
+            phase="error",
+            running=False,
+            ap_interface=None,
+            last_op="start",
+            last_error=INVALID_NETWORK_CONFIG,
+            last_error_detail={"errors": network_validation_errors},
+            last_correlation_id=correlation_id,
+            warnings=network_validation_errors,
+            engine={"last_error": INVALID_NETWORK_CONFIG, "ap_logs_tail": []},
+        )
+        return LifecycleResult(INVALID_NETWORK_CONFIG, state)
+
     try:
         host_facts_snapshot = build_host_facts_snapshot(
             operation_kind="lifecycle_start",
@@ -3731,8 +3767,6 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         engine={"ap_logs_tail": []},
     )
 
-    cfg = load_config()
-    cfg = _apply_start_overrides(cfg, overrides)
     allow_fallback_40mhz = bool(cfg.get("allow_fallback_40mhz", False))
     allow_dfs_channels = bool(cfg.get("allow_dfs_channels", False))
     firewall_backend = _snapshot_firewall_backend(host_facts_snapshot)
