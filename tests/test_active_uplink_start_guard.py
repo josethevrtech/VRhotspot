@@ -1,10 +1,12 @@
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
-from vr_hotspotd import lifecycle
+from vr_hotspotd import host_facts, lifecycle
 from vr_hotspotd.policy import ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
 from vr_hotspotd.state import DEFAULT_STATE
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
 
 
 def _config(*, ap_adapter=""):
@@ -46,9 +48,15 @@ def _stub_read_only_start_environment(
     *,
     config,
     active_uplink_interface,
+    snapshot=None,
 ):
     state = deepcopy(DEFAULT_STATE)
     events = []
+    operation_snapshot = snapshot or make_host_facts_snapshot(
+        snapshot_id="lifecycle-start-snapshot",
+        operation_kind="lifecycle_start",
+        default_uplink_interface=active_uplink_interface,
+    )
 
     def load_state():
         return state
@@ -63,23 +71,28 @@ def _stub_read_only_start_environment(
                 state[key] = value
         return state
 
-    def get_adapters():
-        events.append("inventory")
-        return _inventory()
+    def build_snapshot(*, operation_kind):
+        events.append("snapshot")
+        assert operation_kind == "lifecycle_start"
+        return operation_snapshot
 
-    def probe_default_uplink():
-        events.append("active_uplink")
-        return active_uplink_interface
+    def get_adapters(*, host_facts_snapshot):
+        events.append("inventory")
+        assert host_facts_snapshot is operation_snapshot
+        return _inventory()
 
     monkeypatch.setattr(lifecycle, "ensure_config_file", lambda: None)
     monkeypatch.setattr(lifecycle, "load_state", load_state)
     monkeypatch.setattr(lifecycle, "update_state", update_state)
     monkeypatch.setattr(lifecycle, "load_config", lambda: dict(config))
+    monkeypatch.setattr(lifecycle, "build_host_facts_snapshot", build_snapshot)
     monkeypatch.setattr(lifecycle, "get_adapters", get_adapters)
     monkeypatch.setattr(
         lifecycle.host_probes,
         "probe_default_uplink",
-        probe_default_uplink,
+        lambda: (_ for _ in ()).throw(
+            AssertionError("lifecycle re-probed the default uplink")
+        ),
     )
     monkeypatch.setattr(
         lifecycle.wifi_probe,
@@ -96,7 +109,7 @@ def _stub_read_only_start_environment(
     monkeypatch.setattr(lifecycle.os_release, "is_pop_os", lambda _info=None: False)
     monkeypatch.setattr(lifecycle.os_release, "is_bazzite", lambda _info=None: False)
 
-    return state, events
+    return state, events, operation_snapshot
 
 
 def _forbid_mutations(monkeypatch):
@@ -148,7 +161,7 @@ def test_active_uplink_conflict_blocks_before_any_mutation(
     active_uplink_interface,
     selected_adapter,
 ):
-    state, events = _stub_read_only_start_environment(
+    state, events, _snapshot = _stub_read_only_start_environment(
         monkeypatch,
         config=_config(ap_adapter=configured_adapter),
         active_uplink_interface=active_uplink_interface,
@@ -172,14 +185,14 @@ def test_active_uplink_conflict_blocks_before_any_mutation(
             "active_uplink_interface": active_uplink_interface,
         },
     }
-    assert events == ["inventory", "active_uplink"]
+    assert events == ["snapshot", "inventory"]
     assert mutation_calls == []
 
 
 def test_active_uplink_conflict_after_reselection_blocks_before_replacement_mutation(
     monkeypatch,
 ):
-    state, events = _stub_read_only_start_environment(
+    state, events, snapshot = _stub_read_only_start_environment(
         monkeypatch,
         config=_config(ap_adapter="wlan0"),
         active_uplink_interface="wlan1",
@@ -214,6 +227,7 @@ def test_active_uplink_conflict_after_reselection_blocks_before_replacement_muta
 
     def reselect(**kwargs):
         calls.append(("reselect", kwargs["ap_ifname"]))
+        assert kwargs["host_facts_snapshot"] is snapshot
         return (
             "wlan1",
             inventory,
@@ -281,7 +295,7 @@ def test_active_uplink_conflict_after_reselection_blocks_before_replacement_muta
             "active_uplink_interface": "wlan1",
         },
     }
-    assert events == ["inventory", "active_uplink"]
+    assert events == ["snapshot", "inventory"]
     assert calls == [
         ("repair", None),
         ("iwd_reservation", "wlan0"),
@@ -300,14 +314,16 @@ def test_non_conflicting_uplink_is_allowed_past_guard(
     monkeypatch,
     active_uplink_interface,
 ):
-    state, events = _stub_read_only_start_environment(
+    state, events, snapshot = _stub_read_only_start_environment(
         monkeypatch,
         config=_config(),
         active_uplink_interface=active_uplink_interface,
     )
     mutation_calls = []
 
-    def repair(*_args, **_kwargs):
+    def repair(*_args, **kwargs):
+        assert kwargs["host_facts_snapshot"] is snapshot
+        assert kwargs["inventory"] == _inventory()
         mutation_calls.append("repair")
         return state
 
@@ -323,5 +339,46 @@ def test_non_conflicting_uplink_is_allowed_past_guard(
     assert result.code == "start_failed"
     assert state["last_error"] == "stop_after_active_uplink_guard"
     assert state["last_error"] != ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
-    assert events == ["inventory", "active_uplink"]
+    assert events == ["snapshot", "inventory"]
     assert mutation_calls == ["repair", "iwd_reservation"]
+
+
+def test_unknown_snapshot_default_uplink_blocks_before_any_mutation(monkeypatch):
+    snapshot = make_host_facts_snapshot(
+        snapshot_id="unknown-uplink-snapshot",
+        operation_kind="lifecycle_start",
+        default_uplink_interface=None,
+    )
+    snapshot = replace(
+        snapshot,
+        probe_errors=(
+            host_facts.ProbeError(
+                probe_id="network.default_uplink",
+                kind="timeout",
+                message="read-only command timed out",
+                exit_status=124,
+            ),
+        ),
+    )
+    state, events, _snapshot = _stub_read_only_start_environment(
+        monkeypatch,
+        config=_config(ap_adapter="wlan0"),
+        active_uplink_interface=None,
+        snapshot=snapshot,
+    )
+    mutation_calls = _forbid_mutations(monkeypatch)
+
+    result = lifecycle._start_hotspot_impl(correlation_id="unknown-uplink-test")
+
+    assert result.code == "start_failed"
+    assert state["last_error"] == "default_uplink_unknown"
+    assert state["last_error_detail"] == {
+        "code": "default_uplink_unknown",
+        "remediation": "Check logs for details.",
+        "context": {
+            "ap_adapter": "wlan0",
+            "active_uplink_interface": None,
+        },
+    }
+    assert events == ["snapshot", "inventory"]
+    assert mutation_calls == []

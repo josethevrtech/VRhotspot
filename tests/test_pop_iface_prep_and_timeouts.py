@@ -5,8 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
+
+
+_HOST_FACTS_SNAPSHOT = make_host_facts_snapshot(operation_kind="lifecycle_start")
 
 
 def test_prepare_ap_interface_force_disconnect_sets_unmanaged(
@@ -210,21 +215,24 @@ def test_prepare_ap_interface_does_not_reload_driver_by_default(monkeypatch):
     assert reload_called["n"] == 0
 
 
-def test_reselect_adapter_after_reload_when_iface_missing(monkeypatch):
+def test_reselect_does_not_adopt_unobserved_reenumerated_iface(monkeypatch):
     import vr_hotspotd.lifecycle as lifecycle
 
     inv_initial = {
-        "adapters": [{"ifname": "wlxOLD", "supports_ap": True, "supports_5ghz": True, "supports_80mhz": True}],
+        "adapters": [{"ifname": "wlxOLD", "supports_ap": True, "supports_5ghz": True, "supports_80mhz": True, "bus": "usb"}],
         "recommended": "wlxOLD",
     }
-    inv_refreshed = {
-        "adapters": [{"ifname": "wlxNEW", "supports_ap": True, "supports_5ghz": True, "supports_80mhz": True}],
-        "recommended": "wlxNEW",
-    }
-
-    monkeypatch.setattr(lifecycle, "get_adapters", lambda: inv_refreshed)
+    monkeypatch.setattr(
+        lifecycle,
+        "get_adapters",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("reselection re-probed adapter inventory")
+        ),
+    )
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda _s: None)
 
     def fake_exists(path: str) -> bool:
+        path = str(path)
         if path.endswith("/sys/class/net/wlxOLD"):
             return False
         if path.endswith("/sys/class/net/wlxNEW"):
@@ -239,14 +247,15 @@ def test_reselect_adapter_after_reload_when_iface_missing(monkeypatch):
         band_pref="5ghz",
         inv=inv_initial,
         adapter=inv_initial["adapters"][0],
+        host_facts_snapshot=_HOST_FACTS_SNAPSHOT,
         platform_is_pop=True,
         prep_warnings=["ap_iface_not_up_post_driver_reload"],
     )
 
-    assert ap_ifname == "wlxNEW"
-    assert inv_out["recommended"] == "wlxNEW"
-    assert adapter_out and adapter_out.get("ifname") == "wlxNEW"
-    assert "ap_adapter_reselected_after_reload:wlxOLD->wlxNEW" in warnings
+    assert ap_ifname == "wlxOLD"
+    assert inv_out is inv_initial
+    assert adapter_out and adapter_out.get("ifname") == "wlxOLD"
+    assert "ap_adapter_reselect_usb_missing_after_reload" in warnings
 
 
 def test_reselect_adapter_noop_when_not_pop(monkeypatch):
@@ -263,6 +272,7 @@ def test_reselect_adapter_noop_when_not_pop(monkeypatch):
         band_pref="5ghz",
         inv=inv_initial,
         adapter=inv_initial["adapters"][0],
+        host_facts_snapshot=_HOST_FACTS_SNAPSHOT,
         platform_is_pop=False,
         prep_warnings=["ap_iface_not_up_post_driver_reload"],
     )
@@ -277,18 +287,24 @@ def test_reselect_adapter_keeps_usb_when_only_pci_available(monkeypatch):
     import vr_hotspotd.lifecycle as lifecycle
 
     inv_initial = {
-        "adapters": [{"ifname": "wlxUSBOLD", "supports_ap": True, "supports_5ghz": True, "supports_80mhz": True, "bus": "usb"}],
-        "recommended": "wlxUSBOLD",
-    }
-    inv_pci_only = {
-        "adapters": [{"ifname": "wlp8s0", "supports_ap": True, "supports_5ghz": True, "supports_80mhz": True, "bus": "pci"}],
+        "adapters": [
+            {"ifname": "wlxUSBOLD", "supports_ap": True, "supports_5ghz": True, "supports_80mhz": True, "bus": "usb"},
+            {"ifname": "wlp8s0", "supports_ap": True, "supports_5ghz": True, "supports_80mhz": True, "bus": "pci"},
+        ],
         "recommended": "wlp8s0",
     }
 
-    monkeypatch.setattr(lifecycle, "get_adapters", lambda: inv_pci_only)
+    monkeypatch.setattr(
+        lifecycle,
+        "get_adapters",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("reselection re-probed adapter inventory")
+        ),
+    )
     monkeypatch.setattr(lifecycle.time, "sleep", lambda _s: None)
 
     def fake_exists(path: str) -> bool:
+        path = str(path)
         if path.endswith("/sys/class/net/wlxUSBOLD"):
             return False
         if path.endswith("/sys/class/net/wlp8s0"):
@@ -303,15 +319,70 @@ def test_reselect_adapter_keeps_usb_when_only_pci_available(monkeypatch):
         band_pref="5ghz",
         inv=inv_initial,
         adapter=inv_initial["adapters"][0],
+        host_facts_snapshot=_HOST_FACTS_SNAPSHOT,
         platform_is_pop=True,
         prep_warnings=["ap_iface_not_up_post_driver_reload"],
     )
 
     assert ap_ifname == "wlxUSBOLD"
-    assert inv_out["recommended"] == "wlxUSBOLD"
+    assert inv_out is inv_initial
+    assert inv_out["recommended"] == "wlp8s0"
     assert adapter_out and adapter_out.get("ifname") == "wlxUSBOLD"
     assert "ap_adapter_reselect_usb_missing_after_reload" in warnings
     assert not any("->wlp8s0" in w for w in warnings)
+
+
+def test_reselect_adapter_rejects_snapshot_active_uplink(monkeypatch):
+    import vr_hotspotd.lifecycle as lifecycle
+
+    snapshot = make_host_facts_snapshot(
+        operation_kind="lifecycle_start",
+        default_uplink_interface="wlxUPLINK",
+    )
+    inv = {
+        "adapters": [
+            {
+                "ifname": "wlxOLD",
+                "supports_ap": True,
+                "supports_5ghz": True,
+                "supports_80mhz": True,
+                "bus": "usb",
+            },
+            {
+                "ifname": "wlxUPLINK",
+                "supports_ap": True,
+                "supports_5ghz": True,
+                "supports_80mhz": True,
+                "bus": "usb",
+            },
+        ],
+        "recommended": "wlxUPLINK",
+    }
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        lifecycle.os.path,
+        "exists",
+        lambda path: str(path).endswith("/sys/class/net/wlxUPLINK"),
+    )
+    monkeypatch.setattr(
+        lifecycle,
+        "get_adapters",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("reselection re-probed adapter inventory")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="^ap_adapter_is_active_uplink$"):
+        lifecycle._maybe_reselect_ap_after_prestart_failure(
+            ap_ifname="wlxOLD",
+            preferred_ifname="wlxOLD",
+            band_pref="5ghz",
+            inv=inv,
+            adapter=inv["adapters"][0],
+            host_facts_snapshot=snapshot,
+            platform_is_pop=True,
+            prep_warnings=["ap_iface_not_up_post_driver_reload"],
+        )
 
 
 def test_virtual_iface_missing_signal_detects_x0_cannot_find_device():
@@ -400,9 +471,16 @@ def test_parent_iface_missing_signal_detects_cannot_find_parent_iface():
     assert lifecycle._lines_have_parent_iface_missing_signal(lines, "wlx7419f816af4c") is True
 
 
-def test_start_5ghz_strict_reselects_iface_after_no_virt_parent_missing(
+@pytest.mark.parametrize(
+    ("active_uplink_interface", "expected_code"),
+    (("enp4s0", "started"), ("wlxNEW", "ap_adapter_is_active_uplink")),
+    ids=("safe_reselection", "active_uplink_reselection"),
+)
+def test_start_5ghz_strict_reselection_uses_snapshot_uplink_guard(
     monkeypatch,
     mock_missing_system_commands,
+    active_uplink_interface,
+    expected_code,
 ):
     import vr_hotspotd.lifecycle as lifecycle
 
@@ -487,6 +565,20 @@ def test_start_5ghz_strict_reselects_iface_after_no_virt_parent_missing(
     def fake_build_cmd_nat(**kwargs):
         return [f"if={kwargs.get('ap_ifname')}", f"no_virt={kwargs.get('no_virt')}"]
 
+    operation_snapshot = make_host_facts_snapshot(
+        operation_kind="lifecycle_start",
+        default_uplink_interface=active_uplink_interface,
+    )
+
+    def fake_reselect(**kwargs):
+        assert kwargs["host_facts_snapshot"] is operation_snapshot
+        return (
+            "wlxNEW",
+            inv,
+            inv["adapters"][1],
+            ["ap_adapter_reselected_after_reload:wlxOLD->wlxNEW"],
+        )
+
     monkeypatch.setattr(lifecycle.wifi_probe, "probe", lambda *_args, **_kwargs: probe_payload)
     monkeypatch.setattr(lifecycle, "_attempt_start_candidate", fake_attempt_start_candidate)
     monkeypatch.setattr(lifecycle, "build_cmd_nat", fake_build_cmd_nat)
@@ -499,12 +591,17 @@ def test_start_5ghz_strict_reselects_iface_after_no_virt_parent_missing(
     monkeypatch.setattr(lifecycle.system_tuning, "apply_runtime", lambda *_args, **_kwargs: ({}, []))
     monkeypatch.setattr(lifecycle.network_tuning, "apply", lambda *_args, **_kwargs: ({}, []))
     monkeypatch.setattr(lifecycle, "_watchdog_enabled", lambda _cfg: False)
-    monkeypatch.setattr(lifecycle, "_maybe_reselect_ap_after_prestart_failure", lambda **_kwargs: ("wlxNEW", inv, inv["adapters"][1], ["ap_adapter_reselected_after_reload:wlxOLD->wlxNEW"]))
+    monkeypatch.setattr(
+        lifecycle,
+        "_maybe_reselect_ap_after_prestart_failure",
+        fake_reselect,
+    )
     monkeypatch.setattr(lifecycle.os.path, "exists", lambda p: not p.endswith("/sys/class/net/wlxOLD"))
 
     res = lifecycle._start_hotspot_5ghz_strict(
         cfg={"watchdog_enable": False},
         inv=inv,
+        host_facts_snapshot=operation_snapshot,
         ap_ifname="wlxOLD",
         target_phy="phy9",
         ssid="VR-Hotspot",
@@ -535,9 +632,14 @@ def test_start_5ghz_strict_reselects_iface_after_no_virt_parent_missing(
         pop_timeout_retry_no_virt=True,
     )
 
-    assert res.code == "started"
+    assert res.code == expected_code
     assert "ap_parent_iface_missing_reselect" in state.get("warnings", [])
-    assert "ap_adapter_reselected_after_reload:wlxOLD->wlxNEW" in state.get("warnings", [])
+    if expected_code == "started":
+        assert call_n["n"] == 3
+        assert "ap_adapter_reselected_after_reload:wlxOLD->wlxNEW" in state.get("warnings", [])
+    else:
+        assert call_n["n"] == 2
+        assert state["last_error"] == "ap_adapter_is_active_uplink"
 
 
 def test_start_5ghz_strict_retries_after_parent_missing_even_when_iface_name_unchanged(
@@ -647,6 +749,7 @@ def test_start_5ghz_strict_retries_after_parent_missing_even_when_iface_name_unc
     res = lifecycle._start_hotspot_5ghz_strict(
         cfg={"watchdog_enable": False},
         inv=inv,
+        host_facts_snapshot=_HOST_FACTS_SNAPSHOT,
         ap_ifname="wlxOLD",
         target_phy="phy9",
         ssid="VR-Hotspot",
@@ -781,6 +884,7 @@ def test_start_5ghz_strict_pop_degrades_probe_errors_and_uses_default_candidates
     res = lifecycle._start_hotspot_5ghz_strict(
         cfg={"watchdog_enable": False},
         inv=inv,
+        host_facts_snapshot=_HOST_FACTS_SNAPSHOT,
         ap_ifname="wlx7419f816af4c",
         target_phy="phy9",
         ssid="VR-Hotspot",
@@ -856,6 +960,7 @@ def test_start_5ghz_strict_non_pop_keeps_probe_errors_fatal(monkeypatch):
     res = lifecycle._start_hotspot_5ghz_strict(
         cfg={"watchdog_enable": False},
         inv=inv,
+        host_facts_snapshot=_HOST_FACTS_SNAPSHOT,
         ap_ifname="wlx7419f816af4c",
         target_phy="phy9",
         ssid="VR-Hotspot",
@@ -985,6 +1090,7 @@ def test_start_5ghz_strict_retries_no_virt_when_virtual_iface_missing(
     res = lifecycle._start_hotspot_5ghz_strict(
         cfg={"watchdog_enable": False},
         inv=inv,
+        host_facts_snapshot=_HOST_FACTS_SNAPSHOT,
         ap_ifname="wlx7419f816af4c",
         target_phy="phy9",
         ssid="VR-Hotspot",
@@ -1113,6 +1219,7 @@ def test_start_5ghz_strict_pop_timeout_retry_handles_hostapd_early_exit(
     res = lifecycle._start_hotspot_5ghz_strict(
         cfg={"watchdog_enable": False},
         inv=inv,
+        host_facts_snapshot=_HOST_FACTS_SNAPSHOT,
         ap_ifname="wlx7419f816af4c",
         target_phy="phy9",
         ssid="VR-Hotspot",

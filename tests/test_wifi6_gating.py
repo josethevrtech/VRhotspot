@@ -8,6 +8,7 @@ import pytest
 
 import vr_hotspotd.lifecycle as lifecycle
 from vr_hotspotd.state import DEFAULT_STATE
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
 
 
 def _state_helpers():
@@ -52,7 +53,16 @@ def _stubbed_env(cfg, supports_wifi6):
         stack.enter_context(patch.object(lifecycle, "update_state", update_state))
         stack.enter_context(patch.object(lifecycle, "load_config", lambda: cfg))
         stack.enter_context(patch.object(lifecycle, "ensure_config_file", lambda: None))
-        stack.enter_context(patch.object(lifecycle, "_repair_impl", lambda correlation_id="repair": state))
+        stack.enter_context(
+            patch.object(
+                lifecycle,
+                "build_host_facts_snapshot",
+                lambda *, operation_kind: make_host_facts_snapshot(
+                    operation_kind=operation_kind,
+                ),
+            )
+        )
+        stack.enter_context(patch.object(lifecycle, "_repair_impl", lambda **_kwargs: state))
         stack.enter_context(patch.object(lifecycle, "_maybe_set_regdom", lambda *_args, **_kwargs: None))
         stack.enter_context(
             patch.object(
@@ -97,7 +107,7 @@ def _stubbed_env(cfg, supports_wifi6):
             patch.object(
                 lifecycle,
                 "get_adapters",
-                lambda: {
+                lambda *, host_facts_snapshot: {
                     "recommended": "wlan0",
                     "adapters": [
                         {

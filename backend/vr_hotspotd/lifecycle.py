@@ -26,6 +26,8 @@ from vr_hotspotd.engine.hostapd_bridge_cmd import build_cmd_bridge
 from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running, get_tails
 from vr_hotspotd.engine.channel_scan import select_best_channel
 from vr_hotspotd.engine.tx_power import auto_adjust_tx_power, set_tx_power, get_tx_power
+from vr_hotspotd.host_facts import HostFactsSnapshot
+from vr_hotspotd.host_facts_builder import build_host_facts_snapshot
 from vr_hotspotd import (
     host_probes,
     network_tuning,
@@ -204,6 +206,7 @@ _COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
 _CMD_TIMEOUT_S = 2.5
 _NM_IWD_CONF_DIR = Path("/etc/NetworkManager/conf.d")
 _IWD_ASSOCIATION_ERROR = "ap_adapter_still_associated_iwd_autoconnect"
+_DEFAULT_UPLINK_UNKNOWN_ERROR = "default_uplink_unknown"
 
 
 def ensure_hostapd_ctrl_interface_dir(conf_path: str) -> None:
@@ -1077,6 +1080,53 @@ def _prepare_ap_interface(
     return warnings
 
 
+def _snapshot_default_uplink_is_known(snapshot: HostFactsSnapshot) -> bool:
+    """Return whether the snapshot conclusively identified or ruled out an uplink."""
+
+    facts = snapshot.default_uplink
+    probe_id = facts.source_probe_id
+    if any(error.probe_id == probe_id for error in snapshot.probe_errors):
+        return False
+    if facts.selected_interface:
+        return True
+    if facts.routes:
+        # A default route without a parseable interface is not a known-safe
+        # absence; lifecycle cannot prove that the AP role is separate.
+        return False
+    return any(
+        record.probe_id == probe_id
+        and record.exit_status == 0
+        and not record.timed_out
+        and not record.missing
+        and not record.permission_denied
+        and not record.output_truncated
+        for record in snapshot.probe_records
+    )
+
+
+def _snapshot_uplink_guard_error(
+    snapshot: HostFactsSnapshot,
+    ap_ifname: Optional[str],
+) -> Optional[str]:
+    """Evaluate AP/uplink role safety from one immutable operation snapshot."""
+
+    active_uplink = snapshot.default_uplink.selected_interface
+    if ap_ifname and active_uplink and ap_ifname == active_uplink:
+        return ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
+    if not _snapshot_default_uplink_is_known(snapshot):
+        return _DEFAULT_UPLINK_UNKNOWN_ERROR
+    return None
+
+
+def _assert_snapshot_ap_adapter_is_safe(
+    snapshot: HostFactsSnapshot,
+    ap_ifname: Optional[str],
+) -> None:
+    error = _snapshot_uplink_guard_error(snapshot, ap_ifname)
+    if error:
+        raise RuntimeError(error)
+
+
 def _maybe_reselect_ap_after_prestart_failure(
     *,
     ap_ifname: str,
@@ -1084,12 +1134,14 @@ def _maybe_reselect_ap_after_prestart_failure(
     band_pref: str,
     inv: Dict[str, Any],
     adapter: Optional[Dict[str, Any]],
+    host_facts_snapshot: HostFactsSnapshot,
     platform_is_pop: bool,
     prep_warnings: List[str],
 ) -> Tuple[str, Dict[str, Any], Optional[Dict[str, Any]], List[str]]:
     """
-    On Pop!_OS, driver reload can cause USB wlan ifnames to change/disappear.
-    Re-discover adapters and select the current AP-capable iface.
+    On Pop!_OS, driver reload can cause USB wlan ifnames to disappear. Only
+    adapters from the operation snapshot remain eligible after mutation; a new
+    interface name requires a new start operation and a new snapshot.
     """
     warnings: List[str] = []
     if not platform_is_pop or not ap_ifname:
@@ -1136,6 +1188,7 @@ def _maybe_reselect_ap_after_prestart_failure(
                 continue
             if require_bus and str(item.get("bus") or "").strip().lower() != require_bus:
                 continue
+            _assert_snapshot_ap_adapter_is_safe(host_facts_snapshot, cand)
             return cand, item
         return None, None
 
@@ -1144,12 +1197,9 @@ def _maybe_reselect_ap_after_prestart_failure(
     wait_usb = old_bus == "usb"
     scans = 12 if wait_usb else 1
     for _ in range(scans):
-        try:
-            inv_refreshed = get_adapters()
-        except Exception:
-            inv_refreshed = inv
-        inv_err = inv_refreshed.get("error") if isinstance(inv_refreshed, dict) else None
-        if inv_err and not (inv_refreshed or {}).get("adapters"):
+        inv_snapshot = inv
+        inv_err = inv_snapshot.get("error") if isinstance(inv_snapshot, dict) else None
+        if inv_err and not (inv_snapshot or {}).get("adapters"):
             if wait_usb:
                 time.sleep(0.5)
                 continue
@@ -1157,11 +1207,11 @@ def _maybe_reselect_ap_after_prestart_failure(
             return ap_ifname, inv, adapter, warnings
 
         require_bus = old_bus if wait_usb else None
-        candidate, new_adapter = _pick_candidate(inv_refreshed, require_bus=require_bus)
+        candidate, new_adapter = _pick_candidate(inv_snapshot, require_bus=require_bus)
         if candidate and new_adapter:
             if candidate != ap_ifname:
                 warnings.append(f"ap_adapter_reselected_after_reload:{ap_ifname}->{candidate}")
-            return candidate, inv_refreshed, new_adapter, warnings
+            return candidate, inv_snapshot, new_adapter, warnings
 
         if wait_usb:
             time.sleep(0.5)
@@ -1170,17 +1220,6 @@ def _maybe_reselect_ap_after_prestart_failure(
     if wait_usb:
         warnings.append("ap_adapter_reselect_usb_missing_after_reload")
         return ap_ifname, inv, adapter, warnings
-
-    try:
-        inv_refreshed = get_adapters()
-        candidate = _normalize_ap_adapter(ap_ifname, inv_refreshed)
-        if not candidate:
-            return ap_ifname, inv, adapter, warnings
-        new_adapter = _get_adapter(inv_refreshed, candidate)
-        if new_adapter and new_adapter.get("supports_ap"):
-            return candidate, inv_refreshed, new_adapter, warnings
-    except Exception as exc:
-        warnings.append(f"ap_adapter_reselect_failed:{exc}")
     return ap_ifname, inv, adapter, warnings
 
 
@@ -1799,6 +1838,7 @@ def _start_hotspot_5ghz_strict(
     *,
     cfg: Dict[str, Any],
     inv: Dict[str, Any],
+    host_facts_snapshot: HostFactsSnapshot,
     ap_ifname: str,
     target_phy: Optional[str],
     ssid: str,
@@ -1829,12 +1869,11 @@ def _start_hotspot_5ghz_strict(
     iface_up_grace_s: float = 0.0,
     ap_ready_nohint_retry_s: float = 0.0,
     pop_timeout_retry_no_virt: bool = False,
-    active_uplink_interface: Optional[str] = None,
 ) -> LifecycleResult:
     attempts: List[Dict[str, Any]] = []
+    active_uplink_interface = host_facts_snapshot.default_uplink.selected_interface
 
-    def _active_uplink_reselection_failure() -> LifecycleResult:
-        last_error = ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
+    def _uplink_safety_failure(last_error: str) -> LifecycleResult:
         warnings = list(start_warnings)
         warnings.extend(_safe_revert_tuning(tuning_state))
         state = update_state(
@@ -2012,12 +2051,6 @@ def _start_hotspot_5ghz_strict(
     res_final = None
     selected_candidate: Optional[Dict[str, Any]] = None
 
-    # Defensive guard: if caller missed passing the Pop!_OS flag, detect here
-    # so iface-busy retries still prefer no-virt mode.
-    if (not pop_timeout_retry_no_virt) and os_release.is_pop_os():
-        pop_timeout_retry_no_virt = True
-        start_warnings.append("platform_pop_retry_no_virt_autodetected")
-
     def _expected_ifname(no_virt: bool, force_hostapd_nat: bool = False) -> Optional[str]:
         if use_hostapd_nat or force_hostapd_nat or bridge_mode:
             return ap_ifname if no_virt else _virt_ap_ifname(ap_ifname)
@@ -2122,17 +2155,28 @@ def _start_hotspot_5ghz_strict(
         if prestart_missing_reselect:
             start_warnings.append("ap_iface_missing_prestart")
             old_ifname = ap_ifname
-            ap_ifname, inv, adapter_now, reselect_warnings = _maybe_reselect_ap_after_prestart_failure(
-                ap_ifname=ap_ifname,
-                preferred_ifname=cfg.get("ap_adapter") if isinstance(cfg.get("ap_adapter"), str) else None,
-                band_pref="5ghz",
-                inv=inv,
-                adapter=_get_adapter(inv, old_ifname),
-                platform_is_pop=True,
-                prep_warnings=["ap_iface_not_up_prestart"],
-            )
-            if active_uplink_interface and ap_ifname == active_uplink_interface:
-                return _active_uplink_reselection_failure()
+            try:
+                ap_ifname, inv, adapter_now, reselect_warnings = _maybe_reselect_ap_after_prestart_failure(
+                    ap_ifname=ap_ifname,
+                    preferred_ifname=cfg.get("ap_adapter") if isinstance(cfg.get("ap_adapter"), str) else None,
+                    band_pref="5ghz",
+                    inv=inv,
+                    adapter=_get_adapter(inv, old_ifname),
+                    host_facts_snapshot=host_facts_snapshot,
+                    platform_is_pop=True,
+                    prep_warnings=["ap_iface_not_up_prestart"],
+                )
+            except RuntimeError as exc:
+                error = str(exc)
+                if error in (
+                    ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK,
+                    _DEFAULT_UPLINK_UNKNOWN_ERROR,
+                ):
+                    return _uplink_safety_failure(error)
+                raise
+            guard_error = _snapshot_uplink_guard_error(host_facts_snapshot, ap_ifname)
+            if guard_error:
+                return _uplink_safety_failure(guard_error)
             if reselect_warnings:
                 start_warnings.extend(reselect_warnings)
             if ap_ifname != old_ifname:
@@ -2252,17 +2296,28 @@ def _start_hotspot_5ghz_strict(
                     start_warnings.append("ap_parent_iface_missing_reselect")
                     _cleanup_attempt()
                     old_ifname = ap_ifname
-                    ap_ifname, inv, adapter_now, reselect_warnings = _maybe_reselect_ap_after_prestart_failure(
-                        ap_ifname=ap_ifname,
-                        preferred_ifname=cfg.get("ap_adapter") if isinstance(cfg.get("ap_adapter"), str) else None,
-                        band_pref="5ghz",
-                        inv=inv,
-                        adapter=_get_adapter(inv, old_ifname),
-                        platform_is_pop=True,
-                        prep_warnings=["ap_iface_not_up_post_driver_reload"],
-                    )
-                    if active_uplink_interface and ap_ifname == active_uplink_interface:
-                        return _active_uplink_reselection_failure()
+                    try:
+                        ap_ifname, inv, adapter_now, reselect_warnings = _maybe_reselect_ap_after_prestart_failure(
+                            ap_ifname=ap_ifname,
+                            preferred_ifname=cfg.get("ap_adapter") if isinstance(cfg.get("ap_adapter"), str) else None,
+                            band_pref="5ghz",
+                            inv=inv,
+                            adapter=_get_adapter(inv, old_ifname),
+                            host_facts_snapshot=host_facts_snapshot,
+                            platform_is_pop=True,
+                            prep_warnings=["ap_iface_not_up_post_driver_reload"],
+                        )
+                    except RuntimeError as exc:
+                        error = str(exc)
+                        if error in (
+                            ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK,
+                            _DEFAULT_UPLINK_UNKNOWN_ERROR,
+                        ):
+                            return _uplink_safety_failure(error)
+                        raise
+                    guard_error = _snapshot_uplink_guard_error(host_facts_snapshot, ap_ifname)
+                    if guard_error:
+                        return _uplink_safety_failure(guard_error)
                     if reselect_warnings:
                         start_warnings.extend(reselect_warnings)
                     # Retry once more after parent-iface recovery even when the
@@ -3513,7 +3568,13 @@ def repair(correlation_id: str = "repair"):
         return _repair_impl(correlation_id=correlation_id)
 
 
-def _repair_impl(correlation_id: str = "repair"):
+def _repair_impl(
+    correlation_id: str = "repair",
+    *,
+    host_facts_snapshot: Optional[HostFactsSnapshot] = None,
+    inventory: Optional[Dict[str, Any]] = None,
+    platform_is_pop: Optional[bool] = None,
+):
     cfg = load_config()
     fw_cfg = _build_firewalld_cfg(cfg)
 
@@ -3526,7 +3587,12 @@ def _repair_impl(correlation_id: str = "repair"):
     removed_conf_dirs: List[str] = []
 
     try:
-        inv = get_adapters()
+        if isinstance(inventory, dict):
+            inv = inventory
+        elif host_facts_snapshot is not None:
+            inv = get_adapters(host_facts_snapshot=host_facts_snapshot)
+        else:
+            inv = get_adapters()
         preferred = cfg.get("ap_adapter")
         if preferred and isinstance(preferred, str) and preferred.strip():
             ap_ifname = _normalize_ap_adapter(preferred.strip(), inv)
@@ -3543,7 +3609,8 @@ def _repair_impl(correlation_id: str = "repair"):
     try:
         # Pop!_OS USB adapters can re-enumerate PHYs; stale virtual AP ifaces on
         # old PHYs can poison subsequent starts, so clean across all PHYs there.
-        cleanup_phy = None if os_release.is_pop_os() else target_phy
+        is_pop = os_release.is_pop_os() if platform_is_pop is None else platform_is_pop
+        cleanup_phy = None if is_pop else target_phy
         removed_ifaces = _cleanup_virtual_ap_ifaces(target_phy=cleanup_phy)
     except Exception:
         removed_ifaces = []
@@ -3590,6 +3657,25 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     state = load_state()
     if state.get("phase") in ("starting", "running") and is_running():
         return LifecycleResult("already_running", state)
+
+    try:
+        host_facts_snapshot = build_host_facts_snapshot(
+            operation_kind="lifecycle_start",
+        )
+        if not isinstance(host_facts_snapshot, HostFactsSnapshot):
+            raise TypeError("snapshot builder returned an unexpected value")
+    except Exception:
+        err = "host_facts_snapshot_unavailable"
+        state = update_state(
+            phase="error",
+            running=False,
+            ap_interface=None,
+            last_op="start",
+            last_error=err,
+            last_correlation_id=correlation_id,
+            engine={"last_error": err, "ap_logs_tail": []},
+        )
+        return LifecycleResult("start_failed", state)
 
     state = update_state(
         phase="starting",
@@ -3709,7 +3795,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     nm_remediation_error: Optional[str] = None
     prestart_warnings: List[str] = []
     try:
-        inv = get_adapters()
+        inv = get_adapters(host_facts_snapshot=host_facts_snapshot)
         inv_error = inv.get("error")
         if inv_error and not inv.get("adapters"):
             raise RuntimeError(inv_error)
@@ -3745,14 +3831,18 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         if not a or not a.get("supports_ap"):
             raise RuntimeError("no_ap_capable_adapter_found")
 
-        active_uplink_interface = host_probes.probe_default_uplink()
-        if active_uplink_interface and ap_ifname == active_uplink_interface:
-            raise RuntimeError(ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK)
+        active_uplink_interface = host_facts_snapshot.default_uplink.selected_interface
+        _assert_snapshot_ap_adapter_is_safe(host_facts_snapshot, ap_ifname)
 
         # All host mutation stays behind the active-uplink role guard. Repair
         # can stop engines, revert tuning/firewall state, and remove virtual
         # interfaces, so it must not run until the selected AP role is safe.
-        _repair_impl(correlation_id=correlation_id)
+        _repair_impl(
+            correlation_id=correlation_id,
+            host_facts_snapshot=host_facts_snapshot,
+            inventory=inv,
+            platform_is_pop=platform_is_pop,
+        )
         state = update_state(
             phase="starting",
             last_op="start",
@@ -3858,11 +3948,11 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 band_pref=bp,
                 inv=inv,
                 adapter=a,
+                host_facts_snapshot=host_facts_snapshot,
                 platform_is_pop=platform_is_pop,
                 prep_warnings=prep_warnings,
             )
-            if active_uplink_interface and ap_ifname == active_uplink_interface:
-                raise RuntimeError(ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK)
+            _assert_snapshot_ap_adapter_is_safe(host_facts_snapshot, ap_ifname)
             if reselect_warnings:
                 prestart_warnings.extend(reselect_warnings)
             if ap_ifname != old_ifname:
@@ -3912,8 +4002,12 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             ERROR_NM_INTERFACE_MANAGED,
             _IWD_ASSOCIATION_ERROR,
             ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK,
+            _DEFAULT_UPLINK_UNKNOWN_ERROR,
         ):
-            if err == ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK:
+            if err in (
+                ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK,
+                _DEFAULT_UPLINK_UNKNOWN_ERROR,
+            ):
                 context = {
                     "ap_adapter": ap_ifname,
                     "active_uplink_interface": active_uplink_interface,
@@ -4071,7 +4165,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             iface_up_grace_s=iface_up_grace_s,
             ap_ready_nohint_retry_s=ap_ready_nohint_retry_s,
             pop_timeout_retry_no_virt=platform_is_pop,
-            active_uplink_interface=active_uplink_interface,
+            host_facts_snapshot=host_facts_snapshot,
         )
 
     # Attempt 1: requested band

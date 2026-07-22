@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import vr_hotspotd.lifecycle as lifecycle
 from vr_hotspotd.state import DEFAULT_STATE
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
 
 
 def _state_helpers():
@@ -31,7 +32,14 @@ def _stubbed_env(monkeypatch, cfg, ap_ready_returns, fallback_candidates=None):
     monkeypatch.setattr(lifecycle, "update_state", update_state)
     monkeypatch.setattr(lifecycle, "load_config", lambda: cfg)
     monkeypatch.setattr(lifecycle, "ensure_config_file", lambda: None)
-    monkeypatch.setattr(lifecycle, "_repair_impl", lambda correlation_id="repair": state)
+    monkeypatch.setattr(
+        lifecycle,
+        "build_host_facts_snapshot",
+        lambda *, operation_kind: make_host_facts_snapshot(
+            operation_kind=operation_kind,
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "_repair_impl", lambda **_kwargs: state)
     monkeypatch.setattr(lifecycle, "_maybe_set_regdom", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(lifecycle, "_iface_is_up", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(lifecycle, "_iw_dev_info", lambda *_args, **_kwargs: "")
@@ -81,7 +89,7 @@ def _stubbed_env(monkeypatch, cfg, ap_ready_returns, fallback_candidates=None):
     monkeypatch.setattr(
         lifecycle,
         "get_adapters",
-        lambda: {
+        lambda *, host_facts_snapshot: {
             "recommended": "wlan0",
             "adapters": [
                 {

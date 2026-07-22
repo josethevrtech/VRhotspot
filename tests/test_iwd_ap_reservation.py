@@ -4,6 +4,8 @@ import sys
 
 import pytest
 
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
+
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
 
@@ -120,7 +122,14 @@ def test_steamos_iwd_still_associated_fails_with_clear_error(
     monkeypatch.setattr(lifecycle, "ensure_config_file", lambda: None)
     monkeypatch.setattr(lifecycle, "load_state", lambda: {"phase": "stopped"})
     monkeypatch.setattr(lifecycle, "is_running", lambda: False)
-    monkeypatch.setattr(lifecycle, "_repair_impl", lambda correlation_id="start": {})
+    monkeypatch.setattr(
+        lifecycle,
+        "build_host_facts_snapshot",
+        lambda *, operation_kind: make_host_facts_snapshot(
+            operation_kind=operation_kind,
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "_repair_impl", lambda **_kwargs: {})
     monkeypatch.setattr(lifecycle, "update_state", lambda **kwargs: states.append(kwargs) or kwargs)
     monkeypatch.setattr(
         lifecycle,
@@ -141,7 +150,7 @@ def test_steamos_iwd_still_associated_fails_with_clear_error(
     monkeypatch.setattr(
         lifecycle,
         "get_adapters",
-        lambda: {
+        lambda *, host_facts_snapshot: {
             "recommended": "wlan1",
             "adapters": [
                 {

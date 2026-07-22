@@ -1,6 +1,8 @@
 import os
 import sys
 
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
+
 
 # Add backend to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
@@ -17,14 +19,21 @@ def _common_start_mocks(monkeypatch, cfg):
         return dict(state)
 
     monkeypatch.setattr(lifecycle, "ensure_config_file", lambda: None)
-    monkeypatch.setattr(lifecycle, "_repair_impl", lambda correlation_id="start": None)
+    monkeypatch.setattr(
+        lifecycle,
+        "build_host_facts_snapshot",
+        lambda *, operation_kind: make_host_facts_snapshot(
+            operation_kind=operation_kind,
+        ),
+    )
+    monkeypatch.setattr(lifecycle, "_repair_impl", lambda **_kwargs: None)
     monkeypatch.setattr(lifecycle, "load_state", lambda: {"phase": "stopped"})
     monkeypatch.setattr(lifecycle, "update_state", fake_update_state)
     monkeypatch.setattr(lifecycle, "load_config", lambda: dict(cfg))
     monkeypatch.setattr(
         lifecycle,
         "get_adapters",
-        lambda: {
+        lambda *, host_facts_snapshot: {
             "adapters": [
                 {
                     "ifname": "wlan1",

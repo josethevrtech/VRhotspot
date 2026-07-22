@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
+
 
 # Add backend to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../backend")))
@@ -13,6 +15,20 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../b
 # Ensure fresh start
 if "vr_hotspotd.lifecycle" in sys.modules:
     del sys.modules["vr_hotspotd.lifecycle"]
+
+
+_HOST_FACTS_SNAPSHOT = make_host_facts_snapshot(operation_kind="lifecycle_start")
+
+
+@pytest.fixture(autouse=True)
+def _mock_lifecycle_host_facts_snapshot(monkeypatch):
+    from vr_hotspotd import lifecycle
+
+    monkeypatch.setattr(
+        lifecycle,
+        "build_host_facts_snapshot",
+        lambda *, operation_kind: _HOST_FACTS_SNAPSHOT,
+    )
 
 
 @pytest.mark.usefixtures("mock_missing_system_commands")
