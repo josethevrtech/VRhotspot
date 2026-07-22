@@ -1,9 +1,11 @@
 import json
 from collections import deque
+from dataclasses import replace
 
 import pytest
 
 from vr_hotspotd import config as config_module
+from vr_hotspotd import host_facts
 from vr_hotspotd import host_probes
 from vr_hotspotd.diagnostics import preflight_report
 from vr_hotspotd.policy import ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
@@ -100,6 +102,194 @@ READINESS = {
         }
     ],
 }
+
+
+def _host_facts_snapshot():
+    return host_facts.HostFactsSnapshot(
+        schema_version=1,
+        metadata=host_facts.SnapshotMetadata(
+            snapshot_id="preflight-snapshot-1",
+            operation_kind="diagnostics_preflight",
+            source="test",
+            started_at_utc="2026-07-22T12:00:00.000Z",
+            completed_at_utc="2026-07-22T12:00:00.050Z",
+            monotonic_duration_ms=50,
+            builder_version="1",
+        ),
+        platform=host_facts.PlatformFacts(
+            os_release=(
+                host_facts.OsReleaseFact(key="id", value="ubuntu"),
+                host_facts.OsReleaseFact(key="id_like", value="debian"),
+                host_facts.OsReleaseFact(
+                    key="pretty_name",
+                    value="Ubuntu 24.04 LTS",
+                ),
+                host_facts.OsReleaseFact(key="version_id", value="24.04"),
+            ),
+            os_id="ubuntu",
+            os_name="Ubuntu 24.04 LTS",
+            version_id="24.04",
+            variant_id=None,
+            id_like=("debian",),
+            flavor="ubuntu_debian",
+            family="debian",
+            package_manager_family="apt",
+            host_kind="mutable_linux",
+            is_immutable=False,
+            immutability_signals=(),
+            source_probe_id="platform.os_release",
+        ),
+        default_uplink=host_facts.DefaultUplinkFacts(
+            selected_interface="enp4s0",
+            routes=(
+                host_facts.DefaultRouteFact(
+                    interface="enp4s0",
+                    gateway="192.0.2.1",
+                    metric=100,
+                    protocol="dhcp",
+                ),
+            ),
+            source_probe_id="network.default_uplink",
+        ),
+        iw_dev=host_facts.IwDevFacts(
+            interfaces=(
+                host_facts.IwInterfaceFacts(
+                    ifname="wlan1",
+                    phy="phy1",
+                    interface_type="managed",
+                    ssid_present=False,
+                ),
+            ),
+            source_probe_id="iw.dev",
+        ),
+        iw_phys=(
+            host_facts.IwPhyFacts(
+                phy="phy1",
+                interface_modes_known=True,
+                supported_interface_modes=("managed", "AP"),
+                supports_ap=True,
+                supports_2ghz=True,
+                supports_5ghz=True,
+                supports_6ghz=False,
+                supports_80mhz=True,
+                supports_wifi6=True,
+                supports_ap_managed_concurrency=True,
+                frequencies=(),
+                source_probe_id="iw.phy.phy1",
+            ),
+        ),
+        regulatory=host_facts.RegulatoryFacts(
+            global_country="US",
+            global_raw_header=None,
+            phys=(
+                host_facts.RegulatoryDomainFacts(
+                    phy="phy1",
+                    country="US",
+                    source="kernel-managed",
+                    raw_header=None,
+                ),
+            ),
+            source_probe_id="iw.regulatory",
+        ),
+        network_manager=host_facts.NetworkManagerFacts(
+            binary_present=True,
+            nmcli_present=True,
+            nmcli_running=True,
+            service_state="active",
+            service_active=True,
+            source_probe_ids=(
+                "network_manager.nmcli",
+                "network_manager.service",
+            ),
+        ),
+        iwd=host_facts.IwdFacts(
+            binary_present=False,
+            iwctl_present=False,
+            service_state=None,
+            service_active=None,
+            associated_interfaces=(),
+            source_probe_ids=("iwd.service", "iw.dev"),
+        ),
+        firewall=host_facts.FirewallFacts(
+            backends=(
+                host_facts.FirewallBackendFacts(
+                    name="firewalld",
+                    tool_present=False,
+                    functional_active=False,
+                    service_state=None,
+                    service_active=None,
+                    variant=None,
+                    source_probe_ids=(),
+                ),
+                host_facts.FirewallBackendFacts(
+                    name="ufw",
+                    tool_present=False,
+                    functional_active=False,
+                    service_state=None,
+                    service_active=None,
+                    variant=None,
+                    source_probe_ids=(),
+                ),
+                host_facts.FirewallBackendFacts(
+                    name="nftables",
+                    tool_present=True,
+                    functional_active=None,
+                    service_state=None,
+                    service_active=None,
+                    variant=None,
+                    source_probe_ids=(),
+                ),
+                host_facts.FirewallBackendFacts(
+                    name="iptables",
+                    tool_present=True,
+                    functional_active=None,
+                    service_state=None,
+                    service_active=None,
+                    variant="iptables-nft",
+                    source_probe_ids=("firewall.iptables.version",),
+                ),
+            ),
+            selected_backend="nftables",
+            rationale="nft_present",
+        ),
+        adapters=(
+            host_facts.AdapterFacts(
+                ifname="wlan1",
+                phy="phy1",
+                interface_type="managed",
+                associated=False,
+                bus="usb",
+                supports_ap=True,
+                supports_2ghz=True,
+                supports_5ghz=True,
+                supports_6ghz=False,
+                supports_80mhz=True,
+                supports_wifi6=True,
+                regulatory_country="US",
+                regulatory_source="kernel-managed",
+                source_probe_ids=("iw.dev", "iw.phy.phy1", "iw.regulatory"),
+            ),
+        ),
+        probe_records=(),
+        probe_errors=(),
+    )
+
+
+def _patch_snapshot_collector_dependencies(monkeypatch, *, preflight_callback=None):
+    monkeypatch.setattr(preflight_report, "collect_platform_matrix", lambda: PLATFORM)
+    monkeypatch.setattr(preflight_report, "_collect_runtime_binaries", lambda: BINARIES)
+    monkeypatch.setattr(preflight_report, "get_adapters", lambda: INVENTORY)
+    monkeypatch.setattr(
+        preflight_report,
+        "build_readiness_model",
+        lambda _inventory: READINESS,
+    )
+    monkeypatch.setattr(
+        preflight_report.preflight,
+        "run",
+        preflight_callback
+        or (lambda _config, **_kwargs: {"errors": [], "warnings": [], "details": {}}),
+    )
 
 
 def _build(**overrides):
@@ -375,6 +565,26 @@ def test_non_conflicting_uplink_does_not_trigger_role_guard(
 
 def test_collector_uses_mocked_read_only_probe_results(monkeypatch):
     calls = []
+    snapshot = _host_facts_snapshot()
+    snapshot = replace(
+        snapshot,
+        regulatory=replace(
+            snapshot.regulatory,
+            global_country="CA",
+            phys=(
+                replace(
+                    snapshot.regulatory.phys[0],
+                    country="CA",
+                ),
+            ),
+        ),
+        adapters=(
+            replace(
+                snapshot.adapters[0],
+                regulatory_country="CA",
+            ),
+        ),
+    )
 
     monkeypatch.setattr(
         preflight_report,
@@ -382,66 +592,10 @@ def test_collector_uses_mocked_read_only_probe_results(monkeypatch):
         lambda: calls.append("platform") or PLATFORM,
     )
     monkeypatch.setattr(
-        preflight_report.host_probes,
-        "probe_firewall_backends",
-        lambda: calls.append("firewall") or FIREWALL,
+        preflight_report,
+        "_collect_runtime_binaries",
+        lambda: calls.append("binaries") or BINARIES,
     )
-    monkeypatch.setattr(
-        preflight_report.host_probes,
-        "probe_network_manager",
-        lambda: calls.append("network_manager")
-        or {"nmcli": True, "running": True},
-    )
-    monkeypatch.setattr(
-        preflight_report.host_probes,
-        "probe_iwd",
-        lambda: calls.append("iwd")
-        or {"present": False, "active": False, "status": "not_installed"},
-    )
-    monkeypatch.setattr(
-        preflight_report.supervisor,
-        "inspect_runtime_binaries",
-        lambda: calls.append("binaries")
-        or {
-            "hostapd": "/usr/sbin/hostapd",
-            "dnsmasq": "/usr/sbin/dnsmasq",
-            "selection_error": None,
-            "probe_environment": {},
-        },
-    )
-
-    def fail_engine_env(*_args, **_kwargs):
-        raise AssertionError("diagnostics called private lifecycle engine setup")
-
-    monkeypatch.setattr(
-        preflight_report.supervisor,
-        "_build_engine_env",
-        fail_engine_env,
-    )
-    monkeypatch.setattr(
-        preflight_report.preflight,
-        "probe_hostapd_capabilities",
-        lambda _path: {
-            "sae": True,
-            "he": True,
-            "raw": "hostapd v2.11\nSAE\nIEEE 802.11ax",
-        },
-    )
-    monkeypatch.setattr(
-        preflight_report.host_probes,
-        "run_command",
-        lambda argv, **_kwargs: host_probes.CommandResult(
-            argv=tuple(argv),
-            exit_status=0,
-            stdout="Dnsmasq version 2.90\n",
-        ),
-    )
-    monkeypatch.setattr(
-        preflight_report.supervisor,
-        "_stderr_tail",
-        deque(["existing supervisor stderr"]),
-    )
-    stderr_before = preflight_report.supervisor.get_tails()[1]
     monkeypatch.setattr(
         preflight_report,
         "get_adapters",
@@ -452,22 +606,43 @@ def test_collector_uses_mocked_read_only_probe_results(monkeypatch):
         "build_readiness_model",
         lambda inventory: calls.append(("readiness", inventory)) or READINESS,
     )
+
+    def fake_preflight(config, **kwargs):
+        calls.append(("preflight", config, kwargs))
+        assert kwargs["adapter"]["regdom"]["country"] == "CA"
+        return {"errors": [], "warnings": [], "details": {}}
+
+    monkeypatch.setattr(preflight_report.preflight, "run", fake_preflight)
+
+    def fail_snapshot_reprobe(*_args, **_kwargs):
+        raise AssertionError("collector ignored the injected host-facts snapshot")
+
+    monkeypatch.setattr(
+        preflight_report,
+        "build_host_facts_snapshot",
+        fail_snapshot_reprobe,
+    )
+    monkeypatch.setattr(
+        preflight_report.host_probes,
+        "probe_firewall_backends",
+        fail_snapshot_reprobe,
+    )
+    monkeypatch.setattr(
+        preflight_report.host_probes,
+        "probe_network_manager",
+        fail_snapshot_reprobe,
+    )
+    monkeypatch.setattr(preflight_report.host_probes, "probe_iwd", fail_snapshot_reprobe)
     monkeypatch.setattr(
         preflight_report.host_probes,
         "probe_default_uplink",
-        lambda: calls.append("uplink") or "enp4s0",
+        fail_snapshot_reprobe,
     )
     monkeypatch.setattr(
         preflight_report,
         "probe_ap_managed_concurrency",
-        lambda phy: calls.append(("concurrency", phy)) or True,
+        fail_snapshot_reprobe,
     )
-
-    def fake_preflight(config, **kwargs):
-        calls.append(("preflight", config, kwargs))
-        return {"errors": [], "warnings": [], "details": {}}
-
-    monkeypatch.setattr(preflight_report.preflight, "run", fake_preflight)
 
     report = preflight_report.collect_preflight_report(
         {
@@ -475,15 +650,235 @@ def test_collector_uses_mocked_read_only_probe_results(monkeypatch):
             "channel_width": "80",
             "enable_internet": True,
             "wpa2_passphrase": "must-not-be-reported",
-        }
+        },
+        host_facts_snapshot=snapshot,
     )
 
     assert report["overall_readiness"] == "ready"
     assert ("readiness", INVENTORY) in calls
-    assert ("concurrency", "phy1") in calls
+    assert report["network"]["active_uplink_interface"] == "enp4s0"
+    assert report["firewall"] == {
+        "backend": "nftables",
+        "status": "available",
+        "rationale": "nft_present",
+    }
+    assert (
+        report["wifi"]["adapters"][0]["capabilities"][
+            "supports_sta_ap_concurrency"
+        ]
+        is True
+    )
     assert any(call[0] == "preflight" for call in calls if isinstance(call, tuple))
     assert "must-not-be-reported" not in json.dumps(report)
-    assert preflight_report.supervisor.get_tails()[1] == stderr_before
+
+
+def test_snapshot_backed_collector_preserves_existing_report_projection(monkeypatch):
+    snapshot = _host_facts_snapshot()
+    built_for = []
+    config = {
+        "band_preference": "5ghz",
+        "channel_width": "80",
+        "allow_fallback_40mhz": False,
+        "enable_internet": True,
+    }
+    _patch_snapshot_collector_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        preflight_report,
+        "build_host_facts_snapshot",
+        lambda *, operation_kind: built_for.append(operation_kind) or snapshot,
+    )
+
+    actual = preflight_report.collect_preflight_report(config)
+    expected = _build(config=config)
+
+    assert actual == expected
+    assert built_for == ["diagnostics_preflight"]
+
+
+def test_partial_snapshot_failure_is_visible_and_prevents_confident_pass(monkeypatch):
+    snapshot = _host_facts_snapshot()
+    firewalld = replace(
+        snapshot.firewall.backends[0],
+        tool_present=True,
+        functional_active=None,
+    )
+    snapshot = replace(
+        snapshot,
+        firewall=replace(
+            snapshot.firewall,
+            backends=(firewalld, *snapshot.firewall.backends[1:]),
+        ),
+        probe_errors=(
+            host_facts.ProbeError(
+                probe_id="firewall.firewalld.functional",
+                kind="timeout",
+                message="read-only command timed out",
+                exit_status=124,
+            ),
+        ),
+    )
+    _patch_snapshot_collector_dependencies(monkeypatch)
+
+    report = preflight_report.collect_preflight_report(
+        {"enable_internet": True},
+        host_facts_snapshot=snapshot,
+    )
+
+    assert report["overall_readiness"] == "warning"
+    assert report["firewall"]["backend"] == "nftables"
+    assert report["evidence"]["raw_probe_results"]["firewall"]["firewalld"] == {
+        "available": True,
+        "active": False,
+    }
+    failure = {
+        "probe": "firewall.firewalld.functional",
+        "error": "timeout: read-only command timed out",
+    }
+    assert failure in report["evidence"]["probe_failures"]
+    assert any(
+        issue["code"] == "probe_unavailable" and issue["context"] == failure
+        for issue in report["issues"]
+    )
+
+
+def test_unknown_snapshot_uplink_and_firewall_remain_conservative(monkeypatch):
+    snapshot = _host_facts_snapshot()
+    snapshot = replace(
+        snapshot,
+        default_uplink=replace(
+            snapshot.default_uplink,
+            selected_interface=None,
+            routes=(),
+        ),
+        firewall=replace(
+            snapshot.firewall,
+            backends=tuple(
+                replace(
+                    backend,
+                    tool_present=False,
+                    functional_active=None,
+                    variant=None,
+                )
+                for backend in snapshot.firewall.backends
+            ),
+            selected_backend="unknown",
+            rationale="no_firewall_detected",
+        ),
+        probe_errors=(
+            host_facts.ProbeError(
+                probe_id="network.default_uplink",
+                kind="missing",
+                message="required tool is unavailable: ip",
+                exit_status=None,
+            ),
+            host_facts.ProbeError(
+                probe_id="firewall.firewalld.functional",
+                kind="missing",
+                message="required tool is unavailable: firewall-cmd",
+                exit_status=None,
+            ),
+        ),
+    )
+    _patch_snapshot_collector_dependencies(monkeypatch)
+
+    report = preflight_report.collect_preflight_report(
+        {"enable_internet": True},
+        host_facts_snapshot=snapshot,
+    )
+
+    issue_codes = {item["code"] for item in report["issues"]}
+    assert report["overall_readiness"] == "warning"
+    assert report["network"]["active_uplink_interface"] is None
+    assert report["firewall"] == {
+        "backend": "unknown",
+        "status": "not_detected",
+        "rationale": "no_firewall_detected",
+    }
+    assert "default_uplink_not_detected" in issue_codes
+    assert "firewall_backend_not_detected" in issue_codes
+    assert {item["probe"] for item in report["evidence"]["probe_failures"]} == {
+        "network.default_uplink",
+        "firewall.firewalld.functional",
+    }
+
+
+@pytest.mark.parametrize("failure_mode", ("malformed_phy", "missing_iw"))
+def test_unknown_snapshot_iw_facts_never_become_confident_pass(
+    monkeypatch,
+    failure_mode,
+):
+    snapshot = _host_facts_snapshot()
+    if failure_mode == "malformed_phy":
+        unknown_phy = replace(
+            snapshot.iw_phys[0],
+            interface_modes_known=False,
+            supported_interface_modes=(),
+            supports_ap=None,
+            supports_2ghz=None,
+            supports_5ghz=None,
+            supports_6ghz=None,
+            supports_80mhz=None,
+            supports_wifi6=None,
+            supports_ap_managed_concurrency=None,
+            frequencies=(),
+        )
+        unknown_adapter = replace(
+            snapshot.adapters[0],
+            supports_ap=None,
+            supports_2ghz=None,
+            supports_5ghz=None,
+            supports_6ghz=None,
+            supports_80mhz=None,
+            supports_wifi6=None,
+        )
+        snapshot = replace(
+            snapshot,
+            iw_phys=(unknown_phy,),
+            adapters=(unknown_adapter,),
+            probe_errors=(
+                host_facts.ProbeError(
+                    probe_id="iw.phy.phy1",
+                    kind="parse",
+                    message="supported interface mode facts were not found",
+                    exit_status=0,
+                ),
+            ),
+        )
+    else:
+        snapshot = replace(
+            snapshot,
+            iw_dev=replace(snapshot.iw_dev, interfaces=()),
+            iw_phys=(),
+            adapters=(),
+            probe_errors=(
+                host_facts.ProbeError(
+                    probe_id="iw.dev",
+                    kind="missing",
+                    message="required tool is unavailable: iw",
+                    exit_status=None,
+                ),
+            ),
+        )
+    _patch_snapshot_collector_dependencies(monkeypatch)
+
+    report = preflight_report.collect_preflight_report(
+        {"enable_internet": True},
+        host_facts_snapshot=snapshot,
+    )
+
+    issue_codes = {item["code"] for item in report["issues"]}
+    selected = report["wifi"]["selected_adapter_capabilities"]
+    assert report["overall_readiness"] == "blocked"
+    assert selected["ap_mode"] is None
+    assert selected["supports_5ghz"] is None
+    assert selected["supports_80mhz"] is None
+    assert "no_ap_capable_adapter" in issue_codes
+    assert "ap_mode_unknown" in issue_codes
+    assert report["evidence"]["probe_failures"][0]["probe"].startswith("iw.")
+    if failure_mode == "missing_iw":
+        assert "adapter_inventory_unavailable" in issue_codes
+    else:
+        assert "probe_unavailable" in issue_codes
 
 
 def test_runtime_binary_probe_uses_public_read_only_inspection(monkeypatch):
