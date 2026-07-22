@@ -1,4 +1,8 @@
+from dataclasses import replace
+
+from vr_hotspotd import host_facts
 from vr_hotspotd.adapters import readiness
+from tests.host_facts_snapshot_factory import make_host_facts_snapshot
 
 
 def _adapter(**overrides):
@@ -136,3 +140,239 @@ def test_adapter_missing_80mhz_is_not_recommended():
     assert adapter["basic_mode_visibility"]["reason"] == "missing_80mhz"
     assert "missing_80mhz" in adapter["reason_codes"]
     assert adapter["recommendation_score"] < _model([_adapter()])["adapters"][0]["recommendation_score"]
+
+
+def test_readiness_consumes_injected_host_facts_snapshot():
+    snapshot = make_host_facts_snapshot()
+
+    model = readiness.build_readiness_model(host_facts_snapshot=snapshot)
+
+    assert model["recommended"] == "wlan1"
+    assert model["basic_mode_recommended"] == "wlan1"
+    assert model["adapters"][0]["readiness_state"] == "good_for_vr"
+    assert model["adapters"][0]["supports_ap_mode"] is True
+
+
+def test_snapshot_readiness_matches_known_good_legacy_inventory():
+    snapshot = make_host_facts_snapshot()
+    legacy_inventory = {
+        "global_regdom": {
+            "country": "US",
+            "raw": "country US: DFS-FCC",
+        },
+        "recommended": "wlan1",
+        "adapters": [
+            {
+                "id": "wlan1",
+                "ifname": "wlan1",
+                "phy": "phy1",
+                "bus": "usb",
+                "supports_ap": True,
+                "supports_wifi6": True,
+                "supports_2ghz": True,
+                "supports_5ghz": True,
+                "supports_6ghz": False,
+                "supports_80mhz": True,
+                "regdom": {
+                    "country": "US",
+                    "source": "self-managed",
+                    "global_country": "US",
+                    "raw_phy": "country US: DFS-FCC",
+                    "raw_global": "country US: DFS-FCC",
+                },
+            }
+        ],
+    }
+
+    legacy = readiness.build_readiness_model(legacy_inventory)
+    snapshot_backed = readiness.build_readiness_model(
+        host_facts_snapshot=snapshot,
+    )
+
+    assert snapshot_backed == legacy
+
+
+def test_partial_phy_failure_cannot_produce_a_readiness_pass():
+    snapshot = make_host_facts_snapshot()
+    failed_phy = replace(
+        snapshot.iw_phys[0],
+        interface_modes_known=False,
+        supported_interface_modes=(),
+        supports_ap=None,
+        supports_2ghz=None,
+        supports_5ghz=None,
+        supports_6ghz=None,
+        supports_80mhz=None,
+        supports_wifi6=None,
+        supports_ap_managed_concurrency=None,
+        frequencies=(),
+    )
+    snapshot = replace(
+        snapshot,
+        iw_phys=(failed_phy,),
+        adapters=(
+            replace(
+                snapshot.adapters[0],
+                supports_ap=None,
+                supports_2ghz=None,
+                supports_5ghz=None,
+                supports_6ghz=None,
+                supports_80mhz=None,
+                supports_wifi6=None,
+            ),
+        ),
+        probe_errors=(
+            host_facts.ProbeError(
+                probe_id="iw.phy.phy1",
+                kind="timeout",
+                message="read-only command timed out",
+                exit_status=124,
+            ),
+        ),
+    )
+
+    model = readiness.build_readiness_model(host_facts_snapshot=snapshot)
+    adapter = model["adapters"][0]
+
+    assert model["recommended"] is None
+    assert model["basic_mode_recommended"] is None
+    assert adapter["supports_ap_mode"] is None
+    assert adapter["readiness_state"] == "unsupported"
+    assert adapter["recommendation_score"] <= 20
+    assert "ap_mode_unknown" in adapter["reason_codes"]
+
+
+def test_unknown_regulatory_facts_do_not_produce_good_readiness():
+    snapshot = make_host_facts_snapshot()
+    snapshot = replace(
+        snapshot,
+        regulatory=replace(
+            snapshot.regulatory,
+            global_country=None,
+            global_raw_header=None,
+            phys=(),
+        ),
+        adapters=(
+            replace(
+                snapshot.adapters[0],
+                regulatory_country=None,
+                regulatory_source=None,
+            ),
+        ),
+        probe_errors=(
+            host_facts.ProbeError(
+                probe_id="iw.regulatory",
+                kind="parse",
+                message="regulatory output contained no country facts",
+                exit_status=0,
+            ),
+        ),
+    )
+
+    model = readiness.build_readiness_model(host_facts_snapshot=snapshot)
+    adapter = model["adapters"][0]
+
+    assert model["basic_mode_recommended"] is None
+    assert adapter["readiness_state"] == "usable_with_limitations"
+    assert adapter["basic_mode_visibility"]["selectable"] is False
+    assert "regdom_global_or_unknown" in adapter["reason_codes"]
+
+
+def test_unknown_non_adapter_host_facts_are_not_projected_as_passes_or_scored():
+    snapshot = make_host_facts_snapshot()
+    baseline = readiness.build_readiness_model(host_facts_snapshot=snapshot)
+    unknown_firewall = replace(
+        snapshot.firewall,
+        backends=tuple(
+            replace(
+                backend,
+                functional_active=None,
+                service_state=None,
+                service_active=None,
+            )
+            for backend in snapshot.firewall.backends
+        ),
+        selected_backend="unknown",
+        rationale="no_firewall_detected",
+    )
+    snapshot = replace(
+        snapshot,
+        default_uplink=replace(
+            snapshot.default_uplink,
+            selected_interface=None,
+            routes=(),
+        ),
+        network_manager=replace(
+            snapshot.network_manager,
+            nmcli_running=None,
+            service_state=None,
+            service_active=None,
+        ),
+        iwd=replace(
+            snapshot.iwd,
+            service_state=None,
+            service_active=None,
+        ),
+        firewall=unknown_firewall,
+        probe_errors=(
+            host_facts.ProbeError(
+                probe_id="network.default_uplink",
+                kind="timeout",
+                message="read-only command timed out",
+                exit_status=124,
+            ),
+            host_facts.ProbeError(
+                probe_id="network_manager.nmcli",
+                kind="parse",
+                message="nmcli state unknown",
+                exit_status=0,
+            ),
+            host_facts.ProbeError(
+                probe_id="iwd.service",
+                kind="nonzero",
+                message="service state unknown",
+                exit_status=3,
+            ),
+            host_facts.ProbeError(
+                probe_id="firewall.firewalld.functional",
+                kind="permission",
+                message="firewall state unavailable",
+                exit_status=126,
+            ),
+        ),
+    )
+
+    model = readiness.build_readiness_model(host_facts_snapshot=snapshot)
+
+    assert model == baseline
+    serialized = repr(model)
+    assert "default_uplink" not in serialized
+    assert "network_manager" not in serialized
+    assert "iwd" not in serialized
+    assert "firewall" not in serialized
+
+
+def test_missing_iw_dev_snapshot_returns_existing_no_adapter_readiness_shape():
+    snapshot = make_host_facts_snapshot()
+    snapshot = replace(
+        snapshot,
+        iw_dev=replace(snapshot.iw_dev, interfaces=()),
+        iw_phys=(),
+        adapters=(),
+        probe_errors=(
+            host_facts.ProbeError(
+                probe_id="iw.dev",
+                kind="missing",
+                message="required tool is unavailable: iw",
+                exit_status=None,
+            ),
+        ),
+    )
+
+    model = readiness.build_readiness_model(host_facts_snapshot=snapshot)
+
+    assert model["recommended"] is None
+    assert model["basic_mode_recommended"] is None
+    assert model["adapters"] == []
+    assert model["summary"]["readiness_state"] == "unsupported"
+    assert model["summary"]["reason_codes"] == ["no_adapter_found"]
