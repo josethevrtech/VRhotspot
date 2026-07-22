@@ -6,19 +6,19 @@ so CLI, HTTP, support-bundle, and future UI callers can share one contract.
 
 from __future__ import annotations
 
+import copy
 import os
 import re
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from vr_hotspotd import host_probes, preflight
-from vr_hotspotd.adapters.inventory import (
-    get_adapters,
-    probe_ap_managed_concurrency,
-)
+from vr_hotspotd.adapters.inventory import get_adapters, probe_ap_managed_concurrency
 from vr_hotspotd.adapters.readiness import build_readiness_model
 from vr_hotspotd.config import DEFAULT_CONFIG
 from vr_hotspotd.diagnostics.platform import collect_platform_matrix
 from vr_hotspotd.engine import supervisor
+from vr_hotspotd.host_facts import HostFactsSnapshot, ProbeError
+from vr_hotspotd.host_facts_builder import build_host_facts_snapshot
 from vr_hotspotd.policy import ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
 from vr_hotspotd.vendor_paths import vendor_bin_dirs
 
@@ -272,6 +272,257 @@ def _normalize_probe_failures(value: Any) -> List[Dict[str, str]]:
     return failures
 
 
+def _unique_probe_failures(value: Any) -> List[Dict[str, str]]:
+    failures: List[Dict[str, str]] = []
+    seen = set()
+    for failure in _normalize_probe_failures(value):
+        key = (failure["probe"], failure["error"])
+        if key in seen:
+            continue
+        seen.add(key)
+        failures.append(failure)
+    return failures
+
+
+def _snapshot_probe_failure(error: ProbeError) -> Dict[str, str]:
+    return {
+        "probe": error.probe_id,
+        "error": f"{error.kind}: {error.message}",
+    }
+
+
+def _snapshot_probe_failures(snapshot: HostFactsSnapshot) -> List[Dict[str, str]]:
+    return [_snapshot_probe_failure(error) for error in snapshot.probe_errors]
+
+
+def _snapshot_warning_failures(snapshot: HostFactsSnapshot) -> List[Dict[str, str]]:
+    """Return failures that need a report warning in addition to evidence.
+
+    Missing optional tools and inactive service units are compatibility facts,
+    not by themselves reasons to downgrade a report.  They remain visible in
+    evidence.  Other failures can make a consumed fact indeterminate and keep
+    preflight from reporting a confident pass.
+    """
+
+    return [
+        _snapshot_probe_failure(error)
+        for error in snapshot.probe_errors
+        if error.kind != "missing" and not error.probe_id.endswith(".service")
+    ]
+
+
+def _snapshot_immutability_signal(snapshot: HostFactsSnapshot) -> str:
+    for signal in snapshot.platform.immutability_signals:
+        prefix, separator, value = signal.partition(":")
+        if separator and prefix == "tool" and value:
+            return value
+    return "unknown"
+
+
+def _snapshot_firewall_backends(snapshot: HostFactsSnapshot) -> Dict[str, Any]:
+    by_name = {item.name: item for item in snapshot.firewall.backends}
+
+    def backend(name: str) -> Any:
+        return by_name.get(name)
+
+    firewalld = backend("firewalld")
+    ufw = backend("ufw")
+    nftables = backend("nftables")
+    iptables = backend("iptables")
+    return {
+        "firewalld": {
+            "available": bool(firewalld and firewalld.tool_present),
+            "active": bool(
+                firewalld and firewalld.functional_active is True
+            ),
+        },
+        "ufw": {
+            "available": bool(ufw and ufw.tool_present),
+            "active": bool(ufw and ufw.functional_active is True),
+        },
+        "nftables": {
+            "available": bool(nftables and nftables.tool_present),
+        },
+        "iptables": {
+            "available": bool(iptables and iptables.tool_present),
+            "variant": iptables.variant if iptables is not None else None,
+        },
+        "selected_backend": snapshot.firewall.selected_backend,
+        "rationale": snapshot.firewall.rationale,
+    }
+
+
+def _snapshot_network_manager(snapshot: HostFactsSnapshot) -> Dict[str, Any]:
+    facts = snapshot.network_manager
+    present = bool(
+        facts.binary_present or facts.nmcli_present or facts.service_active is True
+    )
+    active = bool(facts.nmcli_running is True or facts.service_active is True)
+    return {
+        "present": present,
+        "active": active,
+        "running": facts.nmcli_running,
+        "status": facts.service_state or "unknown",
+        "nmcli": facts.nmcli_present,
+    }
+
+
+def _snapshot_iwd(snapshot: HostFactsSnapshot) -> Dict[str, Any]:
+    facts = snapshot.iwd
+    present = bool(
+        facts.binary_present or facts.iwctl_present or facts.service_active is True
+    )
+    active = facts.service_active is True
+    if not present:
+        status = "not_installed"
+    elif active:
+        status = "active"
+    else:
+        status = facts.service_state or "unknown"
+    return {
+        "present": present,
+        "active": active,
+        "status": status,
+        "iwctl": facts.iwctl_present,
+    }
+
+
+def _snapshot_platform_matrix(
+    snapshot: HostFactsSnapshot,
+    existing: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Overlay snapshot-owned facts while retaining non-snapshot debug fields."""
+
+    platform = copy.deepcopy(_as_dict(existing))
+    os_data = _as_dict(platform.get("os"))
+    os_data.update(
+        {
+            "pretty_name": snapshot.platform.os_name or "",
+            "id": snapshot.platform.os_id or "",
+            "version_id": snapshot.platform.version_id or "",
+            "variant_id": snapshot.platform.variant_id or "",
+            "id_like": list(snapshot.platform.id_like),
+        }
+    )
+    platform["os"] = os_data
+
+    immutability = _as_dict(platform.get("immutability"))
+    immutability.update(
+        {
+            "is_immutable": snapshot.platform.is_immutable is True,
+            "signal": _snapshot_immutability_signal(snapshot),
+        }
+    )
+    immutability.setdefault("writable_paths", {})
+    platform["immutability"] = immutability
+
+    integration = _as_dict(platform.get("integration"))
+    network_manager = _snapshot_network_manager(snapshot)
+    integration["network_manager"] = {
+        "present": network_manager["present"],
+        "active": network_manager["active"],
+        "nmcli": network_manager["nmcli"],
+    }
+    if "firewall" in integration:
+        firewall = _snapshot_firewall_backends(snapshot)
+        integration["firewall"] = {
+            "firewalld": {
+                "present": firewall["firewalld"]["available"],
+                "active": firewall["firewalld"]["active"],
+            },
+            "ufw": {
+                "present": firewall["ufw"]["available"],
+                "active": firewall["ufw"]["active"],
+            },
+            "nft": {"present": firewall["nftables"]["available"]},
+            "iptables": {"present": firewall["iptables"]["available"]},
+        }
+    platform["integration"] = integration
+    return platform
+
+
+def _snapshot_inventory(
+    snapshot: HostFactsSnapshot,
+    inventory: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Use snapshot facts without moving inventory scoring or selection policy."""
+
+    projected = copy.deepcopy(_as_dict(inventory))
+    facts_by_ifname = {item.ifname: item for item in snapshot.adapters}
+    regulatory_by_phy = {item.phy: item for item in snapshot.regulatory.phys}
+    adapters: List[Dict[str, Any]] = []
+    for raw_item in _as_list(projected.get("adapters")):
+        item = _as_dict(raw_item)
+        ifname = str(
+            item.get("ifname") or item.get("interface") or item.get("id") or ""
+        )
+        facts = facts_by_ifname.get(ifname)
+        if facts is None:
+            item.update(
+                {
+                    "phy": None,
+                    "bus": "unknown",
+                    "supports_ap": None,
+                    "supports_2ghz": None,
+                    "supports_5ghz": None,
+                    "supports_6ghz": None,
+                    "supports_80mhz": None,
+                    "supports_wifi6": None,
+                    "regdom": {
+                        "country": "unknown",
+                        "source": "unknown",
+                        "global_country": snapshot.regulatory.global_country
+                        or "unknown",
+                        "raw_phy": None,
+                        "raw_global": snapshot.regulatory.global_raw_header,
+                    },
+                }
+            )
+        else:
+            phy_regulatory = regulatory_by_phy.get(facts.phy or "")
+            item.update(
+                {
+                    "phy": facts.phy,
+                    "bus": facts.bus,
+                    "supports_ap": facts.supports_ap,
+                    "supports_2ghz": facts.supports_2ghz,
+                    "supports_5ghz": facts.supports_5ghz,
+                    "supports_6ghz": facts.supports_6ghz,
+                    "supports_80mhz": facts.supports_80mhz,
+                    "supports_wifi6": facts.supports_wifi6,
+                    "regdom": {
+                        "country": facts.regulatory_country or "unknown",
+                        "source": facts.regulatory_source or "unknown",
+                        "global_country": snapshot.regulatory.global_country
+                        or "unknown",
+                        "raw_phy": (
+                            phy_regulatory.raw_header
+                            if phy_regulatory is not None
+                            else None
+                        ),
+                        "raw_global": snapshot.regulatory.global_raw_header,
+                    },
+                }
+            )
+        adapters.append(item)
+
+    projected["adapters"] = adapters
+    projected["global_regdom"] = {
+        "country": snapshot.regulatory.global_country or "unknown",
+        "raw": snapshot.regulatory.global_raw_header,
+    }
+    if any(error.probe_id == "iw.dev" for error in snapshot.probe_errors):
+        projected.setdefault("error", "snapshot_iw_dev_unavailable")
+    return projected
+
+
+def _snapshot_concurrency(snapshot: HostFactsSnapshot) -> Dict[str, Optional[bool]]:
+    return {
+        item.phy: item.supports_ap_managed_concurrency
+        for item in snapshot.iw_phys
+    }
+
+
 def build_preflight_report(
     *,
     platform_matrix: Mapping[str, Any],
@@ -286,6 +537,7 @@ def build_preflight_report(
     existing_preflight: Optional[Mapping[str, Any]] = None,
     config: Optional[Mapping[str, Any]] = None,
     probe_failures: Optional[List[Mapping[str, Any]]] = None,
+    evidence_probe_failures: Optional[List[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build the v1 report from already-collected probe results only."""
 
@@ -410,7 +662,13 @@ def build_preflight_report(
     hostapd = _binary_view(_as_dict(binaries).get("hostapd"))
     dnsmasq = _binary_view(_as_dict(binaries).get("dnsmasq"))
     existing = _as_dict(existing_preflight)
-    failures = _normalize_probe_failures(probe_failures)
+    warning_failures = _normalize_probe_failures(probe_failures)
+    if evidence_probe_failures is None:
+        failures = warning_failures
+    else:
+        failures = _unique_probe_failures(
+            [*warning_failures, *_as_list(evidence_probe_failures)]
+        )
 
     issues: List[Dict[str, Any]] = []
     actions: List[Dict[str, str]] = []
@@ -449,7 +707,7 @@ def build_preflight_report(
             seen_actions.add(stable_code)
             actions.append({"code": stable_code, "message": action_message})
 
-    for failure in failures:
+    for failure in warning_failures:
         add_issue(
             "probe_unavailable",
             "warning",
@@ -735,38 +993,81 @@ def _safe_collect(
 
 def collect_preflight_report(
     config: Optional[Mapping[str, Any]] = None,
+    *,
+    host_facts_snapshot: Optional[HostFactsSnapshot] = None,
 ) -> Dict[str, Any]:
-    """Compose the existing read-only probes into the canonical report."""
+    """Compose one host-facts snapshot and the remaining read-only probes."""
 
     cfg: Dict[str, Any] = dict(DEFAULT_CONFIG)
     if isinstance(config, Mapping):
         cfg.update(config)
 
     failures: List[Dict[str, str]] = []
-    platform_matrix = _safe_collect(
+    snapshot = host_facts_snapshot
+    if snapshot is None:
+        snapshot = _safe_collect(
+            "host_facts_snapshot",
+            lambda: build_host_facts_snapshot(
+                operation_kind="diagnostics_preflight",
+            ),
+            None,
+            failures,
+        )
+    if snapshot is not None and not isinstance(snapshot, HostFactsSnapshot):
+        failures.append(
+            {
+                "probe": "host_facts_snapshot",
+                "error": "TypeError: snapshot builder returned an unexpected value",
+            }
+        )
+        snapshot = None
+
+    platform_matrix_base = _safe_collect(
         "platform",
         collect_platform_matrix,
         {},
         failures,
     )
-    firewall = _safe_collect(
-        "firewall",
-        host_probes.probe_firewall_backends,
-        {"selected_backend": "unknown", "rationale": "probe_failed"},
-        failures,
-    )
-    network_manager = _safe_collect(
-        "network_manager",
-        host_probes.probe_network_manager,
-        {"nmcli": False, "running": False},
-        failures,
-    )
-    iwd = _safe_collect(
-        "iwd",
-        host_probes.probe_iwd,
-        {"present": False, "active": False, "status": "unknown", "iwctl": False},
-        failures,
-    )
+    if snapshot is not None:
+        platform_matrix = _snapshot_platform_matrix(
+            snapshot,
+            _as_dict(platform_matrix_base),
+        )
+        firewall = _snapshot_firewall_backends(snapshot)
+        network_manager = _snapshot_network_manager(snapshot)
+        iwd = _snapshot_iwd(snapshot)
+        active_uplink: Optional[str] = snapshot.default_uplink.selected_interface
+    else:
+        platform_matrix = _as_dict(platform_matrix_base)
+        firewall = _safe_collect(
+            "firewall",
+            host_probes.probe_firewall_backends,
+            {"selected_backend": "unknown", "rationale": "probe_failed"},
+            failures,
+        )
+        network_manager = _safe_collect(
+            "network_manager",
+            host_probes.probe_network_manager,
+            {"nmcli": False, "running": False},
+            failures,
+        )
+        iwd = _safe_collect(
+            "iwd",
+            host_probes.probe_iwd,
+            {
+                "present": False,
+                "active": False,
+                "status": "unknown",
+                "iwctl": False,
+            },
+            failures,
+        )
+        active_uplink = _safe_collect(
+            "default_uplink",
+            host_probes.probe_default_uplink,
+            None,
+            failures,
+        )
     binaries = _safe_collect(
         "runtime_binaries",
         _collect_runtime_binaries,
@@ -777,7 +1078,7 @@ def collect_preflight_report(
         },
         failures,
     )
-    inventory = _safe_collect(
+    policy_inventory = _safe_collect(
         "adapter_inventory",
         get_adapters,
         {"error": "probe_failed", "adapters": [], "recommended": None},
@@ -785,29 +1086,30 @@ def collect_preflight_report(
     )
     readiness = _safe_collect(
         "adapter_readiness",
-        lambda: build_readiness_model(_as_dict(inventory)),
+        lambda: build_readiness_model(_as_dict(policy_inventory)),
         {"adapters": [], "recommended": None, "basic_mode_recommended": None},
         failures,
     )
-    active_uplink = _safe_collect(
-        "default_uplink",
-        host_probes.probe_default_uplink,
-        None,
-        failures,
+    inventory = (
+        _snapshot_inventory(snapshot, _as_dict(policy_inventory))
+        if snapshot is not None
+        else _as_dict(policy_inventory)
     )
-
-    concurrency_by_phy: Dict[str, Optional[bool]] = {}
-    for item in _as_list(_as_dict(inventory).get("adapters")):
-        adapter = _as_dict(item)
-        phy = adapter.get("phy")
-        if not isinstance(phy, str) or not phy or phy in concurrency_by_phy:
-            continue
-        concurrency_by_phy[phy] = _safe_collect(
-            f"sta_ap_concurrency:{phy}",
-            lambda phy_name=phy: probe_ap_managed_concurrency(phy_name),
-            None,
-            failures,
-        )
+    if snapshot is not None:
+        concurrency_by_phy = _snapshot_concurrency(snapshot)
+    else:
+        concurrency_by_phy: Dict[str, Optional[bool]] = {}
+        for item in _as_list(_as_dict(inventory).get("adapters")):
+            adapter_item = _as_dict(item)
+            phy = adapter_item.get("phy")
+            if not isinstance(phy, str) or not phy or phy in concurrency_by_phy:
+                continue
+            concurrency_by_phy[phy] = _safe_collect(
+                f"sta_ap_concurrency:{phy}",
+                lambda phy_name=phy: probe_ap_managed_concurrency(phy_name),
+                None,
+                failures,
+            )
 
     report_adapter_name = _report_adapter_name(_as_dict(inventory), cfg)
     adapter = _find_adapter(_as_dict(inventory), report_adapter_name)
@@ -829,6 +1131,10 @@ def collect_preflight_report(
         failures,
     )
 
+    snapshot_failures = _snapshot_probe_failures(snapshot) if snapshot is not None else []
+    snapshot_warning_failures = (
+        _snapshot_warning_failures(snapshot) if snapshot is not None else []
+    )
     return build_preflight_report(
         platform_matrix=_as_dict(platform_matrix),
         firewall=_as_dict(firewall),
@@ -843,5 +1149,6 @@ def collect_preflight_report(
         concurrency_by_phy=concurrency_by_phy,
         existing_preflight=_as_dict(existing_preflight),
         config=cfg,
-        probe_failures=failures,
+        probe_failures=[*failures, *snapshot_warning_failures],
+        evidence_probe_failures=snapshot_failures,
     )
