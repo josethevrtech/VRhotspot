@@ -13,7 +13,14 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.adapters.readiness import build_readiness_model
-from vr_hotspotd.config import load_config, load_config_snapshot, write_config_file
+from vr_hotspotd.config import (
+    ConfigValidationError,
+    INVALID_NETWORK_CONFIG,
+    load_config,
+    load_config_snapshot,
+    validate_network_config,
+    write_config_file,
+)
 from vr_hotspotd.lifecycle import (
     repair,
     start_hotspot,
@@ -732,9 +739,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 elif isinstance(v, (int, float)):
                     s = str(v)
                 else:
-                    if v is not None:
+                    if v is None:
+                        out.pop(k, None)
+                    else:
                         warnings.append(f"invalid_ip:{k}")
-                    out.pop(k, None)
                     continue
                 if not s:
                     out.pop(k, None)
@@ -744,7 +752,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         out[k] = s
                     except Exception:
                         warnings.append(f"invalid_ip:{k}")
-                        out.pop(k, None)
+                        out[k] = s
 
             if k == "dhcp_dns":
                 normalized = None
@@ -801,26 +809,6 @@ class APIHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-        # Validate DHCP range if gateway is provided in this payload.
-        gw = out.get("lan_gateway_ip")
-        dhcp_start = out.get("dhcp_start_ip")
-        dhcp_end = out.get("dhcp_end_ip")
-        if gw and dhcp_start and dhcp_end:
-            try:
-                gw_ip = ipaddress.IPv4Address(gw)
-                start_ip = ipaddress.IPv4Address(dhcp_start)
-                end_ip = ipaddress.IPv4Address(dhcp_end)
-                if (int(start_ip) >= int(end_ip)):
-                    warnings.append("dhcp_range_invalid")
-                    out.pop("dhcp_start_ip", None)
-                    out.pop("dhcp_end_ip", None)
-                elif (gw_ip.packed[:3] != start_ip.packed[:3]) or (gw_ip.packed[:3] != end_ip.packed[:3]):
-                    warnings.append("dhcp_range_not_in_gateway_subnet")
-                    out.pop("dhcp_start_ip", None)
-                    out.pop("dhcp_end_ip", None)
-            except Exception:
-                pass
-
         # Enforce 6 GHz security invariants at config time (removes a common start failure)
         if out.get("band_preference") == "6ghz":
             if out.get("ap_security") != "wpa3_sae":
@@ -828,6 +816,31 @@ class APIHandler(BaseHTTPRequestHandler):
                 warnings.append("auto_set_ap_security_wpa3_sae_for_6ghz")
 
         return out, warnings
+
+    def _network_config_errors(self, updates: Dict[str, Any]) -> list[str]:
+        candidate = load_config_snapshot()
+        candidate.update(updates)
+        return validate_network_config(candidate)
+
+    def _respond_invalid_network_config(
+        self,
+        cid: str,
+        warnings: list[str],
+        validation_errors: list[str],
+    ) -> None:
+        combined_warnings = list(warnings)
+        for error in validation_errors:
+            if error not in combined_warnings:
+                combined_warnings.append(error)
+        self._respond(
+            400,
+            self._envelope(
+                correlation_id=cid,
+                result_code=INVALID_NETWORK_CONFIG,
+                warnings=combined_warnings,
+                data={"validation_errors": validation_errors},
+            ),
+        )
 
     def _redact_cmd_list(self, cmd: Any) -> Any:
         if not isinstance(cmd, list):
@@ -1140,6 +1153,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 return
 
+        validation_errors = self._network_config_errors(filtered)
+        if validation_errors:
+            self._respond_invalid_network_config(cid, warnings, validation_errors)
+            return
+
         try:
             merged = write_config_file(filtered)
             merged_view = self._config_view(include_secrets=False)
@@ -1155,6 +1173,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     warnings=warnings,
                 ),
             )
+        except ConfigValidationError as e:
+            self._respond_invalid_network_config(cid, warnings, list(e.errors))
         except Exception as e:
             self._respond(
                 500,
@@ -1378,6 +1398,11 @@ class APIHandler(BaseHTTPRequestHandler):
             overrides, w_coerce = self._coerce_config_types(overrides)
             warnings += w_coerce
 
+            validation_errors = self._network_config_errors(overrides)
+            if validation_errors:
+                self._respond_invalid_network_config(cid, warnings, validation_errors)
+                return
+
             # Extract basic_mode flag from request body
             basic_mode = False
             if isinstance(body, dict):
@@ -1426,16 +1451,6 @@ class APIHandler(BaseHTTPRequestHandler):
         if path == "/v1/restart":
             warnings = list(body_warnings)
 
-            try:
-                stop_hotspot(correlation_id=cid + ":stop")
-            except Exception:
-                warnings.append("stop_failed_ignored")
-
-            try:
-                repair(correlation_id=cid + ":repair")
-            except Exception:
-                warnings.append("repair_failed_ignored")
-
             overrides_raw: Optional[Dict[str, Any]] = None
             if isinstance(body.get("overrides"), dict):
                 overrides_raw = body.get("overrides")  # type: ignore[assignment]
@@ -1461,12 +1476,27 @@ class APIHandler(BaseHTTPRequestHandler):
             overrides, w_coerce = self._coerce_config_types(overrides)
             warnings += w_coerce
 
+            validation_errors = self._network_config_errors(overrides)
+            if validation_errors:
+                self._respond_invalid_network_config(cid, warnings, validation_errors)
+                return
+
             # Extract basic_mode flag from request body
             basic_mode = False
             if isinstance(body, dict):
                 bm = body.get("basic_mode")
                 if bm is True or (isinstance(bm, str) and bm.lower() in ("true", "1", "yes")):
                     basic_mode = True
+
+            try:
+                stop_hotspot(correlation_id=cid + ":stop")
+            except Exception:
+                warnings.append("stop_failed_ignored")
+
+            try:
+                repair(correlation_id=cid + ":repair")
+            except Exception:
+                warnings.append("repair_failed_ignored")
 
             res = start_hotspot(correlation_id=cid + ":start", overrides=overrides if overrides else None, basic_mode=basic_mode)
             self._respond(

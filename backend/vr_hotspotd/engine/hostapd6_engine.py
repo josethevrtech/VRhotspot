@@ -11,6 +11,7 @@ import time
 from typing import Optional, List, Tuple
 
 from vr_hotspotd import host_probes
+from vr_hotspotd.config import ConfigValidationError, validate_network_config
 from vr_hotspotd.engine.secret_io import (
     add_passphrase_arguments,
     read_passphrase,
@@ -345,26 +346,20 @@ def main() -> int:
     if len(passphrase) < 8:
         raise RuntimeError("invalid_passphrase_min_length_8")
 
-    _maybe_set_regdom(args.country)
-
     # Network plan
     gw_ip = (args.gateway_ip or "192.168.68.1").strip()
-    try:
-        gw_addr = ipaddress.IPv4Address(gw_ip)
-    except Exception as exc:
-        raise RuntimeError("invalid_gateway_ip") from exc
     subnet_prefix = ".".join(gw_ip.split(".")[:3])
     dhcp_start = (args.dhcp_start or f"{subnet_prefix}.10").strip()
     dhcp_end = (args.dhcp_end or f"{subnet_prefix}.250").strip()
-    try:
-        start_addr = ipaddress.IPv4Address(dhcp_start)
-        end_addr = ipaddress.IPv4Address(dhcp_end)
-    except Exception as exc:
-        raise RuntimeError("invalid_dhcp_range") from exc
-    if int(start_addr) >= int(end_addr):
-        raise RuntimeError("invalid_dhcp_range")
-    if (gw_addr.packed[:3] != start_addr.packed[:3]) or (gw_addr.packed[:3] != end_addr.packed[:3]):
-        raise RuntimeError("invalid_dhcp_range_subnet")
+    network_validation_errors = validate_network_config(
+        {
+            "lan_gateway_ip": gw_ip,
+            "dhcp_start_ip": dhcp_start,
+            "dhcp_end_ip": dhcp_end,
+        }
+    )
+    if network_validation_errors:
+        raise ConfigValidationError(network_validation_errors)
     cidr = f"{gw_ip}/24"
     dhcp_dns = (args.dhcp_dns or "gateway").strip().lower()
     if not dhcp_dns:
@@ -379,6 +374,8 @@ def main() -> int:
         except Exception as exc:
             raise RuntimeError("invalid_dhcp_dns") from exc
         dhcp_dns = ",".join(ips)
+
+    _maybe_set_regdom(args.country)
 
     hostapd = _resolve_binary("hostapd", "HOSTAPD")
     dnsmasq = _resolve_binary("dnsmasq", "DNSMASQ")
