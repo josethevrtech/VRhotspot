@@ -11,6 +11,11 @@ import time
 from typing import Optional, List, Tuple
 
 from vr_hotspotd import host_probes
+from vr_hotspotd.engine.secret_io import (
+    add_passphrase_arguments,
+    read_passphrase,
+    write_protected_text,
+)
 
 _CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
 
@@ -284,10 +289,7 @@ def _write_hostapd_6ghz_conf(
     if tx_power is not None:
         lines.append(f"tx_power={tx_power}")
 
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-
-    os.chmod(path, 0o600)
+    write_protected_text(path, "\n".join(lines) + "\n")
 
 
 def _write_dnsmasq_conf(
@@ -322,7 +324,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ap-ifname", required=True)
     ap.add_argument("--ssid", required=True)
-    ap.add_argument("--passphrase", required=True)
+    add_passphrase_arguments(ap)
     ap.add_argument("--country", default=None)
     ap.add_argument("--channel", type=int, default=1)
     ap.add_argument("--no-virt", action="store_true")
@@ -338,8 +340,9 @@ def main() -> int:
     ap.add_argument("--short-guard-interval", action="store_true", default=True)
     ap.add_argument("--tx-power", type=int, default=None)
     args = ap.parse_args()
+    passphrase = read_passphrase(args)
 
-    if len(args.passphrase) < 8:
+    if len(passphrase) < 8:
         raise RuntimeError("invalid_passphrase_min_length_8")
 
     _maybe_set_regdom(args.country)
@@ -409,32 +412,60 @@ def main() -> int:
             except Exception:
                 nat_rules = []
 
-    # Write configs
-    _write_hostapd_6ghz_conf(
-        path=hostapd_conf,
-        ifname=ap_iface,
-        ssid=args.ssid,
-        passphrase=args.passphrase,
-        country=args.country,
-        channel=int(args.channel),
-        channel_width=args.channel_width,
-        beacon_interval=args.beacon_interval,
-        dtim_period=args.dtim_period,
-        short_guard_interval=args.short_guard_interval,
-        tx_power=args.tx_power,
-    )
-    _ensure_ctrl_interface_dir(hostapd_conf)
-    _write_dnsmasq_conf(dnsmasq_conf, ap_iface, gw_ip, dhcp_start, dhcp_end, dhcp_dns)
+    hostapd_p: Optional[subprocess.Popen] = None
+    dnsmasq_p: Optional[subprocess.Popen] = None
+    try:
+        # Write configs
+        _write_hostapd_6ghz_conf(
+            path=hostapd_conf,
+            ifname=ap_iface,
+            ssid=args.ssid,
+            passphrase=passphrase,
+            country=args.country,
+            channel=int(args.channel),
+            channel_width=args.channel_width,
+            beacon_interval=args.beacon_interval,
+            dtim_period=args.dtim_period,
+            short_guard_interval=args.short_guard_interval,
+            tx_power=args.tx_power,
+        )
+        _ensure_ctrl_interface_dir(hostapd_conf)
+        _write_dnsmasq_conf(dnsmasq_conf, ap_iface, gw_ip, dhcp_start, dhcp_end, dhcp_dns)
 
-    # Start processes
-    hostapd_cmd = [hostapd, hostapd_conf]
-    dnsmasq_cmd = [dnsmasq, "--no-daemon", f"--conf-file={dnsmasq_conf}"]
+        # Start processes
+        hostapd_cmd = [hostapd, hostapd_conf]
+        dnsmasq_cmd = [dnsmasq, "--no-daemon", f"--conf-file={dnsmasq_conf}"]
 
-    if args.debug:
-        hostapd_cmd = [hostapd, "-dd", hostapd_conf]
+        if args.debug:
+            hostapd_cmd = [hostapd, "-dd", hostapd_conf]
 
-    hostapd_p = subprocess.Popen(hostapd_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    dnsmasq_p = subprocess.Popen(dnsmasq_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        hostapd_p = subprocess.Popen(
+            hostapd_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        dnsmasq_p = subprocess.Popen(
+            dnsmasq_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    except Exception:
+        if hostapd_p is not None:
+            try:
+                hostapd_p.terminate()
+                hostapd_p.wait(timeout=2.0)
+            except Exception:
+                try:
+                    hostapd_p.kill()
+                except Exception:
+                    pass
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
+
+    assert hostapd_p is not None
+    assert dnsmasq_p is not None
 
     stopping = False
 

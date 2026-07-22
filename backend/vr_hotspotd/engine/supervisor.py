@@ -30,6 +30,11 @@ _last_firewalld_cfg: Dict[str, object] = {}
 _stdout_line_observer: Optional[Callable[[str], None]] = None
 
 _HOSTAPD_UNKNOWN_RE = re.compile(r"unknown configuration item '([^']+)'", re.IGNORECASE)
+_PASSPHRASE_FD_FLAG = {
+    "-p": "--password-fd",
+    "--password": "--password-fd",
+    "--passphrase": "--passphrase-fd",
+}
 
 
 class VendorSelectionError(RuntimeError):
@@ -743,10 +748,10 @@ def _kill_process_group(pid: int, sig: int) -> None:
 def _redact_cmd(cmd: List[str]) -> List[str]:
     """
     Prevent secrets leaking into /v1/status:
-    - Replace the value after -p or --passphrase with ********.
+    - Replace the value after a supported passphrase flag with ********.
     """
     out = list(cmd)
-    for flag in ("-p", "--passphrase"):
+    for flag in ("-p", "--password", "--passphrase"):
         try:
             i = out.index(flag)
             if i + 1 < len(out):
@@ -754,6 +759,37 @@ def _redact_cmd(cmd: List[str]) -> List[str]:
         except ValueError:
             pass
     return out
+
+
+def _prepare_passphrase_fd(cmd: List[str]) -> Tuple[List[str], Optional[int]]:
+    """Replace a passphrase argv value with an inherited anonymous pipe fd."""
+    spawn_cmd = list(cmd)
+    for index, item in enumerate(spawn_cmd):
+        fd_flag = _PASSPHRASE_FD_FLAG.get(item)
+        if fd_flag is None:
+            continue
+        if index + 1 >= len(spawn_cmd):
+            raise ValueError("passphrase_value_missing")
+
+        payload = str(spawn_cmd[index + 1]).encode("utf-8")
+        read_fd, write_fd = os.pipe()
+        try:
+            offset = 0
+            while offset < len(payload):
+                written = os.write(write_fd, payload[offset:])
+                if written <= 0:
+                    raise OSError("passphrase_pipe_write_failed")
+                offset += written
+        except Exception:
+            os.close(read_fd)
+            raise
+        finally:
+            os.close(write_fd)
+
+        spawn_cmd[index : index + 2] = [fd_flag, str(read_fd)]
+        return spawn_cmd, read_fd
+
+    return spawn_cmd, None
 
 
 def start_engine(
@@ -836,17 +872,39 @@ def start_engine(
             started_ts=None,
         )
 
+    passphrase_fd: Optional[int] = None
     try:
+        spawn_cmd, passphrase_fd = _prepare_passphrase_fd(cmd)
+    except Exception:
+        if ap_ifname:
+            _cleanup_firewalld(ap_ifname, firewalld_cfg)
+        return EngineStartResult(
+            ok=False,
+            pid=None,
+            exit_code=None,
+            stdout_tail=[],
+            stderr_tail=[],
+            error="spawn_failed: passphrase_transport_failed",
+            cmd=_redact_cmd(cmd),
+            started_ts=None,
+        )
+
+    try:
+        popen_kwargs = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "bufsize": 1,
+            "close_fds": True,
+            "env": env,
+            # Isolate the engine into its own session/PGID so its whole tree can be killed.
+            "start_new_session": True,
+        }
+        if passphrase_fd is not None:
+            popen_kwargs["pass_fds"] = (passphrase_fd,)
         _ln_proc = subprocess.Popen(
-            cmd,  # IMPORTANT: full cmd used to spawn (includes real passphrase)
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            close_fds=True,
-            env=env,
-            # isolate lnxrouter into its own session/PGID so we can reliably kill its whole tree
-            start_new_session=True,
+            spawn_cmd,
+            **popen_kwargs,
         )
     except Exception as e:
         _ln_proc = None
@@ -862,6 +920,12 @@ def start_engine(
             cmd=_redact_cmd(cmd),
             started_ts=None,
         )
+    finally:
+        if passphrase_fd is not None:
+            try:
+                os.close(passphrase_fd)
+            except OSError:
+                pass
 
     assert _ln_proc.stdout is not None
     assert _ln_proc.stderr is not None

@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 
 from vr_hotspotd import host_probes, os_release
+from vr_hotspotd.engine.secret_io import (
+    add_passphrase_arguments,
+    read_passphrase,
+    write_protected_text,
+)
 
 _CTRL_DIR_RE = re.compile(r"DIR=([^\s]+)")
 _CMD_TIMEOUT_S = 4.0
@@ -677,9 +682,7 @@ def _write_hostapd_conf(
     if tx_power is not None:
         lines.append(f"tx_power={tx_power}")
 
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-    os.chmod(path, 0o600)
+    write_protected_text(path, "\n".join(lines) + "\n")
 
 
 def _write_dnsmasq_conf(
@@ -713,7 +716,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ap-ifname", required=True)
     ap.add_argument("--ssid", required=True)
-    ap.add_argument("--passphrase", required=True)
+    add_passphrase_arguments(ap)
     ap.add_argument("--band", required=True)
     ap.add_argument("--ap-security", default="wpa2")
     ap.add_argument("--country", default=None)
@@ -733,8 +736,9 @@ def main() -> int:
     ap.add_argument("--tx-power", type=int, default=None)
     ap.add_argument("--strict-width", action="store_true")
     args = ap.parse_args()
+    passphrase = read_passphrase(args)
 
-    if len(args.passphrase) < 8:
+    if len(passphrase) < 8:
         raise RuntimeError("invalid_passphrase_min_length_8")
 
     band = str(args.band).strip().lower()
@@ -887,7 +891,7 @@ def main() -> int:
                 path=hostapd_conf,
                 ifname=ap_iface,
                 ssid=args.ssid,
-                passphrase=args.passphrase,
+                passphrase=passphrase,
                 country=args.country,
                 band=band,
                 channel=channel,
