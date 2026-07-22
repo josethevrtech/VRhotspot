@@ -11,6 +11,7 @@ AUTOSTART_UNIT="vr-hotspot-autostart.service"
 LEGACY_SYSTEMD_UNITS=("vr-hotspotd-autostart.service")
 INSTALL_ROOT="/var/lib/vr-hotspot"
 APP_DIR="$INSTALL_ROOT/app"
+FIREWALL_LEDGER="$INSTALL_ROOT/firewall-rules.json"
 CONFIG_DIR="/etc/vr-hotspot"
 ENV_FILE="$CONFIG_DIR/env"
 SYSTEMD_DIR="/etc/systemd/system"
@@ -37,6 +38,341 @@ print_success() { echo -e "${GREEN}✓ $1${NC}"; }
 print_warning() { echo -e "${YELLOW}⚠ $1${NC}"; }
 print_error() { echo -e "${RED}✗ $1${NC}"; }
 print_info() { echo -e "${CYAN}ℹ $1${NC}"; }
+
+record_firewall_action() {
+    local backend="$1"
+    local action="$2"
+    local scope="${3:-}"
+    local zone="${4:-}"
+    local value="${5:-}"
+
+    python3 - "$FIREWALL_LEDGER" "$backend" "$action" "$scope" "$zone" "$value" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+ledger_path = Path(sys.argv[1])
+backend, action, scope, zone, value = sys.argv[2:]
+
+if backend == "firewalld":
+    if action not in {"add-port", "add-masquerade", "add-forward"}:
+        raise SystemExit(f"unsupported firewalld action: {action}")
+    if scope not in {"runtime", "permanent"}:
+        raise SystemExit(f"unsupported firewalld scope: {scope}")
+    if not zone:
+        raise SystemExit("firewalld action requires a zone")
+    record = {
+        "backend": backend,
+        "action": action,
+        "scope": scope,
+        "zone": zone,
+    }
+    if action == "add-port":
+        if value != "8732/tcp":
+            raise SystemExit(f"unsupported firewalld port: {value}")
+        record["port"] = value
+elif backend == "ufw":
+    if action != "allow" or value != "8732/tcp":
+        raise SystemExit(f"unsupported UFW action: {action} {value}")
+    record = {"backend": backend, "action": action, "rule": value}
+else:
+    raise SystemExit(f"unsupported firewall backend: {backend}")
+
+ledger_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+if ledger_path.exists():
+    with ledger_path.open("r", encoding="utf-8") as ledger_file:
+        ledger = json.load(ledger_file)
+    if ledger.get("version") != 1 or not isinstance(ledger.get("actions"), list):
+        raise SystemExit("unsupported firewall ledger format")
+else:
+    ledger = {"version": 1, "actions": []}
+
+if record not in ledger["actions"]:
+    ledger["actions"].append(record)
+
+fd, temporary_name = tempfile.mkstemp(
+    prefix=f".{ledger_path.name}.", dir=ledger_path.parent
+)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as ledger_file:
+        json.dump(ledger, ledger_file, indent=2, sort_keys=True)
+        ledger_file.write("\n")
+        ledger_file.flush()
+        os.fsync(ledger_file.fileno())
+    os.replace(temporary_name, ledger_path)
+    os.chmod(ledger_path, 0o600)
+except BaseException:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.unlink(temporary_name)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
+ensure_firewalld_action() {
+    local action="$1"
+    local scope="$2"
+    local zone="$3"
+    local value="${4:-}"
+    local query_option add_option remove_option description
+    local -a scope_args=()
+
+    if [[ ! "$zone" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+        print_warning "Skipping firewalld action with invalid zone '$zone'."
+        return 0
+    fi
+
+    case "$action" in
+        add-port)
+            query_option="--query-port=$value"
+            add_option="--add-port=$value"
+            remove_option="--remove-port=$value"
+            description="$value in zone $zone ($scope)"
+            ;;
+        add-masquerade)
+            query_option="--query-masquerade"
+            add_option="--add-masquerade"
+            remove_option="--remove-masquerade"
+            description="masquerade in zone $zone ($scope)"
+            ;;
+        add-forward)
+            query_option="--query-forward"
+            add_option="--add-forward"
+            remove_option="--remove-forward"
+            description="forward in zone $zone ($scope)"
+            ;;
+        *)
+            print_warning "Skipping unsupported firewalld action '$action'."
+            return 0
+            ;;
+    esac
+
+    if [ "$scope" = "permanent" ]; then
+        scope_args=(--permanent)
+    elif [ "$scope" != "runtime" ]; then
+        print_warning "Skipping firewalld action with invalid scope '$scope'."
+        return 0
+    fi
+
+    local query_status
+    if firewall-cmd "${scope_args[@]}" --zone "$zone" "$query_option" >/dev/null 2>&1; then
+        return 0
+    else
+        query_status=$?
+    fi
+
+    if [ "$query_status" -ne 1 ]; then
+        print_warning "Could not verify ownership for firewalld $description; leaving it unchanged."
+        return 0
+    fi
+
+    if ! firewall-cmd "${scope_args[@]}" --zone "$zone" "$add_option" >/dev/null 2>&1; then
+        print_warning "Failed to enable firewalld $description."
+        return 0
+    fi
+
+    if record_firewall_action "firewalld" "$action" "$scope" "$zone" "$value"; then
+        return 0
+    fi
+
+    print_warning "Could not record firewalld $description; reverting the untracked change."
+    if ! firewall-cmd "${scope_args[@]}" --zone "$zone" "$remove_option" >/dev/null 2>&1; then
+        print_warning "Failed to revert untracked firewalld $description."
+    fi
+}
+
+ensure_ufw_api_port() {
+    local added_rules add_output
+
+    if ! added_rules="$(ufw show added 2>/dev/null)"; then
+        print_warning "Could not verify existing UFW rules; leaving UFW unchanged."
+        return 0
+    fi
+    if printf '%s\n' "$added_rules" | grep -Eq '^ufw[[:space:]]+allow[[:space:]]+8732/tcp([[:space:]]|$)'; then
+        return 0
+    fi
+
+    if ! add_output="$(ufw allow 8732/tcp 2>&1)"; then
+        print_warning "Failed to add UFW rule for 8732/tcp."
+        return 0
+    fi
+    if [[ "${add_output,,}" == *"existing rule"* ]]; then
+        print_info "UFW already allows 8732/tcp; leaving the unowned rule unchanged."
+        return 0
+    fi
+
+    if record_firewall_action "ufw" "allow" "" "" "8732/tcp"; then
+        return 0
+    fi
+
+    print_warning "Could not record the UFW 8732/tcp rule; reverting the untracked change."
+    if ! ufw --force delete allow 8732/tcp >/dev/null 2>&1; then
+        print_warning "Failed to revert the untracked UFW 8732/tcp rule."
+    fi
+}
+
+open_remote_access_firewall() {
+    if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
+        print_info "Opening port 8732/tcp in firewall..."
+        local default_zone zone scope seen_zone
+        local -a zones=(public FedoraWorkstation)
+        default_zone="$(firewall-cmd --get-default-zone 2>/dev/null | head -n1 | tr -d '\r')"
+        if [ -n "$default_zone" ]; then
+            zones=("$default_zone" "${zones[@]}")
+        else
+            print_warning "Unable to determine the default firewalld zone; skipping that zone."
+        fi
+
+        local -a unique_zones=()
+        for zone in "${zones[@]}"; do
+            seen_zone=0
+            local existing_zone
+            for existing_zone in "${unique_zones[@]}"; do
+                if [ "$existing_zone" = "$zone" ]; then
+                    seen_zone=1
+                    break
+                fi
+            done
+            [ "$seen_zone" -eq 1 ] || unique_zones+=("$zone")
+        done
+
+        for zone in "${unique_zones[@]}"; do
+            for scope in runtime permanent; do
+                ensure_firewalld_action "add-port" "$scope" "$zone" "8732/tcp"
+            done
+        done
+    elif command -v ufw &>/dev/null; then
+        print_info "Opening port 8732/tcp in UFW..."
+        ensure_ufw_api_port
+    else
+        print_warning "No supported firewall manager found (firewalld/ufw). Please manually open TCP port 8732."
+    fi
+}
+
+firewall_ledger_records() {
+    python3 - "$FIREWALL_LEDGER" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+try:
+    with path.open("r", encoding="utf-8") as ledger_file:
+        ledger = json.load(ledger_file)
+    if not isinstance(ledger, dict):
+        raise ValueError("firewall ledger is not an object")
+    if set(ledger) != {"version", "actions"}:
+        raise ValueError("unsupported firewall ledger fields")
+    if type(ledger["version"]) is not int or ledger["version"] != 1:
+        raise ValueError("unsupported firewall ledger version")
+    if not isinstance(ledger["actions"], list):
+        raise ValueError("unsupported firewall ledger format")
+
+    rows = []
+    for record in reversed(ledger["actions"]):
+        if not isinstance(record, dict):
+            raise ValueError("firewall ledger action is not an object")
+        backend = record.get("backend")
+        action = record.get("action")
+        if not isinstance(backend, str) or not isinstance(action, str):
+            raise ValueError("firewall ledger action has invalid type fields")
+        if backend == "firewalld":
+            if action not in {"add-port", "add-masquerade", "add-forward"}:
+                raise ValueError(f"unsupported firewalld action: {action}")
+            expected_fields = {"backend", "action", "scope", "zone"}
+            if action == "add-port":
+                expected_fields.add("port")
+            if set(record) != expected_fields:
+                raise ValueError("unsupported firewalld action fields")
+            scope = record.get("scope")
+            zone = record.get("zone")
+            if not isinstance(scope, str) or scope not in {"runtime", "permanent"}:
+                raise ValueError(f"unsupported firewalld scope: {scope}")
+            if not isinstance(zone, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", zone):
+                raise ValueError("invalid firewalld zone")
+            value = record.get("port", "")
+            if action == "add-port" and value != "8732/tcp":
+                raise ValueError(f"unsupported firewalld port: {value}")
+            rows.append((backend, action, scope, zone, value))
+        elif backend == "ufw":
+            if set(record) != {"backend", "action", "rule"}:
+                raise ValueError("unsupported UFW action fields")
+            rule = record.get("rule")
+            if action != "allow" or rule != "8732/tcp":
+                raise ValueError(f"unsupported UFW action: {action} {rule}")
+            rows.append((backend, action, "", "", rule))
+        else:
+            raise ValueError(f"unsupported firewall backend: {backend}")
+
+    for row in rows:
+        print("|".join(row))
+except (OSError, ValueError, json.JSONDecodeError) as exc:
+    print(f"could not read firewall ledger: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+rollback_owned_firewall_rules() {
+    if [ ! -f "$FIREWALL_LEDGER" ]; then
+        print_info "No VRHotspot firewall ledger found; leaving firewall rules unchanged."
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        print_warning "python3 is unavailable; cannot read the VRHotspot firewall ledger."
+        return 0
+    fi
+
+    local records
+    if ! records="$(firewall_ledger_records)"; then
+        print_warning "Leaving firewall rules unchanged because the VRHotspot ledger could not be read."
+        return 0
+    fi
+
+    local backend action scope zone value option output status
+    local -a scope_args=()
+    while IFS='|' read -r backend action scope zone value; do
+        [ -n "$backend" ] || continue
+        if [ "$backend" = "firewalld" ]; then
+            if ! command -v firewall-cmd >/dev/null 2>&1; then
+                print_warning "firewall-cmd is unavailable; skipping recorded $action for zone $zone."
+                continue
+            fi
+            scope_args=()
+            [ "$scope" = "permanent" ] && scope_args=(--permanent)
+            case "$action" in
+                add-port) option="--remove-port=$value" ;;
+                add-masquerade) option="--remove-masquerade" ;;
+                add-forward) option="--remove-forward" ;;
+            esac
+            if output="$(firewall-cmd "${scope_args[@]}" --zone "$zone" "$option" 2>&1)"; then
+                print_info "Removed recorded firewalld $action from zone $zone ($scope)."
+            else
+                status=$?
+                print_warning "Could not remove recorded firewalld $action from zone $zone ($scope); it may already be absent (exit $status${output:+: $output})."
+            fi
+        elif [ "$backend" = "ufw" ]; then
+            if ! command -v ufw >/dev/null 2>&1; then
+                print_warning "ufw is unavailable; skipping recorded allow rule for $value."
+                continue
+            fi
+            if output="$(ufw --force delete allow "$value" 2>&1)"; then
+                print_info "Removed recorded UFW allow rule for $value."
+            else
+                status=$?
+                print_warning "Could not remove recorded UFW allow rule for $value; it may already be absent (exit $status${output:+: $output})."
+            fi
+        fi
+    done <<< "$records"
+}
 
 usage() {
     cat <<'USAGE'
@@ -307,11 +643,8 @@ cleanup_previous_install() {
     done
     pkill -f "vr_hotspotd/main.py" &>/dev/null || true
 
-    if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
-        print_info "Removing firewall rules..."
-        firewall-cmd --permanent --remove-port=8732/tcp &>/dev/null || true
-        firewall-cmd --reload &>/dev/null || true
-    fi
+    print_info "Rolling back recorded firewall rules..."
+    rollback_owned_firewall_rules
 
     for unit in "$DAEMON_UNIT" "$AUTOSTART_UNIT" "${LEGACY_SYSTEMD_UNITS[@]}"; do
         rm -f "$SYSTEMD_DIR/$unit"
@@ -565,21 +898,7 @@ configure_install() {
         BIND_IP="0.0.0.0"
         print_info "Remote access enabled. Binding to $BIND_IP."
         
-        if command -v firewall-cmd &>/dev/null && firewall-cmd --state &>/dev/null; then
-            print_info "Opening port 8732/tcp in firewall..."
-            # Open in default zone
-            firewall-cmd --permanent --add-port=8732/tcp &>/dev/null || true
-            # Explicitly try public and FedoraWorkstation zones which are common on Fedora
-            firewall-cmd --permanent --zone=public --add-port=8732/tcp &>/dev/null || true
-            firewall-cmd --permanent --zone=FedoraWorkstation --add-port=8732/tcp &>/dev/null || true
-            
-            firewall-cmd --reload &>/dev/null || print_warning "Failed to reload firewall."
-        elif command -v ufw &>/dev/null; then
-             print_info "Opening port 8732/tcp in UFW..."
-             ufw allow 8732/tcp &>/dev/null || print_warning "Failed to add UFW rule."
-        else
-            print_warning "No supported firewall manager found (firewalld/ufw). Please manually open TCP port 8732."
-        fi
+        open_remote_access_firewall
     else
         print_info "Remote access disabled. Binding to $BIND_IP."
     fi
@@ -685,14 +1004,10 @@ enable_firewalld_uplink_forwarding() {
     fi
 
     print_info "Ensuring firewalld forwarding for uplink $uplink (zone=$zone)"
-    firewall-cmd --zone "$zone" --add-masquerade &>/dev/null || \
-        print_warning "Failed to enable masquerade for zone $zone (runtime)"
-    firewall-cmd --zone "$zone" --add-forward &>/dev/null || \
-        print_warning "Failed to enable forward for zone $zone (runtime)"
-    firewall-cmd --permanent --zone "$zone" --add-masquerade &>/dev/null || \
-        print_warning "Failed to enable masquerade for zone $zone (permanent)"
-    firewall-cmd --permanent --zone "$zone" --add-forward &>/dev/null || \
-        print_warning "Failed to enable forward for zone $zone (permanent)"
+    ensure_firewalld_action "add-masquerade" "runtime" "$zone"
+    ensure_firewalld_action "add-forward" "runtime" "$zone"
+    ensure_firewalld_action "add-masquerade" "permanent" "$zone"
+    ensure_firewalld_action "add-forward" "permanent" "$zone"
 }
 
 show_completion() {

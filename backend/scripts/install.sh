@@ -22,6 +22,198 @@ USAGE
 log() { echo "[backend-install] $*"; }
 die() { echo "[backend-install] ERROR: $*" >&2; exit 1; }
 
+APP_ROOT="/var/lib/vr-hotspot"
+FIREWALL_LEDGER="$APP_ROOT/firewall-rules.json"
+
+record_firewall_action() {
+  local backend="$1"
+  local action="$2"
+  local scope="${3:-}"
+  local zone="${4:-}"
+  local value="${5:-}"
+
+  python3 - "$FIREWALL_LEDGER" "$backend" "$action" "$scope" "$zone" "$value" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+ledger_path = Path(sys.argv[1])
+backend, action, scope, zone, value = sys.argv[2:]
+
+if backend == "firewalld":
+    if action not in {"add-port", "add-masquerade", "add-forward"}:
+        raise SystemExit(f"unsupported firewalld action: {action}")
+    if scope not in {"runtime", "permanent"}:
+        raise SystemExit(f"unsupported firewalld scope: {scope}")
+    if not zone:
+        raise SystemExit("firewalld action requires a zone")
+    record = {
+        "backend": backend,
+        "action": action,
+        "scope": scope,
+        "zone": zone,
+    }
+    if action == "add-port":
+        if value != "8732/tcp":
+            raise SystemExit(f"unsupported firewalld port: {value}")
+        record["port"] = value
+elif backend == "ufw":
+    if action != "allow" or value != "8732/tcp":
+        raise SystemExit(f"unsupported UFW action: {action} {value}")
+    record = {"backend": backend, "action": action, "rule": value}
+else:
+    raise SystemExit(f"unsupported firewall backend: {backend}")
+
+ledger_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+if ledger_path.exists():
+    with ledger_path.open("r", encoding="utf-8") as ledger_file:
+        ledger = json.load(ledger_file)
+    if ledger.get("version") != 1 or not isinstance(ledger.get("actions"), list):
+        raise SystemExit("unsupported firewall ledger format")
+else:
+    ledger = {"version": 1, "actions": []}
+
+if record not in ledger["actions"]:
+    ledger["actions"].append(record)
+
+fd, temporary_name = tempfile.mkstemp(
+    prefix=f".{ledger_path.name}.", dir=ledger_path.parent
+)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as ledger_file:
+        json.dump(ledger, ledger_file, indent=2, sort_keys=True)
+        ledger_file.write("\n")
+        ledger_file.flush()
+        os.fsync(ledger_file.fileno())
+    os.replace(temporary_name, ledger_path)
+    os.chmod(ledger_path, 0o600)
+except BaseException:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.unlink(temporary_name)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
+ensure_firewalld_action() {
+  local action="$1"
+  local scope="$2"
+  local zone="$3"
+  local value="${4:-}"
+  local query_option add_option remove_option description
+  local -a scope_args=()
+
+  if [[ ! "$zone" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    log "Warning: skipping firewalld action with invalid zone '$zone'"
+    return 0
+  fi
+
+  case "$action" in
+    add-port)
+      query_option="--query-port=$value"
+      add_option="--add-port=$value"
+      remove_option="--remove-port=$value"
+      description="$value in zone $zone ($scope)"
+      ;;
+    add-masquerade)
+      query_option="--query-masquerade"
+      add_option="--add-masquerade"
+      remove_option="--remove-masquerade"
+      description="masquerade in zone $zone ($scope)"
+      ;;
+    add-forward)
+      query_option="--query-forward"
+      add_option="--add-forward"
+      remove_option="--remove-forward"
+      description="forward in zone $zone ($scope)"
+      ;;
+    *)
+      log "Warning: skipping unsupported firewalld action '$action'"
+      return 0
+      ;;
+  esac
+
+  if [[ "$scope" == "permanent" ]]; then
+    scope_args=(--permanent)
+  elif [[ "$scope" != "runtime" ]]; then
+    log "Warning: skipping firewalld action with invalid scope '$scope'"
+    return 0
+  fi
+
+  local query_status
+  if firewall-cmd "${scope_args[@]}" --zone "$zone" "$query_option" >/dev/null 2>&1; then
+    return 0
+  else
+    query_status=$?
+  fi
+
+  if [[ "$query_status" -ne 1 ]]; then
+    log "Warning: could not verify ownership for firewalld $description; leaving it unchanged"
+    return 0
+  fi
+
+  if ! firewall-cmd "${scope_args[@]}" --zone "$zone" "$add_option" >/dev/null 2>&1; then
+    log "Warning: failed to enable firewalld $description"
+    return 0
+  fi
+
+  if record_firewall_action "firewalld" "$action" "$scope" "$zone" "$value"; then
+    return 0
+  fi
+
+  log "Warning: could not record firewalld $description; reverting the untracked change"
+  if ! firewall-cmd "${scope_args[@]}" --zone "$zone" "$remove_option" >/dev/null 2>&1; then
+    log "Warning: failed to revert untracked firewalld $description"
+  fi
+}
+
+enable_firewalld_uplink_forwarding() {
+  if ! command -v firewall-cmd >/dev/null 2>&1; then
+    log "firewalld not installed; skipping uplink forwarding setup"
+    return 0
+  fi
+  if ! firewall-cmd --state >/dev/null 2>&1; then
+    log "firewalld not running; skipping uplink forwarding setup"
+    return 0
+  fi
+
+  local uplink
+  uplink="$(ip route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
+  if [[ -z "$uplink" ]]; then
+    log "no default route interface detected; skipping uplink forwarding setup"
+    return 0
+  fi
+
+  local zone
+  zone="$(firewall-cmd --get-zone-of-interface="$uplink" 2>/dev/null | head -n1 | tr -d '\r')"
+  if [[ -z "$zone" ]]; then
+    zone="$(firewall-cmd --get-default-zone 2>/dev/null | head -n1 | tr -d '\r')"
+  fi
+  if [[ -z "$zone" ]]; then
+    log "unable to determine firewalld zone for uplink $uplink; skipping"
+    return 0
+  fi
+
+  log "Ensuring firewalld forwarding for uplink $uplink (zone=$zone)"
+  ensure_firewalld_action "add-masquerade" "runtime" "$zone"
+  ensure_firewalld_action "add-forward" "runtime" "$zone"
+  ensure_firewalld_action "add-masquerade" "permanent" "$zone"
+  ensure_firewalld_action "add-forward" "permanent" "$zone"
+}
+
+# Allow focused tests to source the firewall helpers without running installation.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
 DEFAULT_INSTALL_DIR="/var/lib/vr-hotspot/app"
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 ENABLE_AUTOSTART="0"
@@ -51,7 +243,6 @@ BACKEND_SRC="$REPO_ROOT/backend"
 command -v systemctl >/dev/null 2>&1 || die "systemctl not found (systemd required)"
 
 # Create dirs
-APP_ROOT="/var/lib/vr-hotspot"
 VENV_DIR="$APP_ROOT/venv"
 BIN_DIR="$APP_ROOT/bin"
 SYSTEMD_DST="/etc/systemd/system"
@@ -175,44 +366,6 @@ sync_autostart_service_state() {
     log "Disabling $AUTOSTART_UNIT (autostart disabled)"
     systemctl disable --now "$AUTOSTART_UNIT" &>/dev/null || true
   fi
-}
-
-enable_firewalld_uplink_forwarding() {
-  if ! command -v firewall-cmd >/dev/null 2>&1; then
-    log "firewalld not installed; skipping uplink forwarding setup"
-    return 0
-  fi
-  if ! firewall-cmd --state >/dev/null 2>&1; then
-    log "firewalld not running; skipping uplink forwarding setup"
-    return 0
-  fi
-
-  local uplink
-  uplink="$(ip route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
-  if [[ -z "$uplink" ]]; then
-    log "no default route interface detected; skipping uplink forwarding setup"
-    return 0
-  fi
-
-  local zone
-  zone="$(firewall-cmd --get-zone-of-interface="$uplink" 2>/dev/null | head -n1 | tr -d '\r')"
-  if [[ -z "$zone" ]]; then
-    zone="$(firewall-cmd --get-default-zone 2>/dev/null | head -n1 | tr -d '\r')"
-  fi
-  if [[ -z "$zone" ]]; then
-    log "unable to determine firewalld zone for uplink $uplink; skipping"
-    return 0
-  fi
-
-  log "Ensuring firewalld forwarding for uplink $uplink (zone=$zone)"
-  firewall-cmd --zone "$zone" --add-masquerade >/dev/null 2>&1 || \
-    log "Warning: failed to enable masquerade for zone $zone (runtime)"
-  firewall-cmd --zone "$zone" --add-forward >/dev/null 2>&1 || \
-    log "Warning: failed to enable forward for zone $zone (runtime)"
-  firewall-cmd --permanent --zone "$zone" --add-masquerade >/dev/null 2>&1 || \
-    log "Warning: failed to enable masquerade for zone $zone (permanent)"
-  firewall-cmd --permanent --zone "$zone" --add-forward >/dev/null 2>&1 || \
-    log "Warning: failed to enable forward for zone $zone (permanent)"
 }
 
 if [[ "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID" == "endeavouros" || "$OS_ID_LIKE" == *"fedora"* ]]; then

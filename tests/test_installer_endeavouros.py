@@ -244,6 +244,9 @@ def test_firewalld_forwarding_enables_runtime_and_permanent_rules(tmp_path):
             "  --state) exit 0 ;;\n"
             "  --get-zone-of-interface=*) echo public ;;\n"
             "esac\n"
+            "case \"$*\" in\n"
+            "  *--query-*) exit 1 ;;\n"
+            "esac\n"
             "exit 0\n"
         ),
     )
@@ -263,6 +266,7 @@ def test_firewalld_forwarding_enables_runtime_and_permanent_rules(tmp_path):
     result = run_bash(
         f"""
         source {INSTALLER}
+        FIREWALL_LEDGER={tmp_path / "firewall-rules.json"}
         enable_firewalld_uplink_forwarding
         """,
         env=env,
