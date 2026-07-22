@@ -97,9 +97,17 @@ def _stub_read_only_start_environment(
     monkeypatch.setattr(
         lifecycle.wifi_probe,
         "detect_firewall_backends",
-        lambda: {"selected_backend": "nftables"},
+        lambda: (_ for _ in ()).throw(
+            AssertionError("lifecycle re-probed snapshot firewall facts")
+        ),
     )
-    monkeypatch.setattr(lifecycle.os_release, "read_os_release", lambda: {"id": "ubuntu"})
+    monkeypatch.setattr(
+        lifecycle.os_release,
+        "read_os_release",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("lifecycle re-read snapshot os-release facts")
+        ),
+    )
     monkeypatch.setattr(
         lifecycle.os_release,
         "apply_platform_overrides",
@@ -382,3 +390,48 @@ def test_unknown_snapshot_default_uplink_blocks_before_any_mutation(monkeypatch)
     }
     assert events == ["snapshot", "inventory"]
     assert mutation_calls == []
+
+
+def test_incomplete_snapshot_facts_keep_lifecycle_probe_fallbacks(monkeypatch):
+    snapshot = make_host_facts_snapshot(operation_kind="lifecycle_start")
+    firewalld = replace(
+        snapshot.firewall.backends[0],
+        tool_present=True,
+        functional_active=None,
+    )
+    snapshot = replace(
+        snapshot,
+        firewall=replace(
+            snapshot.firewall,
+            backends=(firewalld, *snapshot.firewall.backends[1:]),
+        ),
+        probe_errors=(
+            host_facts.ProbeError(
+                probe_id="platform.os_release",
+                kind="io",
+                message="partial os-release read",
+                exit_status=None,
+            ),
+            host_facts.ProbeError(
+                probe_id="firewall.firewalld.functional",
+                kind="timeout",
+                message="firewall status timed out",
+                exit_status=124,
+            ),
+        ),
+    )
+    calls = []
+    monkeypatch.setattr(
+        lifecycle.os_release,
+        "read_os_release",
+        lambda: calls.append("os_release") or {"id": "ubuntu"},
+    )
+    monkeypatch.setattr(
+        lifecycle.wifi_probe,
+        "detect_firewall_backends",
+        lambda: calls.append("firewall") or {"selected_backend": "firewalld"},
+    )
+
+    assert lifecycle._snapshot_os_release(snapshot) == {"id": "ubuntu"}
+    assert lifecycle._snapshot_firewall_backend(snapshot) == "firewalld"
+    assert calls == ["os_release", "firewall"]

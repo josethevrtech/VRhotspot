@@ -579,7 +579,11 @@ def test_start_5ghz_strict_reselection_uses_snapshot_uplink_guard(
             ["ap_adapter_reselected_after_reload:wlxOLD->wlxNEW"],
         )
 
-    monkeypatch.setattr(lifecycle.wifi_probe, "probe", lambda *_args, **_kwargs: probe_payload)
+    def fake_wifi_probe(*_args, **kwargs):
+        assert kwargs["include_host_context"] is False
+        return probe_payload
+
+    monkeypatch.setattr(lifecycle.wifi_probe, "probe", fake_wifi_probe)
     monkeypatch.setattr(lifecycle, "_attempt_start_candidate", fake_attempt_start_candidate)
     monkeypatch.setattr(lifecycle, "build_cmd_nat", fake_build_cmd_nat)
     monkeypatch.setattr(lifecycle, "_prepare_ap_interface", lambda *_args, **_kwargs: [])

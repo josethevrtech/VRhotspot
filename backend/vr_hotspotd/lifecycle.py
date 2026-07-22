@@ -1104,6 +1104,47 @@ def _snapshot_default_uplink_is_known(snapshot: HostFactsSnapshot) -> bool:
     )
 
 
+def _snapshot_os_release(snapshot: HostFactsSnapshot) -> Dict[str, str]:
+    """Return the already-captured os-release mapping for lifecycle policy."""
+
+    info = {item.key: item.value for item in snapshot.platform.os_release}
+    complete = bool(info) and not any(
+        error.probe_id == snapshot.platform.source_probe_id
+        for error in snapshot.probe_errors
+    )
+    return info if complete else os_release.read_os_release()
+
+
+def _snapshot_firewall_backend(snapshot: HostFactsSnapshot) -> str:
+    """Use snapshot selection unless a functional backend fact is incomplete."""
+
+    by_name = {item.name: item for item in snapshot.firewall.backends}
+    functional_incomplete = any(
+        error.probe_id == probe_id
+        and by_name.get(backend_name) is not None
+        and by_name[backend_name].tool_present
+        for backend_name, probe_id in (
+            ("firewalld", "firewall.firewalld.functional"),
+            ("ufw", "firewall.ufw.functional"),
+        )
+        for error in snapshot.probe_errors
+    )
+    tool_resolution_incomplete = any(
+        error.probe_id
+        in {
+            "tool.firewall-cmd",
+            "tool.ufw",
+            "tool.nft",
+            "tool.iptables",
+        }
+        for error in snapshot.probe_errors
+    )
+    if functional_incomplete or tool_resolution_incomplete:
+        firewall_probe = wifi_probe.detect_firewall_backends()
+        return firewall_probe.get("selected_backend") or "unknown"
+    return snapshot.firewall.selected_backend or "unknown"
+
+
 def _snapshot_uplink_guard_error(
     snapshot: HostFactsSnapshot,
     ap_ifname: Optional[str],
@@ -1915,6 +1956,7 @@ def _start_hotspot_5ghz_strict(
         country=country if isinstance(country, str) else None,
         allow_dfs=allow_dfs_channels,
         preferred_primary_channel=preferred_primary_channel,
+        include_host_context=False,
     )
     wifi = probe.get("wifi") if isinstance(probe, dict) else {}
     wifi_errors = wifi.get("errors") if isinstance(wifi, dict) else []
@@ -3693,9 +3735,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     cfg = _apply_start_overrides(cfg, overrides)
     allow_fallback_40mhz = bool(cfg.get("allow_fallback_40mhz", False))
     allow_dfs_channels = bool(cfg.get("allow_dfs_channels", False))
-    firewall_probe = wifi_probe.detect_firewall_backends()
-    firewall_backend = firewall_probe.get("selected_backend") or "unknown"
-    platform_info = os_release.read_os_release()
+    firewall_backend = _snapshot_firewall_backend(host_facts_snapshot)
+    platform_info = _snapshot_os_release(host_facts_snapshot)
     platform_warnings: List[str] = []
     try:
         cfg, platform_warnings = os_release.apply_platform_overrides(cfg, platform_info)

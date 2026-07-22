@@ -391,7 +391,19 @@ def probe(
     country: Optional[str] = None,
     allow_dfs: bool = False,
     preferred_primary_channel: Optional[int] = None,
+    include_host_context: bool = True,
 ) -> Dict[str, Any]:
+    if not include_host_context:
+        return {
+            "wifi": probe_5ghz_80(
+                ap_ifname,
+                inventory=inventory,
+                country=country,
+                allow_dfs=allow_dfs,
+                preferred_primary_channel=preferred_primary_channel,
+            ),
+        }
+
     return {
         "os": detect_os_flavor(),
         "firewall": detect_firewall_backends(),
