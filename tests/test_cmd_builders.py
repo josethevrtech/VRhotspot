@@ -1,6 +1,8 @@
 import sys
 
 from vr_hotspotd.engine.hostapd6_cmd import build_cmd_6ghz
+from vr_hotspotd.engine.hostapd_bridge_cmd import build_cmd_bridge
+from vr_hotspotd.engine.hostapd_nat_cmd import build_cmd_nat
 from vr_hotspotd.engine.lnxrouter_cmd import build_cmd
 from vr_hotspotd.lifecycle import _precreated_ap_ifname
 
@@ -61,6 +63,65 @@ def test_hostapd6_cmd_builds_flags():
     assert "--debug" in cmd
 
 
+def test_hostapd_nat_cmd_preserves_non_secret_arguments():
+    cmd = build_cmd_nat(
+        ap_ifname="wlan1",
+        ssid="NatHotspot",
+        passphrase="password123",
+        band="5ghz",
+        ap_security="wpa2",
+        country="US",
+        channel=149,
+        no_virt=True,
+        debug=False,
+        wifi6=True,
+        gateway_ip="192.168.68.1",
+        dhcp_dns="1.1.1.1",
+        channel_width="80",
+        strict_width=True,
+    )
+
+    assert cmd[:3] == [sys.executable, "-m", "vr_hotspotd.engine.hostapd_nat_engine"]
+    assert cmd[cmd.index("--ap-ifname") + 1] == "wlan1"
+    assert cmd[cmd.index("--ssid") + 1] == "NatHotspot"
+    assert cmd[cmd.index("--band") + 1] == "5ghz"
+    assert cmd[cmd.index("--channel") + 1] == "149"
+    assert cmd[cmd.index("--gateway-ip") + 1] == "192.168.68.1"
+    assert cmd[cmd.index("--dhcp-dns") + 1] == "1.1.1.1"
+    assert cmd[cmd.index("--channel-width") + 1] == "80"
+    assert "--no-virt" in cmd
+    assert "--wifi6" in cmd
+    assert "--strict-width" in cmd
+
+
+def test_hostapd_bridge_cmd_preserves_non_secret_arguments():
+    cmd = build_cmd_bridge(
+        ap_ifname="wlan1",
+        ssid="BridgeHotspot",
+        passphrase="password123",
+        band="5ghz",
+        ap_security="wpa2",
+        country="US",
+        channel=36,
+        no_virt=True,
+        debug=True,
+        wifi6=True,
+        bridge_name="vrbr0",
+        bridge_uplink="eth0",
+        channel_width="80",
+    )
+
+    assert cmd[:3] == [sys.executable, "-m", "vr_hotspotd.engine.hostapd_bridge_engine"]
+    assert cmd[cmd.index("--ap-ifname") + 1] == "wlan1"
+    assert cmd[cmd.index("--ssid") + 1] == "BridgeHotspot"
+    assert cmd[cmd.index("--bridge-name") + 1] == "vrbr0"
+    assert cmd[cmd.index("--bridge-uplink") + 1] == "eth0"
+    assert cmd[cmd.index("--channel-width") + 1] == "80"
+    assert "--no-virt" in cmd
+    assert "--debug" in cmd
+    assert "--wifi6" in cmd
+
+
 def test_lnxrouter_cmd_virt_mode_uses_precreated_ap_ifname():
     ap_ifname = _precreated_ap_ifname("wlan0")
     cmd = build_cmd(
@@ -115,4 +176,3 @@ def test_lnxrouter_cmd_does_not_set_virt_name_when_no_virt_enabled():
         no_virt=True,
     )
     assert "--virt-name" not in cmd
-

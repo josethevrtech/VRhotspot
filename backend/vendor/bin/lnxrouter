@@ -80,6 +80,7 @@ Options:
                             Create WiFi access point
     -p, --password <password>
                             WiFi password
+    --password-fd <fd>      Read WiFi password from an inherited file descriptor
     --qr                    Show WiFi QR code in terminal (need qrencode)
 
     --hidden                Hide access point (not broadcast SSID)
@@ -400,6 +401,22 @@ parse_user_options(){
             -p|--password)
                 shift
                 PASSPHRASE="$1"
+                shift
+                ;;
+            --password-fd)
+                shift
+                PASSPHRASE_FD="$1"
+                if [[ ! "$PASSPHRASE_FD" =~ ^[0-9]+$ ]]; then
+                    echo "ERROR: Invalid password file descriptor" >&2
+                    exit 1
+                fi
+                PASSPHRASE=
+                IFS= read -r -d '' PASSPHRASE <&"$PASSPHRASE_FD" || true
+                exec {PASSPHRASE_FD}<&-
+                if [[ -z "$PASSPHRASE" ]]; then
+                    echo "ERROR: Could not read WiFi password" >&2
+                    exit 1
+                fi
                 shift
                 ;;
             --qr)
@@ -1992,6 +2009,7 @@ dealwith_mac() {
 }
 
 write_hostapd_conf() {
+    (umask 077; : > "$CONFDIR/hostapd.conf") || die "Failed creating hostapd config"
     cat <<- EOF > "$CONFDIR/hostapd.conf"
 		beacon_int=100
 		ssid=${SSID}

@@ -1,6 +1,9 @@
 import argparse
+import io
 import os
+import stat
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -78,3 +81,100 @@ def test_main_bootstrap_failure_restores_managed_state(
 
     assert ("set_type_managed", "wlan1") in calls
     assert ("nm_set_managed", "wlan1", True) in calls
+
+
+def test_main_early_hostapd_failure_removes_protected_secret_config(
+    monkeypatch,
+    mock_missing_system_commands,
+    tmp_path,
+    capsys,
+):
+    import vr_hotspotd.engine.hostapd_nat_engine as eng
+
+    secret = "cleanup-secret-123"
+    args = argparse.Namespace(
+        ap_ifname="wlan1",
+        ssid="VR-Hotspot",
+        passphrase=secret,
+        band="5ghz",
+        ap_security="wpa2",
+        country="US",
+        channel=36,
+        no_virt=True,
+        debug=False,
+        wifi6=False,
+        gateway_ip="192.168.68.1",
+        dhcp_start="192.168.68.10",
+        dhcp_end="192.168.68.250",
+        dhcp_dns="gateway",
+        no_internet=False,
+        channel_width="80",
+        beacon_interval=50,
+        dtim_period=1,
+        short_guard_interval=True,
+        tx_power=None,
+        strict_width=True,
+    )
+    lnxrouter_tmp = tmp_path / "lnxrouter_tmp"
+    conf_dir = lnxrouter_tmp / "lnxrouter.wlan1.conf.TEST"
+    conf_dir.mkdir(parents=True)
+    captured = {}
+
+    class FailedHostapd:
+        pid = 4141
+        returncode = 1
+
+        def __init__(self):
+            self.stdout = io.StringIO("synthetic hostapd failure\n")
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            return None
+
+    def fake_popen(command, **_kwargs):
+        config_path = Path(command[-1])
+        captured["path"] = config_path
+        captured["mode"] = stat.S_IMODE(config_path.stat().st_mode)
+        captured["content"] = config_path.read_text(encoding="utf-8")
+        return FailedHostapd()
+
+    monkeypatch.setenv("VR_HOTSPOT_LNXROUTER_TMPDIR", str(lnxrouter_tmp))
+    monkeypatch.setattr(eng.argparse.ArgumentParser, "parse_args", lambda self: args)
+    monkeypatch.setattr(eng.tempfile, "mkdtemp", lambda prefix, dir: str(conf_dir))
+    monkeypatch.setattr(eng, "_resolve_binary", lambda name, env_key: f"/usr/sbin/{name}")
+    monkeypatch.setattr(eng, "_is_bazzite", lambda: False)
+    monkeypatch.setattr(eng, "_maybe_set_regdom", lambda _country: None)
+    monkeypatch.setattr(eng, "_remove_p2p_dev_ifaces", lambda _ifname: [])
+    monkeypatch.setattr(eng, "_iwd_is_active", lambda: False)
+    monkeypatch.setattr(eng, "_is_nm_running", lambda: False)
+    monkeypatch.setattr(eng, "_rfkill_unblock_wifi", lambda: None)
+    monkeypatch.setattr(eng, "_iface_down", lambda _ifname: None)
+    monkeypatch.setattr(eng, "_flush_ip", lambda _ifname: None)
+    monkeypatch.setattr(eng, "_set_iface_type_ap", lambda _ifname: True)
+    monkeypatch.setattr(eng, "_set_iface_type_managed", lambda _ifname: True)
+    monkeypatch.setattr(eng, "_iface_up_with_recovery", lambda _ifname, no_virt=False: None)
+    monkeypatch.setattr(eng, "_ensure_ctrl_interface_dir", lambda _path: None)
+    monkeypatch.setattr(eng.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(eng.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(eng.signal, "signal", lambda *_args: None)
+
+    rc = eng.main()
+
+    assert rc == 1
+    assert captured["mode"] == 0o600
+    assert secret in captured["content"]
+    assert not captured["path"].exists()
+    assert not conf_dir.exists()
+    output = capsys.readouterr()
+    assert secret not in output.out
+    assert secret not in output.err
+    assert str(captured["path"]) not in output.out
+    assert str(captured["path"]) not in output.err
