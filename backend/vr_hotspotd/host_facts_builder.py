@@ -1,8 +1,9 @@
 """Read-only builder for an operation-scoped :class:`HostFactsSnapshot`.
 
-The builder is deliberately not imported by lifecycle, diagnostics, adapter,
-API, engine, installer, or support-bundle code yet.  Command execution and
-filesystem access are injectable so unit tests use deterministic fakes.
+Diagnostics, adapter inventory/readiness, and lifecycle selection consume a
+fresh snapshot for each operation. Command execution and filesystem access are
+injectable so unit tests use deterministic fakes; live post-start route/NAT
+discovery remains outside this pre-mutation collection window.
 """
 
 from __future__ import annotations
