@@ -124,3 +124,55 @@ Wiphy phy0
     codes = {err["code"] for err in res["errors"]}
     assert "dfs_required_but_disabled" in codes
     assert "non_dfs_80mhz_channels_unavailable" in codes
+
+
+def test_probe_wifi_only_bypasses_unused_host_context(monkeypatch):
+    wifi_result = {"errors": [], "candidates": [{"primary_channel": 36}]}
+
+    def fail_host_context(*_args, **_kwargs):
+        raise AssertionError("unused host context was probed")
+
+    monkeypatch.setattr(wifi_probe, "detect_os_flavor", fail_host_context)
+    monkeypatch.setattr(wifi_probe, "detect_firewall_backends", fail_host_context)
+    monkeypatch.setattr(wifi_probe, "detect_network_manager", fail_host_context)
+    monkeypatch.setattr(
+        wifi_probe,
+        "probe_5ghz_80",
+        lambda *_args, **_kwargs: wifi_result,
+    )
+
+    assert wifi_probe.probe("wlan1", include_host_context=False) == {
+        "wifi": wifi_result,
+    }
+
+
+def test_probe_default_retains_legacy_host_context_shape(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        wifi_probe,
+        "detect_os_flavor",
+        lambda: calls.append("os") or {"flavor": "ubuntu_debian"},
+    )
+    monkeypatch.setattr(
+        wifi_probe,
+        "detect_firewall_backends",
+        lambda: calls.append("firewall") or {"selected_backend": "nftables"},
+    )
+    monkeypatch.setattr(
+        wifi_probe,
+        "detect_network_manager",
+        lambda: calls.append("network_manager") or {"running": True},
+    )
+    monkeypatch.setattr(
+        wifi_probe,
+        "probe_5ghz_80",
+        lambda *_args, **_kwargs: calls.append("wifi") or {"errors": []},
+    )
+
+    assert wifi_probe.probe("wlan1") == {
+        "os": {"flavor": "ubuntu_debian"},
+        "firewall": {"selected_backend": "nftables"},
+        "network_manager": {"running": True},
+        "wifi": {"errors": []},
+    }
+    assert calls == ["os", "firewall", "network_manager", "wifi"]

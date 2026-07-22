@@ -566,3 +566,55 @@ def test_default_uplink_execution_error_policies_are_unchanged(monkeypatch):
     with pytest.raises(FileNotFoundError) as exc:
         hostapd_nat_engine._default_uplink_iface()
     assert exc.value is failure
+
+
+def test_network_tuning_keeps_live_post_start_uplink_discovery(monkeypatch):
+    discovered = iter(("enp4s0", "wwan0"))
+    route_calls = []
+    nat_calls = []
+
+    def discover_uplink():
+        uplink = next(discovered)
+        route_calls.append(uplink)
+        return uplink
+
+    def apply_nat(
+        _cfg,
+        *,
+        ap_ifname,
+        uplink_ifname,
+        enable_internet,
+        firewalld_cfg,
+    ):
+        nat_calls.append(
+            (ap_ifname, uplink_ifname, enable_internet, firewalld_cfg)
+        )
+        return {}, []
+
+    monkeypatch.setattr(network_tuning, "_default_uplink_iface", discover_uplink)
+    monkeypatch.setattr(
+        network_tuning.qos,
+        "apply",
+        lambda *_args, **_kwargs: ({}, []),
+    )
+    monkeypatch.setattr(network_tuning.nat_accel, "apply", apply_nat)
+
+    first_state, first_warnings = network_tuning.apply(
+        {},
+        ap_ifname="wlan1",
+        enable_internet=True,
+    )
+    second_state, second_warnings = network_tuning.apply(
+        {},
+        ap_ifname="wlan1",
+        enable_internet=True,
+    )
+
+    assert route_calls == ["enp4s0", "wwan0"]
+    assert first_state == {"uplink_ifname": "enp4s0"}
+    assert second_state == {"uplink_ifname": "wwan0"}
+    assert first_warnings == second_warnings == []
+    assert nat_calls == [
+        ("wlan1", "enp4s0", True, None),
+        ("wlan1", "wwan0", True, None),
+    ]

@@ -523,6 +523,17 @@ def _snapshot_concurrency(snapshot: HostFactsSnapshot) -> Dict[str, Optional[boo
     }
 
 
+def _snapshot_has_complete_adapter_projection(snapshot: HostFactsSnapshot) -> bool:
+    """Return whether snapshot-owned inputs can replace legacy inventory reads."""
+
+    return not any(
+        error.probe_id in ("iw.dev", "iw.regulatory")
+        or error.probe_id.startswith("iw.phy.")
+        or error.probe_id.startswith("sysfs.adapter.")
+        for error in snapshot.probe_errors
+    )
+
+
 def build_preflight_report(
     *,
     platform_matrix: Mapping[str, Any],
@@ -1024,7 +1035,11 @@ def collect_preflight_report(
 
     platform_matrix_base = _safe_collect(
         "platform",
-        collect_platform_matrix,
+        (
+            lambda: collect_platform_matrix(host_facts_snapshot=snapshot)
+            if snapshot is not None
+            else collect_platform_matrix()
+        ),
         {},
         failures,
     )
@@ -1080,7 +1095,12 @@ def collect_preflight_report(
     )
     policy_inventory = _safe_collect(
         "adapter_inventory",
-        get_adapters,
+        (
+            lambda: get_adapters(host_facts_snapshot=snapshot)
+            if snapshot is not None
+            and _snapshot_has_complete_adapter_projection(snapshot)
+            else get_adapters()
+        ),
         {"error": "probe_failed", "adapters": [], "recommended": None},
         failures,
     )

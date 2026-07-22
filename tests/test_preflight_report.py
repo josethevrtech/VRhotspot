@@ -276,9 +276,17 @@ def _host_facts_snapshot():
 
 
 def _patch_snapshot_collector_dependencies(monkeypatch, *, preflight_callback=None):
-    monkeypatch.setattr(preflight_report, "collect_platform_matrix", lambda: PLATFORM)
+    monkeypatch.setattr(
+        preflight_report,
+        "collect_platform_matrix",
+        lambda *, host_facts_snapshot=None: PLATFORM,
+    )
     monkeypatch.setattr(preflight_report, "_collect_runtime_binaries", lambda: BINARIES)
-    monkeypatch.setattr(preflight_report, "get_adapters", lambda: INVENTORY)
+    monkeypatch.setattr(
+        preflight_report,
+        "get_adapters",
+        lambda *, host_facts_snapshot=None: INVENTORY,
+    )
     monkeypatch.setattr(
         preflight_report,
         "build_readiness_model",
@@ -586,21 +594,23 @@ def test_collector_uses_mocked_read_only_probe_results(monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(
-        preflight_report,
-        "collect_platform_matrix",
-        lambda: calls.append("platform") or PLATFORM,
-    )
+    def collect_platform(*, host_facts_snapshot=None):
+        assert host_facts_snapshot is snapshot
+        calls.append(("platform", host_facts_snapshot.metadata.snapshot_id))
+        return PLATFORM
+
+    monkeypatch.setattr(preflight_report, "collect_platform_matrix", collect_platform)
     monkeypatch.setattr(
         preflight_report,
         "_collect_runtime_binaries",
         lambda: calls.append("binaries") or BINARIES,
     )
-    monkeypatch.setattr(
-        preflight_report,
-        "get_adapters",
-        lambda: calls.append("inventory") or INVENTORY,
-    )
+    def collect_inventory(*, host_facts_snapshot=None):
+        assert host_facts_snapshot is snapshot
+        calls.append(("inventory", host_facts_snapshot.metadata.snapshot_id))
+        return INVENTORY
+
+    monkeypatch.setattr(preflight_report, "get_adapters", collect_inventory)
     monkeypatch.setattr(
         preflight_report,
         "build_readiness_model",
@@ -655,6 +665,8 @@ def test_collector_uses_mocked_read_only_probe_results(monkeypatch):
     )
 
     assert report["overall_readiness"] == "ready"
+    assert ("platform", "preflight-snapshot-1") in calls
+    assert ("inventory", "preflight-snapshot-1") in calls
     assert ("readiness", INVENTORY) in calls
     assert report["network"]["active_uplink_interface"] == "enp4s0"
     assert report["firewall"] == {
@@ -693,6 +705,102 @@ def test_snapshot_backed_collector_preserves_existing_report_projection(monkeypa
 
     assert actual == expected
     assert built_for == ["diagnostics_preflight"]
+
+
+def test_collector_retains_legacy_no_snapshot_probe_paths(monkeypatch):
+    calls = []
+
+    def fail_snapshot(*, operation_kind):
+        assert operation_kind == "diagnostics_preflight"
+        raise RuntimeError("snapshot unavailable")
+
+    def collect_platform():
+        calls.append("platform")
+        return PLATFORM
+
+    def collect_inventory():
+        calls.append("inventory")
+        return INVENTORY
+
+    monkeypatch.setattr(preflight_report, "build_host_facts_snapshot", fail_snapshot)
+    monkeypatch.setattr(preflight_report, "collect_platform_matrix", collect_platform)
+    monkeypatch.setattr(
+        preflight_report,
+        "_collect_runtime_binaries",
+        lambda: calls.append("binaries") or BINARIES,
+    )
+    monkeypatch.setattr(preflight_report, "get_adapters", collect_inventory)
+    monkeypatch.setattr(
+        preflight_report,
+        "build_readiness_model",
+        lambda inventory: calls.append(("readiness", inventory)) or READINESS,
+    )
+    monkeypatch.setattr(
+        preflight_report.host_probes,
+        "probe_firewall_backends",
+        lambda: calls.append("firewall") or FIREWALL,
+    )
+    monkeypatch.setattr(
+        preflight_report.host_probes,
+        "probe_network_manager",
+        lambda: calls.append("network_manager")
+        or {"nmcli": True, "running": True},
+    )
+    monkeypatch.setattr(
+        preflight_report.host_probes,
+        "probe_iwd",
+        lambda: calls.append("iwd")
+        or {
+            "present": False,
+            "active": False,
+            "status": "not_installed",
+            "iwctl": False,
+        },
+    )
+    monkeypatch.setattr(
+        preflight_report.host_probes,
+        "probe_default_uplink",
+        lambda: calls.append("default_uplink") or "enp4s0",
+    )
+    monkeypatch.setattr(
+        preflight_report,
+        "probe_ap_managed_concurrency",
+        lambda phy: calls.append(("concurrency", phy)) or True,
+    )
+    monkeypatch.setattr(
+        preflight_report.preflight,
+        "run",
+        lambda _config, **_kwargs: {"errors": [], "warnings": [], "details": {}},
+    )
+
+    report = preflight_report.collect_preflight_report(
+        {
+            "band_preference": "5ghz",
+            "channel_width": "80",
+            "enable_internet": True,
+        }
+    )
+
+    call_labels = {
+        entry[0] if isinstance(entry, tuple) else entry for entry in calls
+    }
+
+    assert set(report) == set(_build())
+    assert {
+        "platform",
+        "firewall",
+        "network_manager",
+        "iwd",
+        "binaries",
+        "inventory",
+        "default_uplink",
+    }.issubset(call_labels)
+    assert ("readiness", INVENTORY) in calls
+    assert ("concurrency", "phy1") in calls
+    assert any(
+        item["probe"] == "host_facts_snapshot"
+        for item in report["evidence"]["probe_failures"]
+    )
 
 
 def test_partial_snapshot_failure_is_visible_and_prevents_confident_pass(monkeypatch):
