@@ -1,8 +1,9 @@
 """Immutable internal models for one read-only host-facts collection window.
 
-These types are intentionally unused by runtime consumers in their first PR.
-They contain facts and provenance only; adapter scoring, readiness, lifecycle,
-preflight, firewall mutation, and public response policy remain elsewhere.
+These types are the shared factual foundation consumed by preflight, adapter
+inventory/readiness, and lifecycle selection. They contain facts and
+provenance only; scoring, safety policy, host mutation, and public response
+projection remain with their owning modules.
 """
 
 from __future__ import annotations
