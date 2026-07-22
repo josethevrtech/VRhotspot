@@ -220,6 +220,56 @@ def parse_iw_dev_interfaces(text: str) -> List[Dict[str, str]]:
     return interfaces
 
 
+def parse_iw_dev_facts(text: str) -> List[Dict[str, Any]]:
+    """Parse one ``iw dev`` capture without retaining SSID values.
+
+    The richer shape is intended for immutable host-fact snapshots.  Existing
+    inventory callers keep using :func:`parse_iw_dev_interfaces` and therefore
+    retain their current compatibility behavior.
+    """
+
+    interfaces: List[Dict[str, Any]] = []
+    current_phy: Optional[str] = None
+    current: Optional[Dict[str, Any]] = None
+
+    def finish_current() -> None:
+        nonlocal current
+        if current is not None:
+            interfaces.append(current)
+            current = None
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("phy#"):
+            finish_current()
+            suffix = line.split("#", 1)[1].strip()
+            number = suffix.split()[0] if suffix else ""
+            current_phy = f"phy{number}" if number else None
+            continue
+        if line.startswith("Interface "):
+            finish_current()
+            parts = line.split()
+            if len(parts) >= 2:
+                current = {
+                    "ifname": parts[1].strip(),
+                    "phy": current_phy,
+                    "interface_type": None,
+                    "ssid_present": False,
+                }
+            continue
+        if current is None:
+            continue
+        if line.startswith("type "):
+            value = line.split(None, 1)[1].strip()
+            current["interface_type"] = value or None
+        elif line.startswith("ssid "):
+            # Association presence is useful evidence; the SSID itself is not.
+            current["ssid_present"] = True
+
+    finish_current()
+    return interfaces
+
+
 def split_wiphy_sections(text: str) -> Dict[str, str]:
     sections: Dict[str, List[str]] = {}
     current: Optional[str] = None
@@ -253,6 +303,34 @@ def parse_supported_interface_modes(text: str) -> Optional[List[str]]:
             modes.append(line.lstrip("*").strip())
         elif line:
             break
+    return modes
+
+
+def parse_all_supported_interface_modes(text: str) -> Optional[List[str]]:
+    """Return modes from every ``Supported interface modes`` block.
+
+    Inventory's compatibility parser deliberately continues scanning after an
+    earlier block.  The snapshot uses this additive parser so one captured phy
+    can retain that factual evidence without changing existing callers.
+    """
+
+    if not text or "Supported interface modes" not in text:
+        return None
+    modes: List[str] = []
+    in_modes = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("Supported interface modes"):
+            in_modes = True
+            continue
+        if not in_modes:
+            continue
+        if line.startswith("*"):
+            mode = line.lstrip("*").strip()
+            if mode and mode not in modes:
+                modes.append(mode)
+        elif line:
+            in_modes = False
     return modes
 
 
@@ -410,6 +488,43 @@ def parse_band_support(text: str) -> Dict[str, bool]:
     return supports
 
 
+def parse_iw_frequencies(text: str) -> List[Dict[str, Any]]:
+    """Return curated frequency/channel facts from ``iw phy`` output."""
+
+    frequencies: List[Dict[str, Any]] = []
+    for raw in text.splitlines():
+        match = _IW_FREQ_LINE_RE.match(raw.strip())
+        if not match:
+            continue
+        try:
+            mhz = int(float(match.group(1)))
+            channel = int(match.group(2))
+        except Exception:
+            continue
+
+        lowered = (match.group(3) or "").lower()
+        if 2400 <= mhz <= 2500:
+            band = "2.4ghz"
+        elif 4900 <= mhz <= 5900:
+            band = "5ghz"
+        elif 5925 <= mhz <= 7125:
+            band = "6ghz"
+        else:
+            band = "unknown"
+        no_ir = "no ir" in lowered or "no-ir" in lowered or "no_ir" in lowered
+        frequencies.append(
+            {
+                "frequency_mhz": mhz,
+                "channel": channel,
+                "band": band,
+                "disabled": "disabled" in lowered,
+                "no_ir": no_ir,
+                "dfs": "radar detection" in lowered or "dfs" in lowered,
+            }
+        )
+    return frequencies
+
+
 def parse_5ghz_channels(text: str) -> List[Dict[str, Any]]:
     channels: List[Dict[str, Any]] = []
     in_frequencies = False
@@ -514,6 +629,44 @@ def parse_default_uplink(text: str) -> Optional[str]:
         if index + 1 < len(parts):
             return parts[index + 1]
     return None
+
+
+def parse_default_routes(text: str) -> List[Dict[str, Any]]:
+    """Parse curated facts for every ``default`` route line.
+
+    This deliberately does not sort or choose a route.  Snapshot callers can
+    retain the command order while :func:`parse_default_uplink` preserves the
+    existing first-``dev`` compatibility selection.
+    """
+
+    routes: List[Dict[str, Any]] = []
+    for raw in text.splitlines():
+        parts = raw.strip().split()
+        if not parts or parts[0] != "default":
+            continue
+
+        def value_after(token: str) -> Optional[str]:
+            if token not in parts:
+                return None
+            index = parts.index(token)
+            if index + 1 >= len(parts):
+                return None
+            return parts[index + 1]
+
+        metric_text = value_after("metric")
+        try:
+            metric = int(metric_text) if metric_text is not None else None
+        except ValueError:
+            metric = None
+        routes.append(
+            {
+                "interface": value_after("dev"),
+                "gateway": value_after("via"),
+                "metric": metric,
+                "protocol": value_after("proto"),
+            }
+        )
+    return routes
 
 
 def probe_default_uplink(
