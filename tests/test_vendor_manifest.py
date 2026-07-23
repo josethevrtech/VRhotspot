@@ -1,4 +1,5 @@
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 
@@ -20,8 +21,16 @@ def _errors(manifest):
     return checker.validate_manifest(manifest, tracked, ROOT)
 
 
-def test_repository_vendor_manifest_is_structurally_valid_and_complete():
+def test_repository_vendor_manifest_is_valid_complete_and_payload_hashes_match():
     assert _errors(_manifest()) == []
+
+
+def test_repository_payload_bytes_match_declared_sha256_values():
+    manifest = _manifest()
+
+    for entry in manifest["files"]:
+        payload = ROOT / entry["path"]
+        assert hashlib.sha256(payload.read_bytes()).hexdigest() == entry["sha256"]
 
 
 def test_manifest_json_parse_failure_is_reported(tmp_path):
@@ -78,11 +87,18 @@ def test_manifest_excludes_itself_and_matches_executable_modes():
     assert any("manifest executable does not match working-tree mode" in error for error in errors)
 
 
-def test_unknown_provenance_and_valid_declared_hash_are_not_payload_failures():
+def test_manifest_rejects_sha256_that_does_not_match_current_file_bytes():
+    manifest = _manifest()
+    path = manifest["files"][0]["path"]
+    manifest["files"][0]["sha256"] = "0" * 64
+
+    assert f"manifest SHA-256 does not match current file bytes for {path}" in _errors(manifest)
+
+
+def test_unknown_provenance_fields_remain_allowed():
     manifest = _manifest()
     manifest["files"][0]["license_status"] = "unknown"
     manifest["files"][0]["provenance_status"] = "unknown_unverified"
-    manifest["files"][0]["sha256"] = "0" * 64
 
     assert _errors(manifest) == []
 
@@ -108,7 +124,8 @@ def test_vendor_sbom_is_deterministic_sorted_and_bounded():
         for component in sbom["components"]
     )
     assert "backend/vendor only; not a full-project SBOM" in expected
-    assert "syntax-only; payload bytes not compared" in expected
+    assert "CI/source-tree payload bytes compared before SBOM output" in expected
+    assert "syntax-only" not in expected
     assert "timestamp" not in expected
     assert "serialNumber" not in expected
     assert str(ROOT) not in expected
