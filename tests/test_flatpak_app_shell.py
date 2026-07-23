@@ -6,9 +6,16 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import warnings
 import xml.etree.ElementTree as ET
 
 import pytest
+
+from flatpak_client import (
+    AuthenticationError,
+    ConnectionFailure,
+    DaemonTokenMissingError,
+)
 
 
 APP_ID = "io.github.josethevrtech.VRhotspot"
@@ -115,6 +122,14 @@ class ScriptedReadOnlyClientFactory:
         return Client()
 
 
+class FakeInputStream:
+    def __init__(self, *, interactive):
+        self.interactive = interactive
+
+    def isatty(self):
+        return self.interactive
+
+
 def _manifest():
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
@@ -190,6 +205,341 @@ def test_smoke_json_contains_no_secret_or_host_path_leak_markers():
         "/var/",
     ):
         assert forbidden not in rendered
+
+
+def test_live_pairing_smoke_command_dispatches_without_importing_gtk(monkeypatch):
+    from flatpak_app import app
+
+    calls = []
+
+    def fake_live_smoke():
+        calls.append("live_smoke")
+        return 17
+
+    monkeypatch.setattr(app, "run_live_pairing_smoke_json", fake_live_smoke)
+    monkeypatch.setitem(sys.modules, "gi", None)
+
+    assert app.main(["--live-pairing-smoke-json"]) == 17
+    assert calls == ["live_smoke"]
+    assert sys.modules.get("gi") is None
+
+
+def test_live_smoke_refuses_noninteractive_input_with_token_free_json(capsys):
+    from flatpak_app import app
+
+    def forbidden_prompt(_prompt):
+        raise AssertionError("noninteractive smoke must not prompt")
+
+    def forbidden_factory(*, token):
+        raise AssertionError("noninteractive smoke must not create a client")
+
+    exit_code = app.run_live_pairing_smoke_json(
+        input_stream=FakeInputStream(interactive=False),
+        token_prompt=forbidden_prompt,
+        client_factory=forbidden_factory,
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 2
+    assert captured.err == ""
+    assert payload["live_smoke"]["status"] == "interactive_input_required"
+    assert payload["daemon"]["reachable"] is None
+    assert payload["pairing"]["paired"] is False
+    assert payload["controls"]["mutation_actions"] == []
+    assert payload["support_bundle"]["action_enabled"] is False
+
+
+def test_live_smoke_success_returns_bounded_sanitized_ui_ready_json(capsys):
+    from flatpak_app import MAX_LIVE_SMOKE_JSON_BYTES
+    from flatpak_app import app
+
+    secret = "live-smoke-success-value-must-not-escape"
+    prompts = []
+    factory = ScriptedReadOnlyClientFactory()
+
+    def hidden_prompt(prompt):
+        prompts.append(prompt)
+        return secret
+
+    exit_code = app.run_live_pairing_smoke_json(
+        input_stream=FakeInputStream(interactive=True),
+        token_prompt=hidden_prompt,
+        client_factory=factory,
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert prompts == ["VRhotspot daemon API token: "]
+    assert len(captured.out.encode("utf-8")) <= MAX_LIVE_SMOKE_JSON_BYTES + 1
+    assert set(payload) == {
+        "application",
+        "live_smoke",
+        "daemon",
+        "pairing",
+        "adapter_readiness",
+        "preflight",
+        "support_bundle",
+        "controls",
+    }
+    assert payload["application"] == {"id": APP_ID, "name": APP_NAME}
+    assert payload["live_smoke"]["status"] == "success"
+    assert payload["daemon"]["reachable"] is True
+    assert payload["pairing"]["paired"] is True
+    assert payload["adapter_readiness"]["recommended_interface"] == "wlan1"
+    assert payload["preflight"]["readiness_label"] == "Needs attention"
+    assert payload["support_bundle"]["action_enabled"] is False
+    assert payload["support_bundle"]["request_performed"] is False
+    assert payload["controls"] == {
+        "mutation_actions": [],
+        "support_bundle_export_enabled": False,
+    }
+    assert factory.token_presence == [False, True, True]
+    assert secret not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected_status", "daemon_reachable", "pairing_title"),
+    [
+        (
+            ScriptedReadOnlyClientFactory(
+                readiness_result=AuthenticationError(401)
+            ),
+            "token_rejected",
+            True,
+            "Token rejected",
+        ),
+        (
+            ScriptedReadOnlyClientFactory(
+                health_result=ConnectionFailure("offline")
+            ),
+            "daemon_unreachable",
+            False,
+            "Pairing unavailable",
+        ),
+        (
+            ScriptedReadOnlyClientFactory(
+                readiness_result=DaemonTokenMissingError()
+            ),
+            "daemon_token_missing",
+            True,
+            "Daemon token missing",
+        ),
+        (
+            ScriptedReadOnlyClientFactory(
+                readiness_result={"unexpected": "response"}
+            ),
+            "invalid_response",
+            None,
+            "Pairing status unknown",
+        ),
+    ],
+    ids=(
+        "token-rejected",
+        "daemon-unreachable",
+        "daemon-token-missing",
+        "malformed-pairing-response",
+    ),
+)
+def test_live_smoke_failures_are_nonzero_and_token_free(
+    capsys,
+    factory,
+    expected_status,
+    daemon_reachable,
+    pairing_title,
+):
+    from flatpak_app import app
+
+    secret = f"live-smoke-{expected_status}-must-not-escape"
+
+    exit_code = app.run_live_pairing_smoke_json(
+        input_stream=FakeInputStream(interactive=True),
+        token_prompt=lambda _prompt: secret,
+        client_factory=factory,
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 1
+    assert captured.err == ""
+    assert payload["live_smoke"]["status"] == expected_status
+    assert payload["daemon"]["reachable"] is daemon_reachable
+    assert payload["pairing"]["title"] == pairing_title
+    assert payload["pairing"]["paired"] is False
+    assert payload["controls"]["mutation_actions"] == []
+    assert payload["support_bundle"]["action_enabled"] is False
+    assert secret not in captured.out
+
+
+def test_live_smoke_malformed_preflight_is_unknown_and_nonzero(capsys):
+    from flatpak_app import app
+
+    secret = "live-smoke-malformed-preflight-must-not-escape"
+    factory = ScriptedReadOnlyClientFactory(
+        preflight_result=_api_response(
+            {
+                "schema_version": 99,
+                "overall_readiness": "future",
+            }
+        )
+    )
+
+    exit_code = app.run_live_pairing_smoke_json(
+        input_stream=FakeInputStream(interactive=True),
+        token_prompt=lambda _prompt: secret,
+        client_factory=factory,
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 1
+    assert payload["live_smoke"]["status"] == "invalid_response"
+    assert payload["pairing"]["paired"] is True
+    assert payload["preflight"]["severity"] == "unknown"
+    assert payload["controls"]["mutation_actions"] == []
+    assert secret not in captured.out
+
+
+def test_live_smoke_drops_secret_and_host_path_values_from_json(capsys):
+    from flatpak_app import app
+
+    entered_token = "entered-live-token-value-must-not-escape"
+    api_token_value = "daemon-api-token-value-must-not-escape"
+    passphrase_value = "wifi-passphrase-value-must-not-escape"
+    password_value = "daemon-password-value-must-not-escape"
+    psk_value = "wifi-psk-value-must-not-escape"
+    bearer_value = "bearer-value-must-not-escape"
+    host_path = "/var/lib/vr-hotspot/private-state.json"
+    factory = ScriptedReadOnlyClientFactory(
+        readiness_result=_api_response(
+            {
+                "recommended": "wlan1",
+                "basic_mode_recommended": "wlan1",
+                "summary": {"readiness_state": "ready"},
+                "adapters": [
+                    {
+                        "interface": "wlan1",
+                        "readiness_state": "ready",
+                        "explanation": (
+                            f"token={api_token_value}; "
+                            f"passphrase={passphrase_value}; "
+                            f"password={password_value}; psk={psk_value}"
+                        ),
+                    }
+                ],
+            }
+        ),
+        preflight_result=_api_response(
+            {
+                "schema_version": 1,
+                "overall_readiness": "warning",
+                "platform": {},
+                "firewall": {},
+                "services": {},
+                "network": {},
+                "wifi": {},
+                "issues": [
+                    {
+                        "severity": "warning",
+                        "code": "redaction_check",
+                        "message": (
+                            f"Authorization: Bearer {bearer_value}; "
+                            f"inspect {host_path}"
+                        ),
+                    }
+                ],
+                "recommended_actions": [],
+            }
+        ),
+    )
+
+    exit_code = app.run_live_pairing_smoke_json(
+        input_stream=FakeInputStream(interactive=True),
+        token_prompt=lambda _prompt: entered_token,
+        client_factory=factory,
+    )
+    captured = capsys.readouterr()
+    rendered = captured.out
+
+    assert exit_code == 0
+    for forbidden_value in (
+        entered_token,
+        api_token_value,
+        passphrase_value,
+        password_value,
+        psk_value,
+        bearer_value,
+        host_path,
+    ):
+        assert forbidden_value not in rendered
+    assert "[redacted]" in rendered
+    assert "[host path]" in rendered
+
+
+def test_live_smoke_rejects_empty_or_unavailable_hidden_input_without_a_client(
+    capsys,
+):
+    from flatpak_app import app
+
+    client_calls = []
+
+    def forbidden_factory(*, token):
+        client_calls.append(token)
+        raise AssertionError("empty or unavailable input must not create a client")
+
+    empty_exit = app.run_live_pairing_smoke_json(
+        input_stream=FakeInputStream(interactive=True),
+        token_prompt=lambda _prompt: "",
+        client_factory=forbidden_factory,
+    )
+    empty_payload = json.loads(capsys.readouterr().out)
+
+    def failed_prompt(_prompt):
+        raise OSError("terminal input unavailable")
+
+    cancelled_exit = app.run_live_pairing_smoke_json(
+        input_stream=FakeInputStream(interactive=True),
+        token_prompt=failed_prompt,
+        client_factory=forbidden_factory,
+    )
+    cancelled_payload = json.loads(capsys.readouterr().out)
+
+    assert empty_exit == 2
+    assert empty_payload["live_smoke"]["status"] == "token_input_empty"
+    assert cancelled_exit == 2
+    assert cancelled_payload["live_smoke"]["status"] == "token_input_cancelled"
+    assert client_calls == []
+
+
+def test_live_smoke_rejects_getpass_echo_fallback_before_reading_input(capsys):
+    from flatpak_app import app
+
+    secret = "fallback-must-not-read-or-echo-this-value"
+    client_calls = []
+
+    def fallback_prompt(_prompt):
+        warnings.warn("hidden input unavailable", app.getpass.GetPassWarning)
+        return secret
+
+    def forbidden_factory(*, token):
+        client_calls.append(token)
+        raise AssertionError("unsafe prompt fallback must not create a client")
+
+    exit_code = app.run_live_pairing_smoke_json(
+        input_stream=FakeInputStream(interactive=True),
+        token_prompt=fallback_prompt,
+        client_factory=forbidden_factory,
+    )
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 2
+    assert captured.err == ""
+    assert payload["live_smoke"]["status"] == "token_input_cancelled"
+    assert secret not in captured.out
+    assert client_calls == []
 
 
 def test_token_entry_requires_only_a_caller_supplied_token():
@@ -408,6 +758,9 @@ def test_shell_has_no_token_cli_argument_or_discovery_source():
 
     assert "--token" not in option_strings
     assert "--api-token" not in option_strings
+    assert "--live-pairing-smoke-json" in option_strings
+    assert "getpass.getpass" in source
+    assert "isatty()" in source
     assert "FirstRunTokenEntryController" in source
     assert "LocalApiClient" in source
     assert "TokenPairingController" in source
