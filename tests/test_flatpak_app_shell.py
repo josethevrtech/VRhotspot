@@ -49,6 +49,10 @@ def _readiness_response():
                     "bus_type": "usb",
                     "supports_5ghz": True,
                     "readiness_state": "ready",
+                    "reason_codes": [
+                        "supports_ap_mode",
+                        "daemon_recommended",
+                    ],
                     "explanation": "Ready for display-only diagnostics.",
                 }
             ],
@@ -128,6 +132,99 @@ class FakeInputStream:
 
     def isatty(self):
         return self.interactive
+
+
+class FakeGtkWidget:
+    def __init__(self, **_properties):
+        self.children = []
+        self.parent = None
+        self.css_classes = []
+        self.sensitive = True
+
+    def append(self, child):
+        child.parent = self
+        self.children.append(child)
+
+    def set_child(self, child):
+        self.children = []
+        self.append(child)
+
+    def attach(self, child, *_position):
+        self.append(child)
+
+    def get_first_child(self):
+        return self.children[0] if self.children else None
+
+    def get_next_sibling(self):
+        if self.parent is None:
+            return None
+        siblings = self.parent.children
+        index = siblings.index(self)
+        return siblings[index + 1] if index + 1 < len(siblings) else None
+
+    def remove(self, child):
+        self.children.remove(child)
+        child.parent = None
+
+    def add_css_class(self, css_class):
+        self.css_classes.append(css_class)
+
+    def set_sensitive(self, sensitive):
+        self.sensitive = sensitive
+
+    def set_wrap(self, _wrap):
+        pass
+
+    def set_xalign(self, _alignment):
+        pass
+
+    def set_hexpand(self, _expand):
+        pass
+
+    def set_column_homogeneous(self, _homogeneous):
+        pass
+
+    def set_margin_top(self, _margin):
+        pass
+
+    def set_margin_bottom(self, _margin):
+        pass
+
+    def set_margin_start(self, _margin):
+        pass
+
+    def set_margin_end(self, _margin):
+        pass
+
+
+class FakeGtkLabel(FakeGtkWidget):
+    def __init__(self, *, label):
+        super().__init__()
+        self.label = label
+
+
+class FakeGtkButton(FakeGtkWidget):
+    def __init__(self, *, label):
+        super().__init__()
+        self.label = label
+
+
+class FakeGtk:
+    class Orientation:
+        VERTICAL = "vertical"
+        HORIZONTAL = "horizontal"
+
+    Box = FakeGtkWidget
+    Frame = FakeGtkWidget
+    Grid = FakeGtkWidget
+    Label = FakeGtkLabel
+    Button = FakeGtkButton
+
+
+def _walk_fake_widgets(widget):
+    yield widget
+    for child in widget.children:
+        yield from _walk_fake_widgets(child)
 
 
 def _manifest():
@@ -578,6 +675,289 @@ def test_successful_token_validation_updates_all_display_only_sections():
     assert model.preflight.actions[0].interactive is False
     assert model.support_bundle.action_enabled is False
     assert model.support_bundle.request_performed is False
+
+
+def test_successful_pairing_builds_and_renders_all_native_dashboard_sections():
+    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
+    from flatpak_app import app
+
+    display_model = FirstRunTokenEntryController(
+        client_factory=ScriptedReadOnlyClientFactory()
+    ).connect(token="accepted-dashboard-value")
+
+    dashboard = build_dashboard_model(display_model)
+    container = FakeGtkWidget()
+    app._render_dashboard_model(FakeGtk, container, dashboard)
+
+    assert set(asdict(dashboard)) == {
+        "daemon",
+        "pairing",
+        "adapter_readiness",
+        "preflight",
+        "support_bundle",
+        "controls",
+    }
+    assert dashboard.adapter_readiness.recommended_interface == "wlan1"
+    assert dashboard.adapter_readiness.cards[0].readiness_label == "Ready"
+    assert dashboard.adapter_readiness.cards[0].severity.value == "ok"
+    assert dashboard.adapter_readiness.cards[0].summary
+    assert dashboard.adapter_readiness.cards[0].reasons == (
+        "Supports Ap Mode",
+        "Daemon Recommended",
+    )
+    assert dashboard.preflight.readiness_label == "Needs attention"
+    assert dashboard.preflight.severity.value == "warning"
+    assert dashboard.preflight.summary
+    assert dashboard.preflight.issues
+    assert dashboard.preflight.facts
+    assert dashboard.preflight.actions
+    assert all(not action.interactive for action in dashboard.preflight.actions)
+    assert dashboard.support_bundle.visible is True
+    assert dashboard.support_bundle.action_enabled is False
+    assert dashboard.controls.visible is True
+    assert dashboard.controls.mutation_actions == ()
+    assert dashboard.controls.action_enabled is False
+
+    widgets = tuple(_walk_fake_widgets(container))
+    rendered_text = {
+        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
+    }
+    buttons = [
+        widget for widget in widgets if isinstance(widget, FakeGtkButton)
+    ]
+    for section_title in (
+        "Daemon status",
+        "Pairing status",
+        "Adapter readiness",
+        "Preflight diagnostics",
+        "Support bundle",
+        "Controls boundary",
+    ):
+        assert section_title in rendered_text
+    assert "Recommended interface: wlan1" in rendered_text
+    assert "Readiness: Ready" in rendered_text
+    assert "Severity: OK" in rendered_text
+    assert "Reasons" in rendered_text
+    assert "Facts" in rendered_text
+    assert "Issues" in rendered_text
+    assert "Noninteractive actions" in rendered_text
+    assert "Mutation actions: none" in rendered_text
+    assert [(button.label, button.sensitive) for button in buttons] == [
+        ("Export support bundle", False)
+    ]
+
+
+def test_token_entry_is_cleared_before_dashboard_validation():
+    from flatpak_app import app
+
+    events = []
+
+    class Entry:
+        def __init__(self):
+            self.text = "clear-before-validation-value"
+
+        def get_text(self):
+            events.append("entry-read")
+            return self.text
+
+        def set_text(self, text):
+            self.text = text
+            events.append("entry-cleared")
+
+    class Button:
+        def __init__(self):
+            self.sensitive = True
+
+        def set_sensitive(self, sensitive):
+            self.sensitive = sensitive
+            events.append(f"button-{sensitive}")
+
+    class Controller:
+        def connect(self, *, token):
+            assert token == "clear-before-validation-value"
+            assert entry.text == ""
+            assert button.sensitive is False
+            events.append("validated")
+            return "safe-dashboard-model"
+
+    entry = Entry()
+    button = Button()
+    rendered = []
+
+    app._connect_from_token_entry(
+        token_entry=entry,
+        connect_button=button,
+        controller=Controller(),
+        render_model=rendered.append,
+    )
+
+    assert events == [
+        "entry-read",
+        "entry-cleared",
+        "button-False",
+        "validated",
+        "button-True",
+    ]
+    assert entry.text == ""
+    assert button.sensitive is True
+    assert rendered == ["safe-dashboard-model"]
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected_daemon", "expected_pairing"),
+    [
+        (
+            ScriptedReadOnlyClientFactory(
+                readiness_result=AuthenticationError(401)
+            ),
+            "Daemon reachable",
+            "Token rejected",
+        ),
+        (
+            ScriptedReadOnlyClientFactory(
+                health_result=ConnectionFailure("offline")
+            ),
+            "Daemon unavailable",
+            "Pairing unavailable",
+        ),
+        (
+            ScriptedReadOnlyClientFactory(
+                readiness_result={"unexpected": "response"}
+            ),
+            "Daemon status unknown",
+            "Pairing status unknown",
+        ),
+        (
+            ScriptedReadOnlyClientFactory(
+                preflight_result=_api_response(
+                    {
+                        "schema_version": 99,
+                        "overall_readiness": "future",
+                    }
+                )
+            ),
+            "Daemon connected",
+            "Paired",
+        ),
+    ],
+    ids=(
+        "rejected",
+        "unreachable",
+        "invalid-pairing",
+        "malformed-diagnostics",
+    ),
+)
+def test_native_dashboard_uses_safe_states_for_pairing_and_response_failures(
+    factory,
+    expected_daemon,
+    expected_pairing,
+):
+    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
+
+    display_model = FirstRunTokenEntryController(
+        client_factory=factory
+    ).connect(token="safe-failure-state-value")
+    dashboard = build_dashboard_model(display_model)
+
+    assert dashboard.daemon.title == expected_daemon
+    assert dashboard.pairing.title == expected_pairing
+    assert dashboard.support_bundle.action_enabled is False
+    assert dashboard.controls.mutation_actions == ()
+    if expected_pairing != "Paired":
+        assert dashboard.adapter_readiness.cards == ()
+        assert dashboard.preflight.issues == ()
+    else:
+        assert dashboard.preflight.severity.value == "unknown"
+        assert dashboard.preflight.issues == ()
+
+
+def test_native_dashboard_exposes_no_secret_or_host_path_values():
+    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
+    from flatpak_app import app
+
+    entered_value = "entered-dashboard-value-must-not-escape"
+    token_value = "daemon-token-value-must-not-escape"
+    passphrase_value = "passphrase-value-must-not-escape"
+    password_value = "password-value-must-not-escape"
+    psk_value = "psk-value-must-not-escape"
+    bearer_value = "bearer-value-must-not-escape"
+    secret_value = "secret-value-must-not-escape"
+    host_path = "/var/lib/vr-hotspot/private-dashboard-state.json"
+    factory = ScriptedReadOnlyClientFactory(
+        readiness_result=_api_response(
+            {
+                "recommended": "wlan1",
+                "basic_mode_recommended": "wlan1",
+                "summary": {"readiness_state": "ready"},
+                "adapters": [
+                    {
+                        "interface": "wlan1",
+                        "readiness_state": "ready",
+                        "explanation": (
+                            f"token={token_value}; "
+                            f"passphrase={passphrase_value}; "
+                            f"password={password_value}; psk={psk_value}; "
+                            f"secret={secret_value}"
+                        ),
+                    }
+                ],
+            }
+        ),
+        preflight_result=_api_response(
+            {
+                "schema_version": 1,
+                "overall_readiness": "warning",
+                "platform": {},
+                "firewall": {},
+                "services": {},
+                "network": {},
+                "wifi": {},
+                "issues": [
+                    {
+                        "severity": "warning",
+                        "code": "redaction_check",
+                        "message": (
+                            f"Authorization: Bearer {bearer_value}; "
+                            f"inspect {host_path}"
+                        ),
+                    }
+                ],
+                "recommended_actions": [],
+            }
+        ),
+    )
+
+    dashboard = build_dashboard_model(
+        FirstRunTokenEntryController(client_factory=factory).connect(
+            token=entered_value
+        )
+    )
+    container = FakeGtkWidget()
+    app._render_dashboard_model(FakeGtk, container, dashboard)
+    rendered_labels = tuple(
+        widget.label
+        for widget in _walk_fake_widgets(container)
+        if isinstance(widget, (FakeGtkLabel, FakeGtkButton))
+    )
+    exposed = (
+        repr(asdict(dashboard))
+        + repr(dashboard)
+        + repr(rendered_labels)
+    )
+
+    for forbidden_value in (
+        entered_value,
+        token_value,
+        passphrase_value,
+        password_value,
+        psk_value,
+        bearer_value,
+        secret_value,
+        host_path,
+    ):
+        assert forbidden_value not in exposed
+    assert "[redacted]" in exposed
+    assert "[host path]" in exposed
 
 
 def test_rejected_token_is_safe_and_never_enters_output_or_logs(caplog):

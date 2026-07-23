@@ -1,11 +1,14 @@
-"""Minimal unprivileged application shell for the VRhotspot Flatpak."""
+"""Minimal unprivileged native dashboard for the VRhotspot Flatpak."""
 
 from .app import (
     APP_ID,
     APP_NAME,
+    DashboardControlsBoundary,
     FirstRunTokenEntryController,
     MAX_LIVE_SMOKE_JSON_BYTES,
     MAX_SMOKE_JSON_BYTES,
+    NativeDashboardModel,
+    build_dashboard_model,
     build_initial_model,
     build_smoke_payload,
     main,
@@ -16,9 +19,12 @@ from .app import (
 __all__ = [
     "APP_ID",
     "APP_NAME",
+    "DashboardControlsBoundary",
     "FirstRunTokenEntryController",
     "MAX_LIVE_SMOKE_JSON_BYTES",
     "MAX_SMOKE_JSON_BYTES",
+    "NativeDashboardModel",
+    "build_dashboard_model",
     "build_initial_model",
     "build_smoke_payload",
     "main",
