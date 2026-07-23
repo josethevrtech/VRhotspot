@@ -1,0 +1,406 @@
+{
+  "schema_version": "1.0.0",
+  "maintained_by": "VRhotspot maintainers",
+  "policy_doc": "docs/VENDOR_PROVENANCE_SBOM_PLAN.md",
+  "enforcement_status": "inventory_only_not_enforced",
+  "notes": [
+    "This manifest covers only the backend/vendor tree and does not claim repository-wide SBOM completeness.",
+    "SHA-256 values record the exact checked-in bytes with no normalization; they are inventory metadata and are not verified or enforced by CI, the installer, or runtime code in PR #73.",
+    "A documented project, version, or license claim does not prove the exact acquisition source, build recipe, or correspondence between source and the checked-in bytes.",
+    "The executable field records the current Git executable bit. The shared libraries are executable in the current tree; PR #73 does not change those modes."
+  ],
+  "manifest_scope": {
+    "root": "backend/vendor/",
+    "entry_count": 13,
+    "coverage": "Every file tracked under backend/vendor before this manifest was added is represented exactly once.",
+    "excluded_paths": [
+      {
+        "path": "backend/vendor/VENDOR_MANIFEST.json",
+        "reason": "This canonical control file is excluded from its own file list because a stable self-hash is recursive. Future CI may validate the control file separately."
+      }
+    ]
+  },
+  "hashing": {
+    "algorithm": "SHA-256",
+    "input": "exact_file_bytes",
+    "status": "recorded_not_enforced"
+  },
+  "files": [
+    {
+      "path": "backend/vendor/README.md",
+      "file_type": "documentation",
+      "executable": false,
+      "purpose": "Documents the bundled networking stack, profile selection, version claims, and the current manual update process.",
+      "source_project": "VRhotspot",
+      "upstream_url": null,
+      "version": null,
+      "version_evidence": [],
+      "license": "MIT",
+      "license_evidence": [
+        "LICENSE.md"
+      ],
+      "license_status": "allowed",
+      "sha256": "ad9f6e0e2434410defd3e822caca21624627e4c631888d234b982e7edc6b049b",
+      "allowed_platforms": [
+        "all-supported"
+      ],
+      "runtime_trust_boundary": "documentation_only",
+      "update_process": "Update this document whenever a bundled component, profile, version claim, or vendor update procedure changes, and review it with the corresponding manifest entries.",
+      "provenance_status": "project_authored",
+      "reviewer_notes": [
+        "This is VRhotspot control documentation, not an upstream payload."
+      ]
+    },
+    {
+      "path": "backend/vendor/bin/dnsmasq",
+      "file_type": "elf_executable_x86_64",
+      "executable": true,
+      "purpose": "Provides DHCP and DNS service for hotspot clients when the bundled networking stack is selected.",
+      "source_project": "dnsmasq",
+      "upstream_url": "https://thekelleys.org.uk/dnsmasq/doc.html",
+      "version": null,
+      "version_evidence": [],
+      "license": "GPL-2.0-or-later",
+      "license_evidence": [
+        "backend/vendor/licenses/dnsmasq.LICENSE.txt",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "license_status": "unknown",
+      "sha256": "50f7261e749b619d21716d0687bee49da9f1123b8dab40048b006e69956f81b9",
+      "allowed_platforms": [
+        "linux-x86_64"
+      ],
+      "runtime_trust_boundary": "privileged_network_executable",
+      "update_process": "Record the exact upstream tag or commit and source artifact, document the build recipe and flags, review redistribution evidence, replace the binary, refresh this entry and its SHA-256, then run DHCP and DNS smoke tests.",
+      "provenance_status": "unknown",
+      "reviewer_notes": [
+        "The repository does not record a dnsmasq version, exact source artifact, upstream commit, build recipe, or build flags.",
+        "The license is an existing repository claim; correspondence between that claim and these exact bytes has not been independently verified."
+      ]
+    },
+    {
+      "path": "backend/vendor/bin/hostapd",
+      "file_type": "elf_executable_x86_64",
+      "executable": true,
+      "purpose": "Manages the wireless access point when the bundled networking stack is selected.",
+      "source_project": "hostapd",
+      "upstream_url": "https://w1.fi/hostapd/",
+      "version": "2.11",
+      "version_evidence": [
+        "backend/vendor/README.md records v2.11 (hostap_2_11)",
+        "The current ELF contains the embedded string 2.11-hostap_2_11"
+      ],
+      "license": "BSD (dual-license; see upstream COPYING)",
+      "license_evidence": [
+        "backend/vendor/licenses/hostapd.LICENSE.txt",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "license_status": "unknown",
+      "sha256": "4e117d9fd739d03388dafab1c213dea93930308bd575f7c1863737746deef23b",
+      "allowed_platforms": [
+        "linux-x86_64"
+      ],
+      "runtime_trust_boundary": "privileged_network_executable",
+      "update_process": "Update hostapd and hostapd_cli together; record the exact upstream tag or commit and source artifact, document the build recipe and flags, review redistribution evidence, refresh both manifest entries and SHA-256 values, then run AP-mode smoke tests.",
+      "provenance_status": "version_evidenced_origin_unverified",
+      "reviewer_notes": [
+        "The version is supported by current repository evidence, but the exact acquisition source, upstream commit, source archive hash, build recipe, and build flags are not recorded.",
+        "The license is an existing repository claim; correspondence between that claim and these exact bytes has not been independently verified."
+      ]
+    },
+    {
+      "path": "backend/vendor/bin/hostapd_cli",
+      "file_type": "elf_executable_x86_64",
+      "executable": true,
+      "purpose": "Queries and controls hostapd for hotspot client diagnostics and access-point status.",
+      "source_project": "hostapd",
+      "upstream_url": "https://w1.fi/hostapd/",
+      "version": "2.11",
+      "version_evidence": [
+        "backend/vendor/README.md records hostapd v2.11 (hostap_2_11)",
+        "The current ELF contains the embedded string hostapd_cli v2.11-hostap_2_11"
+      ],
+      "license": "BSD (dual-license; see upstream COPYING)",
+      "license_evidence": [
+        "backend/vendor/licenses/hostapd.LICENSE.txt",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "license_status": "unknown",
+      "sha256": "d42bd134bdb35a8261ac315db9ab1d060e93accf5087a3accd55be3ab45e7708",
+      "allowed_platforms": [
+        "linux-x86_64"
+      ],
+      "runtime_trust_boundary": "privileged_network_executable",
+      "update_process": "Update hostapd and hostapd_cli together; record the exact upstream tag or commit and source artifact, document the build recipe and flags, review redistribution evidence, refresh both manifest entries and SHA-256 values, then run AP-control and client-diagnostic tests.",
+      "provenance_status": "version_evidenced_origin_unverified",
+      "reviewer_notes": [
+        "The version is supported by current repository evidence, but the exact acquisition source, upstream commit, source archive hash, build recipe, and build flags are not recorded.",
+        "The license is an existing repository claim; correspondence between that claim and these exact bytes has not been independently verified."
+      ]
+    },
+    {
+      "path": "backend/vendor/bin/lnxrouter",
+      "file_type": "bash_script",
+      "executable": true,
+      "purpose": "Orchestrates hotspot networking, including hostapd, dnsmasq, interface, routing, and firewall operations.",
+      "source_project": "linux-router",
+      "upstream_url": "https://github.com/garywill/linux-router",
+      "version": "0.8.1",
+      "version_evidence": [
+        "backend/vendor/bin/lnxrouter declares VERSION=0.8.1",
+        "backend/vendor/README.md records linux-router (lnxrouter) v0.8.1"
+      ],
+      "license": "LGPL-2.1-or-later",
+      "license_evidence": [
+        "backend/vendor/licenses/linux-router.LICENSE.txt",
+        "THIRD_PARTY_NOTICES.md",
+        "backend/vendor/bin/lnxrouter declares release under LGPL"
+      ],
+      "license_status": "unknown",
+      "sha256": "b331f9b6dc9ca12ec8153cf81fc4af2a0942025a5a83ae44bed48737333f36c3",
+      "allowed_platforms": [
+        "linux"
+      ],
+      "runtime_trust_boundary": "privileged_network_orchestrator",
+      "update_process": "Record the exact upstream tag or commit, source artifact, and VRhotspot-local patch series; review the license and local diff, replace the script, refresh this entry and its SHA-256, then run managed-engine and hotspot lifecycle tests.",
+      "provenance_status": "modified_source_origin_unverified",
+      "reviewer_notes": [
+        "The script declares version 0.8.1 and an upstream URL, but the exact upstream commit and acquisition record are absent.",
+        "The checked-in script contains VRhotspot-local changes, including inherited file-descriptor password handling; no complete local patch series is recorded.",
+        "The license claim is documented, but its review against the exact upstream revision and local modifications has not been independently recorded."
+      ]
+    },
+    {
+      "path": "backend/vendor/lib/libnl-3.so.200",
+      "file_type": "elf_shared_library_x86_64",
+      "executable": true,
+      "purpose": "Provides core netlink protocol support to bundled dynamically linked networking programs, including hostapd.",
+      "source_project": "libnl",
+      "upstream_url": "https://github.com/thom311/libnl",
+      "version": null,
+      "version_evidence": [
+        "backend/vendor/README.md records 3.10 (libnl3_10_0)",
+        "The current libnl-cli shared library contains an embedded 3.11.0 string, which conflicts with the README claim for the bundled set"
+      ],
+      "license": "LGPL-2.1-only",
+      "license_evidence": [
+        "backend/vendor/licenses/libnl.LICENSE.txt",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "license_status": "unknown",
+      "sha256": "dfbde260e6b4640da4c7a9ddd779305f6f355055ab3738b11f03c4692e2995a0",
+      "allowed_platforms": [
+        "linux-x86_64"
+      ],
+      "runtime_trust_boundary": "privileged_dynamically_loaded_code",
+      "update_process": "Update the compatible libnl library set together; record the exact upstream tag or commit and source artifact, document the build recipe and flags, review redistribution evidence, refresh all libnl entries and SHA-256 values, then run bundled hostapd selection and AP-mode tests.",
+      "provenance_status": "unknown_conflicting_version_evidence",
+      "reviewer_notes": [
+        "The documented 3.10 version is retained as an existing repository claim only; conflicting embedded evidence prevents recording it as the version of these exact bytes.",
+        "The exact acquisition source, upstream commit, source archive hash, build recipe, and build flags are not recorded.",
+        "The executable bit reflects the current Git mode and is intentionally unchanged in PR #73."
+      ]
+    },
+    {
+      "path": "backend/vendor/lib/libnl-cli-3.so.200",
+      "file_type": "elf_shared_library_x86_64",
+      "executable": true,
+      "purpose": "Provides libnl command-line support APIs in the bundled library directory; no direct current runtime consumer is documented.",
+      "source_project": "libnl",
+      "upstream_url": "https://github.com/thom311/libnl",
+      "version": null,
+      "version_evidence": [
+        "backend/vendor/README.md records 3.10 (libnl3_10_0)",
+        "The current shared library contains an embedded 3.11.0 string, which conflicts with the README claim for the bundled set"
+      ],
+      "license": "LGPL-2.1-only",
+      "license_evidence": [
+        "backend/vendor/licenses/libnl.LICENSE.txt",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "license_status": "unknown",
+      "sha256": "06b6c5515b7b86e160c23005947f3f9a945ddc89cdaa96c3fabf493ffcd2eb28",
+      "allowed_platforms": [
+        "linux-x86_64"
+      ],
+      "runtime_trust_boundary": "potential_privileged_dynamically_loaded_code",
+      "update_process": "Update the compatible libnl library set together; record the exact upstream tag or commit and source artifact, document the build recipe and flags, review redistribution evidence, refresh all libnl entries and SHA-256 values, then run bundled hostapd selection and AP-mode tests.",
+      "provenance_status": "unknown_conflicting_version_evidence",
+      "reviewer_notes": [
+        "The documented 3.10 version is retained as an existing repository claim only; an embedded 3.11.0 string prevents recording 3.10 as the version of these exact bytes.",
+        "The exact acquisition source, upstream commit, source archive hash, build recipe, and build flags are not recorded.",
+        "The executable bit reflects the current Git mode and is intentionally unchanged in PR #73."
+      ]
+    },
+    {
+      "path": "backend/vendor/lib/libnl-genl-3.so.200",
+      "file_type": "elf_shared_library_x86_64",
+      "executable": true,
+      "purpose": "Provides generic-netlink support loaded by the bundled hostapd executable.",
+      "source_project": "libnl",
+      "upstream_url": "https://github.com/thom311/libnl",
+      "version": null,
+      "version_evidence": [
+        "backend/vendor/README.md records 3.10 (libnl3_10_0)",
+        "The current libnl-cli shared library contains an embedded 3.11.0 string, which conflicts with the README claim for the bundled set"
+      ],
+      "license": "LGPL-2.1-only",
+      "license_evidence": [
+        "backend/vendor/licenses/libnl.LICENSE.txt",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "license_status": "unknown",
+      "sha256": "78249f8dde742ef599fb92eb1a519220efa3864d4faa3a0f21e0dd4fba63b914",
+      "allowed_platforms": [
+        "linux-x86_64"
+      ],
+      "runtime_trust_boundary": "privileged_dynamically_loaded_code",
+      "update_process": "Update the compatible libnl library set together; record the exact upstream tag or commit and source artifact, document the build recipe and flags, review redistribution evidence, refresh all libnl entries and SHA-256 values, then run bundled hostapd selection and AP-mode tests.",
+      "provenance_status": "unknown_conflicting_version_evidence",
+      "reviewer_notes": [
+        "The documented 3.10 version is retained as an existing repository claim only; conflicting embedded evidence prevents recording it as the version of these exact bytes.",
+        "The exact acquisition source, upstream commit, source archive hash, build recipe, and build flags are not recorded.",
+        "The executable bit reflects the current Git mode and is intentionally unchanged in PR #73."
+      ]
+    },
+    {
+      "path": "backend/vendor/lib/libnl-route-3.so.200",
+      "file_type": "elf_shared_library_x86_64",
+      "executable": true,
+      "purpose": "Provides libnl route APIs in the bundled library directory; no direct current runtime consumer is documented.",
+      "source_project": "libnl",
+      "upstream_url": "https://github.com/thom311/libnl",
+      "version": null,
+      "version_evidence": [
+        "backend/vendor/README.md records 3.10 (libnl3_10_0)",
+        "The current libnl-cli shared library contains an embedded 3.11.0 string, which conflicts with the README claim for the bundled set"
+      ],
+      "license": "LGPL-2.1-only",
+      "license_evidence": [
+        "backend/vendor/licenses/libnl.LICENSE.txt",
+        "THIRD_PARTY_NOTICES.md"
+      ],
+      "license_status": "unknown",
+      "sha256": "82c23195844edf7f508a02abe4e610603d97752204227e3996c2a35fa103b3e4",
+      "allowed_platforms": [
+        "linux-x86_64"
+      ],
+      "runtime_trust_boundary": "potential_privileged_dynamically_loaded_code",
+      "update_process": "Update the compatible libnl library set together; record the exact upstream tag or commit and source artifact, document the build recipe and flags, review redistribution evidence, refresh all libnl entries and SHA-256 values, then run bundled hostapd selection and AP-mode tests.",
+      "provenance_status": "unknown_conflicting_version_evidence",
+      "reviewer_notes": [
+        "The documented 3.10 version is retained as an existing repository claim only; conflicting embedded evidence prevents recording it as the version of these exact bytes.",
+        "The exact acquisition source, upstream commit, source archive hash, build recipe, and build flags are not recorded.",
+        "The executable bit reflects the current Git mode and is intentionally unchanged in PR #73."
+      ]
+    },
+    {
+      "path": "backend/vendor/licenses/dnsmasq.LICENSE.txt",
+      "file_type": "license_reference",
+      "executable": false,
+      "purpose": "Records the repository's dnsmasq license claim and upstream license-text URL.",
+      "source_project": "dnsmasq",
+      "upstream_url": "https://thekelleys.org.uk/dnsmasq/doc.html",
+      "version": null,
+      "version_evidence": [],
+      "license": "GPL-2.0-or-later",
+      "license_evidence": [
+        "backend/vendor/licenses/dnsmasq.LICENSE.txt",
+        "https://thekelleys.org.uk/dnsmasq/COPYING"
+      ],
+      "license_status": "unknown",
+      "sha256": "c787e8b2235ae2b5e6d1796cb3272419d3360a81a4b9708e417b31aaec60e84a",
+      "allowed_platforms": [
+        "all-supported"
+      ],
+      "runtime_trust_boundary": "documentation_only",
+      "update_process": "When dnsmasq changes, compare the applicable upstream license, retain the required local notice or text, update the exact source/version record, and refresh this entry and its SHA-256.",
+      "provenance_status": "reference_record_origin_unverified",
+      "reviewer_notes": [
+        "This file is a short reference record, not the full license text.",
+        "It does not establish which upstream source produced the bundled dnsmasq bytes."
+      ]
+    },
+    {
+      "path": "backend/vendor/licenses/hostapd.LICENSE.txt",
+      "file_type": "license_reference",
+      "executable": false,
+      "purpose": "Records the repository's hostapd and hostapd_cli license claim and upstream COPYING URL.",
+      "source_project": "hostapd",
+      "upstream_url": "https://w1.fi/hostapd/",
+      "version": null,
+      "version_evidence": [],
+      "license": "BSD (dual-license; see upstream COPYING)",
+      "license_evidence": [
+        "backend/vendor/licenses/hostapd.LICENSE.txt",
+        "https://w1.fi/cgit/hostap/plain/COPYING"
+      ],
+      "license_status": "unknown",
+      "sha256": "8b2cc8ac453a9bfe6da3a114c4164fe10b0ae86f7a7f187fb30a77003d944e05",
+      "allowed_platforms": [
+        "all-supported"
+      ],
+      "runtime_trust_boundary": "documentation_only",
+      "update_process": "When hostapd or hostapd_cli changes, compare the applicable upstream license, retain the required local notice or text, update the exact source/version record, and refresh this entry and its SHA-256.",
+      "provenance_status": "reference_record_origin_unverified",
+      "reviewer_notes": [
+        "This file is a short reference record, not the full upstream COPYING text.",
+        "It does not establish which upstream source or build produced the bundled hostapd bytes."
+      ]
+    },
+    {
+      "path": "backend/vendor/licenses/libnl.LICENSE.txt",
+      "file_type": "license_notice",
+      "executable": false,
+      "purpose": "Provides the local libnl LGPL notice, warranty disclaimer, and full-license URL.",
+      "source_project": "libnl",
+      "upstream_url": "https://github.com/thom311/libnl",
+      "version": null,
+      "version_evidence": [],
+      "license": "LGPL-2.1-only",
+      "license_evidence": [
+        "backend/vendor/licenses/libnl.LICENSE.txt",
+        "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html"
+      ],
+      "license_status": "unknown",
+      "sha256": "010ed9fee76e87022e3f08765d00bde0dce8cdc713252d80a40d8f2ee7b1d832",
+      "allowed_platforms": [
+        "all-supported"
+      ],
+      "runtime_trust_boundary": "documentation_only",
+      "update_process": "When the libnl set changes, compare the applicable upstream license and notices, retain the required local material, resolve the exact source/version record, and refresh this entry and its SHA-256.",
+      "provenance_status": "reference_record_origin_unverified",
+      "reviewer_notes": [
+        "This notice identifies LGPL version 2.1 but does not establish the exact source revision of the bundled libraries.",
+        "The current libnl version evidence is conflicting and remains unresolved."
+      ]
+    },
+    {
+      "path": "backend/vendor/licenses/linux-router.LICENSE.txt",
+      "file_type": "license_reference",
+      "executable": false,
+      "purpose": "Records the repository's linux-router license claim and upstream LICENSE URL.",
+      "source_project": "linux-router",
+      "upstream_url": "https://github.com/garywill/linux-router",
+      "version": null,
+      "version_evidence": [],
+      "license": "LGPL-2.1-or-later",
+      "license_evidence": [
+        "backend/vendor/licenses/linux-router.LICENSE.txt",
+        "https://github.com/garywill/linux-router/blob/master/LICENSE"
+      ],
+      "license_status": "unknown",
+      "sha256": "140c966121857fbfcc0fefed7cbb13310cf38dd5814372dfe43d4379547c22b5",
+      "allowed_platforms": [
+        "all-supported"
+      ],
+      "runtime_trust_boundary": "documentation_only",
+      "update_process": "When lnxrouter changes, compare the applicable upstream license, retain the required local notice or text, record the exact upstream revision and local patch series, and refresh this entry and its SHA-256.",
+      "provenance_status": "reference_record_origin_unverified",
+      "reviewer_notes": [
+        "This file is a short reference record, not the full upstream license text.",
+        "It does not establish the exact upstream revision or account for the licensing review of VRhotspot-local script modifications."
+      ]
+    }
+  ]
+}
