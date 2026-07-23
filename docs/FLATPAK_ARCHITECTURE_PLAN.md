@@ -1,15 +1,16 @@
 # Flatpak control app architecture plan
 
-Status: PR #79 token pairing / first-run foundation; PRs #77-#78 retained
+Status: PR #80 diagnostics/control UI foundation; PRs #77-#79 retained
 
 Date: 2026-07-23
 
 This document defines the boundary for a possible future Flatpak control
-application for VRhotspot. PR #79 adds only the testable token pairing and
-first-run state foundation described below, on top of PR #78's read-only local
-API client. It does not add a Flatpak package, manifest, desktop application,
-graphical UI, API endpoint, or runtime behavior. No Flatpak package or manifest
-exists yet, and no graphical Flatpak application exists yet.
+application for VRhotspot. PR #80 adds only the toolkit-agnostic, testable UI
+model/controller foundation described below, on top of PR #78's read-only local
+API client and PR #79's pairing state. It does not add a Flatpak package,
+manifest, desktop application, finished graphical UI, API endpoint, or runtime
+behavior. No Flatpak package or manifest exists yet, and no graphical Flatpak
+application exists yet.
 
 ## Architectural decision
 
@@ -212,6 +213,47 @@ The PR #79 foundation has these boundaries:
   recovery are represented as state only. Graphical guidance, compatibility
   UX, rotation workflows, and recovery controls remain future UI/API work.
 
+## Diagnostics/control UI foundation
+
+PR #80 adds `flatpak_client/ui.py`, a toolkit-agnostic view-model/controller
+layer for a future polished Linux VR Wi-Fi control center. It has no GTK,
+libadwaita, Qt, desktop-window, or Flatpak packaging dependency. The foundation
+projects only the existing `LocalApiClient` responses and `FirstRunResult`
+states into frozen, UI-ready models:
+
+- daemon reachability and pairing status;
+- adapter readiness summary and cards;
+- preflight summary facts, issues, and non-interactive recommended actions;
+- a visible but disabled support-bundle export affordance.
+
+The UI controller calls only `adapter_readiness()` and `preflight_report()`,
+and only after the supplied pairing result is `token_accepted`. It has no
+generic request method, lifecycle control, configuration mutation, support-
+bundle download, or export method. The support-bundle model states whether
+pairing is required or export wiring is not implemented; it performs no daemon
+request and remains disabled until bounded binary handling and a portal export
+flow receive separate review.
+
+The models use the presentation severities `ok`, `warning`, `blocked`, `error`,
+and `unknown`. Known daemon readiness states map to those values; unrecognized,
+malformed, partial, or failed responses degrade to bounded `unknown` sections
+with fixed safe copy. Adapter recommendations and Basic-mode visibility remain
+daemon-provided facts rather than client-side policy.
+
+Basic and Pro are represented as presentation modes. Basic exposes the same
+safe summary/status/card foundation with technical details hidden; Pro marks
+those already-sanitized details as displayable later. The mode field does not
+change daemon calls, authorize actions, filter adapters, or override daemon
+policy, and PR #80 adds no mode-toggle widget.
+
+Daemon content is projected through an allowlist rather than retained as raw
+response dictionaries. Collections and strings are bounded, recognized secret
+assignments and authorization credentials are redacted, unexpected secret or
+environment fields are omitted, and avoidable absolute host paths are replaced
+with a generic label. API tokens and Wi-Fi passphrases are not model fields.
+The controller copies no exception text into UI state and exposes no raw
+preflight report or response body.
+
 ## Sandbox and portal expectations
 
 The future Flatpak should begin from a minimal permission set and justify every
@@ -296,8 +338,8 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 |---|---|---|
 | PR #77 | Architecture plan only. No package, manifest, API, UI, runtime, installer, CI, or vendor change. | This document makes ownership, API/authentication, sandbox, privacy, support-bundle, distribution, and non-goal boundaries reviewable. |
 | PR #78 | Flatpak local API client prototype. Add the small `flatpak_client/` layer against an injectable fake transport, with explicit loopback pinning, authentication-header handling, redirect rejection, bounded timeouts, compatibility/error mapping, and no host command execution. | Unit tests demonstrate safe request construction and failure handling without privileged host mutation. No Flatpak package or manifest exists; exact packaging scope requires separate approval. |
-| PR #79 | Token pairing and first-run foundation (current phase). Add deterministic model/controller state that probes public health for reachability and validates an explicitly supplied token through the existing authenticated, read-only client contract. Add no daemon endpoint, storage backend, packaging, or graphical UI. | The six first-run states are covered offline; health alone never means paired; `401`, fail-closed `503/api_token_missing`, connection failure, and invalid responses map safely; tokens do not enter results, exceptions, logs, files, or controller state. |
-| PR #80 | Flatpak diagnostics/control UI. Implement reviewed Basic/Pro views using the client contract, including daemon-owned status, lifecycle controls, diagnostics, and support-bundle export. | UI behavior is tested, sandbox permissions remain minimal, and all privileged effects are mediated by authenticated daemon calls. |
+| PR #79 | Token pairing and first-run foundation. Add deterministic model/controller state that probes public health for reachability and validates an explicitly supplied token through the existing authenticated, read-only client contract. Add no daemon endpoint, storage backend, packaging, or graphical UI. | The six first-run states are covered offline; health alone never means paired; `401`, fail-closed `503/api_token_missing`, connection failure, and invalid responses map safely; tokens do not enter results, exceptions, logs, files, or controller state. |
+| PR #80 | Diagnostics/control UI foundation (current phase). Add toolkit-agnostic, bounded UI models for daemon/pairing status, adapter readiness, preflight diagnostics, Basic/Pro presentation depth, and a disabled support-bundle affordance. Add no lifecycle control, support-bundle download/export wiring, GUI toolkit, desktop window, package, or manifest. | Offline behavior tests cover connection/authentication states, safe response projection, severity mapping, malformed-data fallback, Basic/Pro presentation fields, secret/path sanitization, output bounds, and the absence of mutation methods. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
 Each phase is independently reviewable. A later phase is not authorized merely
@@ -378,14 +420,19 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #79
+## Explicit non-goals for PR #80
 
 - No Flatpak packaging, manifest, build definition, finish-args, desktop file,
   icon set, metainfo, repository submission, or release artifact.
-- No Flatpak GUI, control panel, diagnostics UI, or existing Web UI change.
+- No finished Flatpak GUI, GTK/libadwaita or Qt dependency, desktop window, or
+  existing Web UI change. PR #80 is a view-model/controller foundation only.
+- No start, stop, restart, repair, configuration, passphrase, adapter-selection,
+  or other mutation control.
+- No support-bundle download, temporary file handling, file chooser, portal
+  integration, or export implementation. The disabled model affordance is
+  non-interactive and performs no request.
 - No token discovery, persistent storage, keyring/portal integration, token
-  issuance, rotation, or daemon-side pairing endpoint. PR #79 only validates a
-  caller-supplied token and returns first-run state.
+  issuance, rotation, or daemon-side pairing endpoint.
 - No daemon endpoint, API response, authentication, pairing, lifecycle,
   diagnostics, support-bundle, or runtime behavior change.
 - No installer, uninstaller, systemd-unit, platform, or CI behavior change.
@@ -403,8 +450,9 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No known-adapter registry or adapter-policy implementation.
 - No HostFactsSnapshot work or consumer change.
 
-PR #79 authorizes only the isolated token pairing/first-run state foundation,
-its offline tests, the required exports, and this plan update. It does not
-claim that a Flatpak package or graphical UI, Steam Frame support, VR Direct
-Link support, or a known-adapter registry exists. PR #80 diagnostics/control
-UI and all other future phases remain separately approved work.
+PR #80 authorizes only the isolated toolkit-agnostic diagnostics/control UI
+model foundation, its offline tests, the required exports, and this plan
+update. It does not claim that a Flatpak package, finished graphical UI,
+support-bundle export flow, Steam Frame support, VR Direct Link support, or a
+known-adapter registry exists. Packaging, production GUI work, lifecycle
+controls, portal wiring, and all later phases remain separately approved work.
