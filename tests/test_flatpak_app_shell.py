@@ -139,6 +139,7 @@ class FakeGtkWidget:
         self.children = []
         self.parent = None
         self.css_classes = []
+        self.signal_handlers = {}
         self.sensitive = True
 
     def append(self, child):
@@ -172,6 +173,9 @@ class FakeGtkWidget:
     def set_sensitive(self, sensitive):
         self.sensitive = sensitive
 
+    def connect(self, signal, handler):
+        self.signal_handlers[signal] = handler
+
     def set_wrap(self, _wrap):
         pass
 
@@ -196,6 +200,39 @@ class FakeGtkWidget:
     def set_margin_end(self, _margin):
         pass
 
+    def set_show_peek_icon(self, _show):
+        pass
+
+
+class FakeGtkApplication:
+    def __init__(self, *, application_id):
+        self.application_id = application_id
+        self.signal_handlers = {}
+
+    def connect(self, signal, handler):
+        self.signal_handlers[signal] = handler
+
+    def run(self, arguments):
+        assert arguments == []
+        self.signal_handlers["activate"](self)
+        return 0
+
+
+class FakeGtkApplicationWindow(FakeGtkWidget):
+    def set_title(self, _title):
+        pass
+
+    def set_default_size(self, _width, _height):
+        pass
+
+    def present(self):
+        pass
+
+
+class FakeGtkScrolledWindow(FakeGtkWidget):
+    def set_policy(self, _horizontal, _vertical):
+        pass
+
 
 class FakeGtkLabel(FakeGtkWidget):
     def __init__(self, *, label):
@@ -214,11 +251,19 @@ class FakeGtk:
         VERTICAL = "vertical"
         HORIZONTAL = "horizontal"
 
+    class PolicyType:
+        NEVER = "never"
+        AUTOMATIC = "automatic"
+
+    Application = FakeGtkApplication
+    ApplicationWindow = FakeGtkApplicationWindow
+    ScrolledWindow = FakeGtkScrolledWindow
     Box = FakeGtkWidget
     Frame = FakeGtkWidget
     Grid = FakeGtkWidget
     Label = FakeGtkLabel
     Button = FakeGtkButton
+    PasswordEntry = FakeGtkWidget
 
 
 def _walk_fake_widgets(widget):
@@ -251,6 +296,77 @@ def test_app_shell_imports_without_importing_gtk(monkeypatch):
 
     assert module.APP_ID == APP_ID
     assert sys.modules.get("gi") is None
+
+
+def test_gui_activation_does_not_require_password_entry_placeholder_setter(
+    monkeypatch,
+):
+    from flatpak_app import app
+
+    assert not hasattr(FakeGtk.PasswordEntry(), "set_placeholder_text")
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+
+    assert app.run_gui() == 0
+
+
+def test_placeholder_helper_prefers_direct_setter():
+    from flatpak_app import app
+
+    calls = []
+
+    class Entry:
+        def set_placeholder_text(self, value):
+            calls.append(("direct", value))
+
+        def set_property(self, name, value):
+            calls.append((name, value))
+
+    app._set_placeholder_text_compat(Entry(), "API token")
+
+    assert calls == [("direct", "API token")]
+
+
+def test_placeholder_helper_falls_back_to_supported_property_setter():
+    from flatpak_app import app
+
+    calls = []
+
+    class Entry:
+        def find_property(self, name):
+            calls.append(("find", name))
+            return object()
+
+        def set_property(self, name, value):
+            calls.append((name, value))
+
+    app._set_placeholder_text_compat(Entry(), "API token")
+
+    assert calls == [
+        ("find", "placeholder-text"),
+        ("placeholder-text", "API token"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        object(),
+        type(
+            "UnsupportedPropertyEntry",
+            (),
+            {
+                "find_property": lambda self, _name: None,
+                "set_property": lambda self, _name, _value: pytest.fail(
+                    "unsupported property must not be set"
+                ),
+            },
+        )(),
+    ),
+)
+def test_placeholder_helper_noops_when_placeholder_is_unsupported(entry):
+    from flatpak_app import app
+
+    app._set_placeholder_text_compat(entry, "API token")
 
 
 def test_smoke_json_exits_successfully_is_bounded_and_has_expected_sections():

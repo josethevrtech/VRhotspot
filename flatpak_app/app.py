@@ -674,6 +674,36 @@ def _render_display_model(Gtk, container, model: DiagnosticsControlUiModel) -> N
     _render_dashboard_model(Gtk, container, build_dashboard_model(model))
 
 
+def _set_placeholder_text_compat(widget: Any, value: str) -> None:
+    """Set placeholder text when the active GTK binding supports either API."""
+
+    direct_setter = getattr(widget, "set_placeholder_text", None)
+    if callable(direct_setter):
+        try:
+            direct_setter(value)
+        except (AttributeError, TypeError):
+            pass
+        else:
+            return
+
+    property_setter = getattr(widget, "set_property", None)
+    if not callable(property_setter):
+        return
+
+    property_finder = getattr(widget, "find_property", None)
+    if callable(property_finder):
+        try:
+            if property_finder("placeholder-text") is None:
+                return
+        except (AttributeError, TypeError):
+            return
+
+    try:
+        property_setter("placeholder-text", value)
+    except (AttributeError, TypeError):
+        pass
+
+
 def _connect_from_token_entry(
     *,
     token_entry,
@@ -735,7 +765,7 @@ def run_gui() -> int:
             spacing=8,
         )
         token_entry = Gtk.PasswordEntry()
-        token_entry.set_placeholder_text("API token")
+        _set_placeholder_text_compat(token_entry, "API token")
         token_entry.set_show_peek_icon(True)
         token_entry.set_hexpand(True)
         connection_row.append(token_entry)
