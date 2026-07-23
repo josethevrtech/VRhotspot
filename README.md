@@ -527,6 +527,7 @@ VR Hotspot bundles third-party binaries and libraries. See:
 - `THIRD_PARTY_NOTICES.md` - License attributions
 - `backend/vendor/README.md` - Version information
 - `backend/vendor/licenses/` - Full license texts
+- `docs/VENDOR_PROVENANCE_SBOM_PLAN.md` - Staged provenance, SBOM, and checksum-manifest plan
 
 Bundled components:
 - **hostapd** (BSD) - https://w1.fi/hostapd/
