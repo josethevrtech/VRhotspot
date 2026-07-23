@@ -1,0 +1,41 @@
+"""Read-only local API client prototype for a future Flatpak control app."""
+
+from .client import (
+    DEFAULT_BASE_URL,
+    ApiResponse,
+    AuthenticationError,
+    ConnectionFailure,
+    DaemonApiError,
+    DaemonTokenMissingError,
+    HttpRequest,
+    HttpResponse,
+    InvalidBaseUrlError,
+    InvalidJsonError,
+    InvalidResponseError,
+    LocalApiClient,
+    LocalApiClientError,
+    RedirectRejectedError,
+    ResponseTooLargeError,
+    Transport,
+    UrlLibTransport,
+)
+
+__all__ = [
+    "DEFAULT_BASE_URL",
+    "ApiResponse",
+    "AuthenticationError",
+    "ConnectionFailure",
+    "DaemonApiError",
+    "DaemonTokenMissingError",
+    "HttpRequest",
+    "HttpResponse",
+    "InvalidBaseUrlError",
+    "InvalidJsonError",
+    "InvalidResponseError",
+    "LocalApiClient",
+    "LocalApiClientError",
+    "RedirectRejectedError",
+    "ResponseTooLargeError",
+    "Transport",
+    "UrlLibTransport",
+]
