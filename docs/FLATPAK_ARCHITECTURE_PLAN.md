@@ -1,13 +1,14 @@
 # Flatpak control app architecture plan
 
-Status: PR #77 documentation-only architecture plan
+Status: PR #78 local API client prototype; PR #77 architecture retained
 
 Date: 2026-07-23
 
 This document defines the boundary for a possible future Flatpak control
-application for VRhotspot. It does not add a Flatpak package, manifest, desktop
-application, API endpoint, UI, or runtime behavior. The Flatpak application
-does not exist yet.
+application for VRhotspot. PR #78 adds only the testable, read-only local API
+client prototype described below. It does not add a Flatpak package, manifest,
+desktop application, API endpoint, UI, or runtime behavior. No Flatpak package
+or manifest exists yet, and the Flatpak application does not exist yet.
 
 ## Architectural decision
 
@@ -67,6 +68,34 @@ loopback origin, reject redirects, and avoid accepting arbitrary remote base
 URLs. A future need for port discovery or a different local transport requires
 a separately reviewed design; this plan does not add D-Bus, a Unix socket, or
 another daemon interface.
+
+### PR #78 prototype
+
+PR #78 adds `flatpak_client/`, a top-level Python prototype kept separate from
+both the privileged `vr_hotspotd` daemon package and the existing Web UI. It is
+not included in daemon packaging and does not add Flatpak packaging metadata.
+The prototype uses only the Python standard library and exposes three
+read-only methods:
+
+- `health()` performs `GET /healthz`.
+- `preflight_report()` performs `GET /v1/diagnostics/preflight`.
+- `adapter_readiness()` performs `GET /v1/adapters/readiness`.
+
+The client accepts its token explicitly and does not discover, read, pair,
+store, rotate, or persist credentials. Authenticated requests use
+`X-Api-Token`; request and client representations redact or omit the token, and
+sanitized exceptions do not retain transport exception chains. The default
+origin is `http://127.0.0.1:8732`; only literal IPv4 or IPv6 loopback HTTP
+origins are accepted. Proxies and redirects are disabled by the standard
+transport, and redirects returned by injected test transports are rejected.
+
+The injectable transport makes the client offline-testable without a daemon or
+live network. Response handling preserves the daemon envelope, bounds response
+and error-body processing, rejects malformed JSON and invalid envelopes, and
+distinguishes connection failures, authentication failures, and the daemon's
+fail-closed `503` / `api_token_missing` response. There is no generic public
+request method and no lifecycle, configuration, diagnostic execution, support
+bundle generation, or other mutation method.
 
 The client must treat API calls as requests to a privileged authority:
 
@@ -239,7 +268,7 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | Phase | Scope | Exit condition |
 |---|---|---|
 | PR #77 | Architecture plan only. No package, manifest, API, UI, runtime, installer, CI, or vendor change. | This document makes ownership, API/authentication, sandbox, privacy, support-bundle, distribution, and non-goal boundaries reviewable. |
-| PR #78 | Flatpak local API client prototype. Start with a small client layer against a fake/mock daemon, explicit loopback pinning, authentication-header handling, redirect rejection, bounded timeouts, compatibility/error mapping, and no host command execution. | Unit tests demonstrate safe request construction and failure handling without privileged host mutation. Exact packaging scope requires separate approval. |
+| PR #78 | Flatpak local API client prototype (current phase). Add the small `flatpak_client/` layer against an injectable fake transport, with explicit loopback pinning, authentication-header handling, redirect rejection, bounded timeouts, compatibility/error mapping, and no host command execution. | Unit tests demonstrate safe request construction and failure handling without privileged host mutation. No Flatpak package or manifest exists; exact packaging scope requires separate approval. |
 | PR #79 | Token pairing and first-run flow. Define and implement the daemon-authorized pairing protocol, secure credential storage/recovery, missing-daemon and missing-token guidance, and version compatibility UX. | Pairing cannot bypass fail-closed daemon auth, leak tokens, or read protected host configuration; security tests cover expiry, rotation, rejection, and interrupted first run. |
 | PR #80 | Flatpak diagnostics/control UI. Implement reviewed Basic/Pro views using the client contract, including daemon-owned status, lifecycle controls, diagnostics, and support-bundle export. | UI behavior is tested, sandbox permissions remain minimal, and all privileged effects are mediated by authenticated daemon calls. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
@@ -322,11 +351,13 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #77
+## Explicit non-goals for PR #78
 
 - No Flatpak packaging, manifest, build definition, finish-args, desktop file,
   icon set, metainfo, repository submission, or release artifact.
-- No Flatpak UI or other frontend code.
+- No Flatpak GUI, control panel, diagnostics UI, or existing Web UI change.
+- No token pairing, discovery, storage, keyring, rotation, or first-run flow;
+  those remain future PR #79 work.
 - No daemon endpoint, API response, authentication, pairing, lifecycle,
   diagnostics, support-bundle, or runtime behavior change.
 - No installer, uninstaller, systemd-unit, platform, or CI behavior change.
@@ -344,6 +375,8 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No known-adapter registry or adapter-policy implementation.
 - No HostFactsSnapshot work or consumer change.
 
-PR #77 authorizes only this architecture plan. It does not claim that a
-Flatpak, Steam Frame support, VR Direct Link support, or a known-adapter
-registry exists.
+PR #78 authorizes only the isolated read-only client prototype, its offline
+tests, and this plan update. It does not claim that a Flatpak package or UI,
+Steam Frame support, VR Direct Link support, or a known-adapter registry
+exists. PR #79 token pairing/first-run and PR #80 diagnostics/control UI remain
+future, separately approved work.
