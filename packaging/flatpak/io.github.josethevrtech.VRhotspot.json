@@ -1,0 +1,81 @@
+{
+  "app-id": "io.github.josethevrtech.VRhotspot",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "50",
+  "sdk": "org.gnome.Sdk",
+  "command": "vrhotspot-flatpak",
+  "finish-args": [
+    "--share=network",
+    "--share=ipc",
+    "--socket=wayland",
+    "--socket=fallback-x11"
+  ],
+  "modules": [
+    {
+      "name": "vrhotspot-flatpak-shell",
+      "buildsystem": "simple",
+      "build-commands": [
+        "install -d /app/lib/vrhotspot/flatpak_app /app/lib/vrhotspot/flatpak_client",
+        "install -m 0644 flatpak_app/__init__.py flatpak_app/__main__.py flatpak_app/app.py /app/lib/vrhotspot/flatpak_app/",
+        "install -m 0644 flatpak_client/__init__.py flatpak_client/client.py flatpak_client/pairing.py flatpak_client/ui.py /app/lib/vrhotspot/flatpak_client/",
+        "install -Dm755 vrhotspot-flatpak /app/bin/vrhotspot-flatpak",
+        "install -Dm644 io.github.josethevrtech.VRhotspot.desktop /app/share/applications/io.github.josethevrtech.VRhotspot.desktop",
+        "install -Dm644 io.github.josethevrtech.VRhotspot.metainfo.xml /app/share/metainfo/io.github.josethevrtech.VRhotspot.metainfo.xml",
+        "install -Dm644 io.github.josethevrtech.VRhotspot.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot.svg"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "path": "../../flatpak_app/__init__.py",
+          "dest": "flatpak_app"
+        },
+        {
+          "type": "file",
+          "path": "../../flatpak_app/__main__.py",
+          "dest": "flatpak_app"
+        },
+        {
+          "type": "file",
+          "path": "../../flatpak_app/app.py",
+          "dest": "flatpak_app"
+        },
+        {
+          "type": "file",
+          "path": "../../flatpak_client/__init__.py",
+          "dest": "flatpak_client"
+        },
+        {
+          "type": "file",
+          "path": "../../flatpak_client/client.py",
+          "dest": "flatpak_client"
+        },
+        {
+          "type": "file",
+          "path": "../../flatpak_client/pairing.py",
+          "dest": "flatpak_client"
+        },
+        {
+          "type": "file",
+          "path": "../../flatpak_client/ui.py",
+          "dest": "flatpak_client"
+        },
+        {
+          "type": "file",
+          "path": "vrhotspot-flatpak"
+        },
+        {
+          "type": "file",
+          "path": "io.github.josethevrtech.VRhotspot.desktop"
+        },
+        {
+          "type": "file",
+          "path": "io.github.josethevrtech.VRhotspot.metainfo.xml"
+        },
+        {
+          "type": "file",
+          "path": "io.github.josethevrtech.VRhotspot.svg"
+        }
+      ]
+    }
+  ]
+}

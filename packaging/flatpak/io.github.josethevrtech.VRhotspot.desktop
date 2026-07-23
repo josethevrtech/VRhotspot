@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VR Hotspot
+Comment=Launch the VR Hotspot Flatpak shell prototype
+Exec=vrhotspot-flatpak
+Icon=io.github.josethevrtech.VRhotspot
+Terminal=false
+Categories=Network;
+StartupNotify=true

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.josethevrtech.VRhotspot</id>
+  <name>VR Hotspot</name>
+  <summary>Prototype control shell for a host-installed VRhotspot daemon</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.josethevrtech">
+    <name>VRhotspot contributors</name>
+  </developer>
+  <description>
+    <p>
+      VR Hotspot is an early Flatpak app shell for the separately installed
+      VRhotspot daemon. This prototype launches an offline, unpaired status
+      window and does not provide hotspot lifecycle or configuration controls.
+    </p>
+    <p>
+      The privileged daemon and its host installer remain separate from this
+      unprivileged application.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/josethevrtech/VRhotspot</url>
+  <launchable type="desktop-id">io.github.josethevrtech.VRhotspot.desktop</launchable>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-07-23">
+      <description>
+        <p>First rough installable and testable Flatpak shell prototype.</p>
+      </description>
+    </release>
+  </releases>
+</component>
