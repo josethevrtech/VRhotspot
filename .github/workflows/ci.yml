@@ -37,6 +37,9 @@ jobs:
       - name: Ruff
         run: ruff check .
 
+      - name: Validate vendor manifest and generate deterministic vendor-only SBOM
+        run: python tools/ci/vendor_manifest_check.py --sbom-output /tmp/vrhotspot-vendor-sbom.json
+
       - name: Pytest
         run: pytest -q
 
