@@ -141,6 +141,7 @@ class FakeGtkWidget:
         self.css_classes = []
         self.signal_handlers = {}
         self.sensitive = True
+        self.show_peek_icon = False
 
     def append(self, child):
         child.parent = self
@@ -200,8 +201,8 @@ class FakeGtkWidget:
     def set_margin_end(self, _margin):
         pass
 
-    def set_show_peek_icon(self, _show):
-        pass
+    def set_show_peek_icon(self, show):
+        self.show_peek_icon = show
 
 
 class FakeGtkApplication:
@@ -219,6 +220,8 @@ class FakeGtkApplication:
 
 
 class FakeGtkApplicationWindow(FakeGtkWidget):
+    last_presented = None
+
     def set_title(self, _title):
         pass
 
@@ -226,7 +229,7 @@ class FakeGtkApplicationWindow(FakeGtkWidget):
         pass
 
     def present(self):
-        pass
+        type(self).last_presented = self
 
 
 class FakeGtkScrolledWindow(FakeGtkWidget):
@@ -246,6 +249,10 @@ class FakeGtkButton(FakeGtkWidget):
         self.label = label
 
 
+class FakeGtkPasswordEntry(FakeGtkWidget):
+    pass
+
+
 class FakeGtk:
     class Orientation:
         VERTICAL = "vertical"
@@ -263,13 +270,21 @@ class FakeGtk:
     Grid = FakeGtkWidget
     Label = FakeGtkLabel
     Button = FakeGtkButton
-    PasswordEntry = FakeGtkWidget
+    PasswordEntry = FakeGtkPasswordEntry
 
 
 def _walk_fake_widgets(widget):
     yield widget
     for child in widget.children:
         yield from _walk_fake_widgets(child)
+
+
+def _fake_labels_under(widget):
+    return {
+        child.label
+        for child in _walk_fake_widgets(widget)
+        if isinstance(child, FakeGtkLabel)
+    }
 
 
 def _manifest():
@@ -806,6 +821,7 @@ def test_successful_pairing_builds_and_renders_all_native_dashboard_sections():
     app._render_dashboard_model(FakeGtk, container, dashboard)
 
     assert set(asdict(dashboard)) == {
+        "labels",
         "daemon",
         "pairing",
         "adapter_readiness",
@@ -833,6 +849,22 @@ def test_successful_pairing_builds_and_renders_all_native_dashboard_sections():
     assert dashboard.controls.visible is True
     assert dashboard.controls.mutation_actions == ()
     assert dashboard.controls.action_enabled is False
+    assert tuple(asdict(dashboard.labels).values()) == (
+        "Dashboard Overview",
+        "Connection & Pairing",
+        "Readiness & Adapter Summary",
+        "Adapter Readiness",
+        "Preflight Diagnostics",
+        "Readiness & Host Summary",
+        "Facts",
+        "Blocking Issues",
+        "Warnings",
+        "Other Issues",
+        "Recommended Actions",
+        "Support Bundle",
+        "Controls Boundary",
+        "Unavailable Features",
+    )
 
     widgets = tuple(_walk_fake_widgets(container))
     rendered_text = {
@@ -842,25 +874,196 @@ def test_successful_pairing_builds_and_renders_all_native_dashboard_sections():
         widget for widget in widgets if isinstance(widget, FakeGtkButton)
     ]
     for section_title in (
-        "Daemon status",
-        "Pairing status",
-        "Adapter readiness",
-        "Preflight diagnostics",
-        "Support bundle",
-        "Controls boundary",
+        "Dashboard Overview",
+        "Connection & Pairing",
+        "Daemon Status",
+        "Pairing Status",
+        "Readiness & Adapter Summary",
+        "Adapter Readiness",
+        "Preflight Diagnostics",
+        "Readiness & Host Summary",
+        "Blocking Issues",
+        "Warnings",
+        "Recommended Actions",
+        "Support Bundle",
+        "Controls Boundary",
+        "Unavailable Features",
     ):
         assert section_title in rendered_text
-    assert "Recommended interface: wlan1" in rendered_text
+    assert "wlan1" in rendered_text
+    assert "DAEMON RECOMMENDED" in rendered_text
+    assert "RECOMMENDED" in rendered_text
+    assert "PAIRED" in rendered_text
     assert "Readiness: Ready" in rendered_text
-    assert "Severity: OK" in rendered_text
-    assert "Reasons" in rendered_text
+    assert "OK" in rendered_text
+    assert "WARNING" in rendered_text
+    assert "Top Reasons" in rendered_text
     assert "Facts" in rendered_text
-    assert "Issues" in rendered_text
-    assert "Noninteractive actions" in rendered_text
+    assert "No blocking issues." in rendered_text
     assert "Mutation actions: none" in rendered_text
+    assert "NOT AVAILABLE YET" in rendered_text
     assert [(button.label, button.sensitive) for button in buttons] == [
         ("Export support bundle", False)
     ]
+
+
+@pytest.mark.parametrize(
+    ("severity_name", "expected_label", "semantic_class"),
+    (
+        ("OK", "OK", "success"),
+        ("WARNING", "WARNING", "warning"),
+        ("BLOCKED", "BLOCKED", "error"),
+        ("ERROR", "ERROR", "error"),
+        ("UNKNOWN", "UNKNOWN", "dim-label"),
+    ),
+)
+def test_native_dashboard_severity_badges_render_consistently(
+    severity_name,
+    expected_label,
+    semantic_class,
+):
+    from flatpak_app import app
+    from flatpak_client import StatusSeverity
+
+    container = FakeGtkWidget()
+    severity = StatusSeverity[severity_name]
+
+    badge = app._add_status_badge(FakeGtk, container, severity)
+
+    assert _fake_labels_under(badge) == {expected_label}
+    assert badge.css_classes == [
+        "status-badge",
+        f"severity-{severity.value}",
+        semantic_class,
+    ]
+
+
+def test_recommended_adapter_has_visible_badge_and_emphasized_card():
+    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
+    from flatpak_app import app
+
+    dashboard = build_dashboard_model(
+        FirstRunTokenEntryController(
+            client_factory=ScriptedReadOnlyClientFactory()
+        ).connect(token="recommended-emphasis-value")
+    )
+    container = FakeGtkWidget()
+
+    app._render_dashboard_model(FakeGtk, container, dashboard)
+
+    emphasized = [
+        widget
+        for widget in _walk_fake_widgets(container)
+        if "recommended-card" in widget.css_classes
+    ]
+    assert emphasized
+    assert any(
+        {"wlan1", "RECOMMENDED"}.issubset(_fake_labels_under(widget))
+        for widget in emphasized
+    )
+
+
+def test_disabled_sections_are_visibly_unavailable_without_mutation_actions():
+    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
+    from flatpak_app import app
+
+    dashboard = build_dashboard_model(
+        FirstRunTokenEntryController(
+            client_factory=ScriptedReadOnlyClientFactory()
+        ).connect(token="disabled-sections-value")
+    )
+    container = FakeGtkWidget()
+
+    app._render_dashboard_model(FakeGtk, container, dashboard)
+    widgets = tuple(_walk_fake_widgets(container))
+    labels = {
+        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
+    }
+    buttons = [
+        widget for widget in widgets if isinstance(widget, FakeGtkButton)
+    ]
+
+    assert "NOT AVAILABLE YET" in labels
+    assert "UNAVAILABLE" in labels
+    assert "Mutation actions: none" in labels
+    assert dashboard.controls.mutation_actions == ()
+    assert dashboard.controls.action_enabled is False
+    assert [(button.label, button.sensitive) for button in buttons] == [
+        ("Export support bundle", False)
+    ]
+    assert all(button.signal_handlers == {} for button in buttons)
+
+
+def test_gui_keeps_hidden_token_entry_scrollable_native_header_and_no_controls(
+    monkeypatch,
+):
+    from flatpak_app import app
+
+    FakeGtkApplicationWindow.last_presented = None
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+
+    assert app.run_gui() == 0
+
+    window = FakeGtkApplicationWindow.last_presented
+    assert window is not None
+    widgets = tuple(_walk_fake_widgets(window))
+    entries = [
+        widget for widget in widgets if isinstance(widget, FakeGtkPasswordEntry)
+    ]
+    labels = {
+        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
+    }
+    buttons = [
+        widget for widget in widgets if isinstance(widget, FakeGtkButton)
+    ]
+    button_labels = {button.label.casefold() for button in buttons}
+
+    assert isinstance(window.children[0], FakeGtkScrolledWindow)
+    assert len(entries) == 1
+    assert entries[0].show_peek_icon is True
+    assert {"VR Hotspot", "Native Dashboard", "NATIVE GTK", "READ-ONLY"} <= labels
+    assert "Connect / Validate token" in {button.label for button in buttons}
+    assert {
+        "start",
+        "stop",
+        "restart",
+        "repair",
+        "save",
+        "apply",
+        "refresh",
+    }.isdisjoint(button_labels)
+
+
+def test_native_dashboard_styles_are_bounded_and_have_no_external_assets():
+    from flatpak_app import app
+
+    stylesheet = app._DASHBOARD_CSS
+
+    assert len(stylesheet.encode("utf-8")) < 512
+    assert "url(" not in stylesheet.casefold()
+    assert "@import" not in stylesheet.casefold()
+    assert {
+        ".dashboard-card",
+        ".status-badge",
+        ".recommended-card",
+        ".unavailable-card",
+    } <= set(line.strip().split(" {", 1)[0] for line in stylesheet.splitlines())
+
+
+def test_native_dashboard_does_not_embed_a_web_runtime_or_frontend_assets():
+    source = Path("flatpak_app/app.py").read_text(encoding="utf-8").casefold()
+    manifest_text = MANIFEST_PATH.read_text(encoding="utf-8").casefold()
+
+    for forbidden in (
+        "webkit",
+        "webview",
+        "index.html",
+        "ui.js",
+        "ui.css",
+        "../../assets/",
+    ):
+        assert forbidden not in source
+        assert forbidden not in manifest_text
 
 
 def test_token_entry_is_cleared_before_dashboard_validation():

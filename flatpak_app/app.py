@@ -31,6 +31,21 @@ APP_ID = "io.github.josethevrtech.VRhotspot"
 APP_NAME = "VR Hotspot"
 MAX_SMOKE_JSON_BYTES = 8_192
 MAX_LIVE_SMOKE_JSON_BYTES = 65_536
+_DASHBOARD_CSS = """
+.dashboard-card {
+  border-radius: 10px;
+}
+.status-badge {
+  border-radius: 9999px;
+  padding: 2px 8px;
+}
+.recommended-card {
+  border-width: 2px;
+}
+.unavailable-card {
+  opacity: 0.82;
+}
+"""
 
 _LIVE_SMOKE_SUCCESS = "success"
 _LIVE_SMOKE_INVALID_RESPONSE = "invalid_response"
@@ -59,9 +74,30 @@ class DashboardControlsBoundary:
 
 
 @dataclass(frozen=True)
+class DashboardSectionLabels:
+    """Stable product labels shared by the native dashboard sections."""
+
+    overview: str = "Dashboard Overview"
+    connection_pairing: str = "Connection & Pairing"
+    readiness_summary: str = "Readiness & Adapter Summary"
+    adapter_readiness: str = "Adapter Readiness"
+    preflight_diagnostics: str = "Preflight Diagnostics"
+    host_summary: str = "Readiness & Host Summary"
+    facts: str = "Facts"
+    blocking_issues: str = "Blocking Issues"
+    warnings: str = "Warnings"
+    other_issues: str = "Other Issues"
+    recommended_actions: str = "Recommended Actions"
+    support_bundle: str = "Support Bundle"
+    controls_boundary: str = "Controls Boundary"
+    unavailable_features: str = "Unavailable Features"
+
+
+@dataclass(frozen=True)
 class NativeDashboardModel:
     """Safe sections consumed by the native GTK dashboard."""
 
+    labels: DashboardSectionLabels
     daemon: DaemonStatusModel
     pairing: PairingStatusModel
     adapter_readiness: AdapterReadinessModel
@@ -129,7 +165,9 @@ def build_dashboard_model(
 
     if not isinstance(model, DiagnosticsControlUiModel):
         model = build_initial_model()
+    labels = DashboardSectionLabels()
     return NativeDashboardModel(
+        labels=labels,
         daemon=model.daemon,
         pairing=model.pairing,
         adapter_readiness=model.adapters,
@@ -138,7 +176,7 @@ def build_dashboard_model(
         controls=DashboardControlsBoundary(
             visible=True,
             severity=StatusSeverity.UNKNOWN,
-            title="Controls boundary",
+            title=labels.controls_boundary,
             readiness_label="Unavailable",
             summary=(
                 "This foundation is read-only. Lifecycle and configuration "
@@ -386,9 +424,77 @@ def _severity_css_class(severity: StatusSeverity) -> str:
     }.get(severity, "dim-label")
 
 
-def _new_card(Gtk, *, title: str, severity: StatusSeverity):
+def _install_dashboard_styles(Gtk, widget) -> None:
+    """Install the small native-dashboard stylesheet when GTK supports it."""
+
+    try:
+        provider = Gtk.CssProvider()
+        provider.load_from_data(_DASHBOARD_CSS)
+        display = widget.get_display()
+        if display is None:
+            return
+        Gtk.StyleContext.add_provider_for_display(
+            display,
+            provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+    except (AttributeError, TypeError, ValueError):
+        return
+
+
+def _add_status_badge(
+    Gtk,
+    container,
+    severity: StatusSeverity,
+    *,
+    text: str | None = None,
+):
+    if not isinstance(severity, StatusSeverity):
+        severity = StatusSeverity.UNKNOWN
+    badge = Gtk.Frame()
+    badge.add_css_class("status-badge")
+    badge.add_css_class(f"severity-{severity.value}")
+    badge.add_css_class(_severity_css_class(severity))
+
+    label = Gtk.Label(label=text or _severity_text(severity))
+    label.add_css_class("caption")
+    label.add_css_class("heading")
+    label.add_css_class(_severity_css_class(severity))
+    label.set_margin_top(3)
+    label.set_margin_bottom(3)
+    label.set_margin_start(8)
+    label.set_margin_end(8)
+    badge.set_child(label)
+    container.append(badge)
+    return badge
+
+
+def _add_section_heading(
+    Gtk,
+    container,
+    title: str,
+    description: str,
+) -> None:
+    _add_text_label(Gtk, container, title, css_class="title-2")
+    _add_text_label(
+        Gtk,
+        container,
+        description,
+        css_class="dim-label",
+    )
+
+
+def _new_card(
+    Gtk,
+    *,
+    title: str,
+    severity: StatusSeverity | None,
+    css_classes: Sequence[str] = (),
+):
     frame = Gtk.Frame()
-    frame.add_css_class("card")
+    frame.add_css_class("dashboard-card")
+    for css_class in css_classes:
+        frame.add_css_class(css_class)
     frame.set_hexpand(True)
 
     body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -405,48 +511,88 @@ def _new_card(Gtk, *, title: str, severity: StatusSeverity):
         css_class="title-3",
     )
     title_label.set_hexpand(True)
-    status_label = _add_text_label(
-        Gtk,
-        heading,
-        _severity_text(severity),
-        css_class=_severity_css_class(severity),
-    )
-    status_label.set_xalign(1.0)
+    if severity is not None:
+        _add_status_badge(Gtk, heading, severity)
     body.append(heading)
     frame.set_child(body)
     return frame, body
 
 
-def _add_adapter_card(Gtk, container, card) -> None:
+def _new_fact_tile(Gtk, *, label: str, value: str):
     frame = Gtk.Frame()
-    frame.add_css_class("card")
-    frame.set_hexpand(True)
-    body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-    body.set_margin_top(12)
-    body.set_margin_bottom(12)
+    frame.add_css_class("dashboard-card")
+    body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    body.set_margin_top(10)
+    body.set_margin_bottom(10)
     body.set_margin_start(12)
     body.set_margin_end(12)
+    _add_text_label(Gtk, body, label, css_class="caption")
+    _add_text_label(Gtk, body, value, css_class="heading")
+    frame.set_child(body)
+    return frame
 
-    recommendation = " · Recommended" if card.recommended else ""
-    _add_text_label(
+
+def _add_adapter_card(Gtk, container, card) -> None:
+    card_classes = ("recommended-card",) if card.recommended else ()
+    frame, body = _new_card(
         Gtk,
-        body,
-        f"{card.interface}{recommendation}",
-        css_class="title-4",
+        title=card.interface,
+        severity=card.severity,
+        css_classes=card_classes,
     )
+    if card.recommended:
+        recommendation_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
+        _add_status_badge(
+            Gtk,
+            recommendation_row,
+            StatusSeverity.OK,
+            text="RECOMMENDED",
+        )
+        _add_text_label(
+            Gtk,
+            recommendation_row,
+            "Daemon-recommended adapter",
+            css_class="heading",
+        )
+        body.append(recommendation_row)
+
     _add_text_label(
         Gtk,
         body,
         f"Readiness: {card.readiness_label}",
-        css_class=_severity_css_class(card.severity),
+        css_class="title-4",
     )
-    _add_text_label(Gtk, body, f"Severity: {_severity_text(card.severity)}")
     _add_text_label(Gtk, body, card.summary)
+
+    details = Gtk.Grid(column_spacing=10, row_spacing=10)
+    details.set_column_homogeneous(True)
     bands = ", ".join(card.supported_bands) or "Not reported"
-    _add_text_label(Gtk, body, f"Supported bands: {bands}")
-    _add_text_label(Gtk, body, f"Driver: {card.driver} · Bus: {card.bus_type}")
+    score = (
+        str(card.recommendation_score)
+        if card.recommendation_score is not None
+        else "Not reported"
+    )
+    facts = (
+        ("Supported Bands", bands),
+        ("Recommendation Score", score),
+        ("Driver", card.driver),
+        ("Bus", card.bus_type),
+    )
+    for index, (label, value) in enumerate(facts):
+        details.attach(
+            _new_fact_tile(Gtk, label=label, value=value),
+            index % 2,
+            index // 2,
+            1,
+            1,
+        )
+    body.append(details)
+
+    _add_text_label(Gtk, body, "Top Reasons", css_class="heading")
     if card.reasons:
-        _add_text_label(Gtk, body, "Reasons", css_class="heading")
         for reason in card.reasons:
             _add_text_label(Gtk, body, f"• {reason}")
     else:
@@ -457,40 +603,115 @@ def _add_adapter_card(Gtk, container, card) -> None:
             css_class="dim-label",
         )
 
-    frame.set_child(body)
     container.append(frame)
 
 
 def _populate_daemon_card(Gtk, container, dashboard: NativeDashboardModel) -> None:
-    _add_text_label(Gtk, container, dashboard.daemon.title, css_class="title-4")
-    _add_text_label(Gtk, container, dashboard.daemon.message)
+    daemon = dashboard.daemon
+    title = _add_text_label(
+        Gtk,
+        container,
+        daemon.title,
+        css_class="title-2",
+    )
+    title.add_css_class(_severity_css_class(daemon.severity))
+    _add_text_label(Gtk, container, daemon.message)
 
 
 def _populate_pairing_card(Gtk, container, dashboard: NativeDashboardModel) -> None:
-    _add_text_label(Gtk, container, dashboard.pairing.title, css_class="title-4")
-    _add_text_label(Gtk, container, dashboard.pairing.message)
-
-
-def _populate_adapter_card(Gtk, container, dashboard: NativeDashboardModel) -> None:
-    adapters = dashboard.adapter_readiness
-    _add_text_label(Gtk, container, adapters.title, css_class="title-4")
-    _add_text_label(Gtk, container, adapters.summary)
-    _add_text_label(
-        Gtk,
-        container,
-        f"Recommended interface: {adapters.recommended_interface}",
-        css_class="heading",
-    )
-    if adapters.cards:
-        for card in adapters.cards:
-            _add_adapter_card(Gtk, container, card)
-    else:
-        _add_text_label(
+    pairing = dashboard.pairing
+    if pairing.paired:
+        _add_status_badge(
             Gtk,
             container,
-            "No adapter cards are available.",
-            css_class="dim-label",
+            StatusSeverity.OK,
+            text="PAIRED",
         )
+    title = _add_text_label(
+        Gtk,
+        container,
+        pairing.title,
+        css_class="title-2",
+    )
+    title.add_css_class(_severity_css_class(pairing.severity))
+    _add_text_label(Gtk, container, pairing.message)
+
+
+def _populate_adapter_summary_card(
+    Gtk,
+    container,
+    dashboard: NativeDashboardModel,
+) -> None:
+    adapters = dashboard.adapter_readiness
+    _add_text_label(Gtk, container, adapters.title, css_class="title-3")
+    _add_text_label(Gtk, container, adapters.summary)
+
+    recommendation = Gtk.Frame()
+    recommendation.add_css_class("dashboard-card")
+    recommendation.add_css_class("recommended-card")
+    body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    body.set_margin_top(12)
+    body.set_margin_bottom(12)
+    body.set_margin_start(12)
+    body.set_margin_end(12)
+
+    _add_text_label(Gtk, body, "Recommended", css_class="caption")
+    _add_text_label(
+        Gtk,
+        body,
+        adapters.recommended_interface,
+        css_class="title-2",
+    )
+    if adapters.recommended_interface == "Not reported":
+        _add_status_badge(
+            Gtk,
+            body,
+            StatusSeverity.UNKNOWN,
+            text="NOT REPORTED",
+        )
+    else:
+        _add_status_badge(
+            Gtk,
+            body,
+            StatusSeverity.OK,
+            text="DAEMON RECOMMENDED",
+        )
+    recommendation.set_child(body)
+    container.append(recommendation)
+
+
+def _add_issue_group(
+    Gtk,
+    container,
+    *,
+    title: str,
+    issues,
+    empty_text: str,
+) -> None:
+    frame, body = _new_card(Gtk, title=title, severity=None)
+    if issues:
+        for issue in issues:
+            issue_row = Gtk.Box(
+                orientation=Gtk.Orientation.VERTICAL,
+                spacing=4,
+            )
+            issue_heading = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL,
+                spacing=8,
+            )
+            _add_status_badge(Gtk, issue_heading, issue.severity)
+            _add_text_label(
+                Gtk,
+                issue_heading,
+                issue.code,
+                css_class="caption",
+            )
+            issue_row.append(issue_heading)
+            _add_text_label(Gtk, issue_row, issue.message)
+            body.append(issue_row)
+    else:
+        _add_text_label(Gtk, body, empty_text, css_class="dim-label")
+    container.append(frame)
 
 
 def _populate_preflight_card(
@@ -502,16 +723,42 @@ def _populate_preflight_card(
     _add_text_label(
         Gtk,
         container,
-        f"Readiness: {preflight.readiness_label}",
-        css_class="title-4",
+        dashboard.labels.host_summary,
+        css_class="title-3",
     )
-    _add_text_label(Gtk, container, f"Severity: {_severity_text(preflight.severity)}")
+    readiness_row = Gtk.Box(
+        orientation=Gtk.Orientation.HORIZONTAL,
+        spacing=8,
+    )
+    readiness_label = _add_text_label(
+        Gtk,
+        readiness_row,
+        preflight.readiness_label,
+        css_class="title-2",
+    )
+    readiness_label.set_hexpand(True)
+    _add_status_badge(Gtk, readiness_row, preflight.severity)
+    container.append(readiness_row)
     _add_text_label(Gtk, container, preflight.summary)
 
-    _add_text_label(Gtk, container, "Facts", css_class="heading")
+    _add_text_label(
+        Gtk,
+        container,
+        dashboard.labels.facts,
+        css_class="heading",
+    )
     if preflight.facts:
-        for fact in preflight.facts:
-            _add_text_label(Gtk, container, f"{fact.label}: {fact.value}")
+        facts_grid = Gtk.Grid(column_spacing=10, row_spacing=10)
+        facts_grid.set_column_homogeneous(True)
+        for index, fact in enumerate(preflight.facts):
+            facts_grid.attach(
+                _new_fact_tile(Gtk, label=fact.label, value=fact.value),
+                index % 2,
+                index // 2,
+                1,
+                1,
+            )
+        container.append(facts_grid)
     else:
         _add_text_label(
             Gtk,
@@ -520,43 +767,89 @@ def _populate_preflight_card(
             css_class="dim-label",
         )
 
-    _add_text_label(Gtk, container, "Issues", css_class="heading")
-    if preflight.issues:
-        for issue in preflight.issues:
-            _add_text_label(
-                Gtk,
-                container,
-                f"{_severity_text(issue.severity)} · {issue.message}",
-            )
-    else:
-        _add_text_label(
+    blocking = tuple(
+        issue
+        for issue in preflight.issues
+        if issue.severity in {StatusSeverity.BLOCKED, StatusSeverity.ERROR}
+    )
+    warnings = tuple(
+        issue
+        for issue in preflight.issues
+        if issue.severity is StatusSeverity.WARNING
+    )
+    other = tuple(
+        issue
+        for issue in preflight.issues
+        if issue.severity not in {
+            StatusSeverity.BLOCKED,
+            StatusSeverity.ERROR,
+            StatusSeverity.WARNING,
+        }
+    )
+    issues_grid = Gtk.Grid(column_spacing=12, row_spacing=12)
+    issues_grid.set_column_homogeneous(True)
+    blocking_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    warning_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    _add_issue_group(
+        Gtk,
+        blocking_box,
+        title=dashboard.labels.blocking_issues,
+        issues=blocking,
+        empty_text="No blocking issues.",
+    )
+    _add_issue_group(
+        Gtk,
+        warning_box,
+        title=dashboard.labels.warnings,
+        issues=warnings,
+        empty_text="No warnings.",
+    )
+    issues_grid.attach(blocking_box, 0, 0, 1, 1)
+    issues_grid.attach(warning_box, 1, 0, 1, 1)
+    if other:
+        other_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        _add_issue_group(
             Gtk,
-            container,
-            "No preflight issues were reported.",
-            css_class="dim-label",
+            other_box,
+            title=dashboard.labels.other_issues,
+            issues=other,
+            empty_text="No other issues.",
         )
+        issues_grid.attach(other_box, 0, 1, 2, 1)
+    container.append(issues_grid)
 
+    actions_frame, actions_body = _new_card(
+        Gtk,
+        title=dashboard.labels.recommended_actions,
+        severity=None,
+    )
     _add_text_label(
         Gtk,
-        container,
-        "Noninteractive actions",
-        css_class="heading",
+        actions_body,
+        "Display-only guidance; no action can be run from this dashboard.",
+        css_class="dim-label",
     )
     if preflight.actions:
         for action in preflight.actions:
             _add_text_label(
                 Gtk,
-                container,
-                f"Display-only guidance · {action.message}",
+                actions_body,
+                action.message,
+            )
+            _add_text_label(
+                Gtk,
+                actions_body,
+                action.code,
+                css_class="caption",
             )
     else:
         _add_text_label(
             Gtk,
-            container,
-            "No noninteractive actions were reported.",
+            actions_body,
+            "No actions recommended.",
             css_class="dim-label",
         )
-
+    container.append(actions_frame)
 
 
 def _populate_support_bundle_card(
@@ -565,6 +858,12 @@ def _populate_support_bundle_card(
     dashboard: NativeDashboardModel,
 ) -> None:
     support_bundle = dashboard.support_bundle
+    _add_status_badge(
+        Gtk,
+        container,
+        StatusSeverity.UNKNOWN,
+        text="NOT AVAILABLE YET",
+    )
     _add_text_label(Gtk, container, support_bundle.summary)
     export_button = Gtk.Button(label=support_bundle.action_label)
     export_button.set_sensitive(False)
@@ -572,7 +871,7 @@ def _populate_support_bundle_card(
     _add_text_label(
         Gtk,
         container,
-        "Export remains disabled in this foundation.",
+        "Export is disabled until the desktop save flow is implemented.",
         css_class="dim-label",
     )
 
@@ -583,11 +882,11 @@ def _populate_controls_card(
     dashboard: NativeDashboardModel,
 ) -> None:
     controls = dashboard.controls
-    _add_text_label(
+    _add_status_badge(
         Gtk,
         container,
-        controls.readiness_label,
-        css_class="title-4",
+        controls.severity,
+        text=controls.readiness_label.upper(),
     )
     _add_text_label(Gtk, container, controls.summary)
     _add_text_label(
@@ -606,66 +905,117 @@ def _render_dashboard_model(
     """Render the bounded native dashboard with no interactive host actions."""
 
     _clear_box(container)
-    _add_text_label(Gtk, container, "Read-only dashboard", css_class="title-2")
-    _add_text_label(
+    labels = dashboard.labels
+    _add_section_heading(
         Gtk,
         container,
+        labels.overview,
         "Daemon-owned readiness and diagnostics, presented without host mutation.",
-        css_class="dim-label",
     )
 
-    grid = Gtk.Grid(column_spacing=16, row_spacing=16)
-    grid.set_column_homogeneous(True)
+    _add_section_heading(
+        Gtk,
+        container,
+        labels.connection_pairing,
+        "Local daemon reachability and caller-validated pairing state.",
+    )
+    connection_grid = Gtk.Grid(column_spacing=16, row_spacing=16)
+    connection_grid.set_column_homogeneous(True)
 
     daemon_frame, daemon_body = _new_card(
         Gtk,
-        title="Daemon status",
+        title="Daemon Status",
         severity=dashboard.daemon.severity,
     )
     _populate_daemon_card(Gtk, daemon_body, dashboard)
-    grid.attach(daemon_frame, 0, 0, 1, 1)
+    connection_grid.attach(daemon_frame, 0, 0, 1, 1)
 
     pairing_frame, pairing_body = _new_card(
         Gtk,
-        title="Pairing status",
+        title="Pairing Status",
         severity=dashboard.pairing.severity,
     )
     _populate_pairing_card(Gtk, pairing_body, dashboard)
-    grid.attach(pairing_frame, 1, 0, 1, 1)
+    connection_grid.attach(pairing_frame, 1, 0, 1, 1)
+    container.append(connection_grid)
 
-    adapters_frame, adapters_body = _new_card(
+    summary_frame, summary_body = _new_card(
         Gtk,
-        title="Adapter readiness",
+        title=labels.readiness_summary,
         severity=dashboard.adapter_readiness.severity,
     )
-    _populate_adapter_card(Gtk, adapters_body, dashboard)
-    grid.attach(adapters_frame, 0, 1, 1, 1)
+    _populate_adapter_summary_card(Gtk, summary_body, dashboard)
+    container.append(summary_frame)
 
+    _add_section_heading(
+        Gtk,
+        container,
+        labels.adapter_readiness,
+        "Daemon-reported capabilities, readiness, and recommendation details.",
+    )
+    adapters_box = Gtk.Box(
+        orientation=Gtk.Orientation.VERTICAL,
+        spacing=12,
+    )
+    if dashboard.adapter_readiness.cards:
+        for card in dashboard.adapter_readiness.cards:
+            _add_adapter_card(Gtk, adapters_box, card)
+    else:
+        empty_frame, empty_body = _new_card(
+            Gtk,
+            title="No Adapters Reported",
+            severity=StatusSeverity.UNKNOWN,
+        )
+        _add_text_label(
+            Gtk,
+            empty_body,
+            "No adapter cards are available.",
+            css_class="dim-label",
+        )
+        adapters_box.append(empty_frame)
+    container.append(adapters_box)
+
+    _add_section_heading(
+        Gtk,
+        container,
+        labels.preflight_diagnostics,
+        "Read-only readiness report using the canonical daemon response.",
+    )
     preflight_frame, preflight_body = _new_card(
         Gtk,
-        title="Preflight diagnostics",
+        title=labels.preflight_diagnostics,
         severity=dashboard.preflight.severity,
     )
     _populate_preflight_card(Gtk, preflight_body, dashboard)
-    grid.attach(preflight_frame, 1, 1, 1, 1)
+    container.append(preflight_frame)
 
+    _add_section_heading(
+        Gtk,
+        container,
+        labels.unavailable_features,
+        "Planned capabilities shown explicitly as unavailable.",
+    )
+    unavailable_grid = Gtk.Grid(column_spacing=16, row_spacing=16)
+    unavailable_grid.set_column_homogeneous(True)
     support_frame, support_body = _new_card(
         Gtk,
-        title=dashboard.support_bundle.title,
+        title=labels.support_bundle,
         severity=dashboard.support_bundle.severity,
+        css_classes=("unavailable-card",),
     )
     _populate_support_bundle_card(Gtk, support_body, dashboard)
-    grid.attach(support_frame, 0, 2, 1, 1)
+    unavailable_grid.attach(support_frame, 0, 0, 1, 1)
 
     controls_frame, controls_body = _new_card(
         Gtk,
-        title=dashboard.controls.title,
+        title=labels.controls_boundary,
         severity=dashboard.controls.severity,
+        css_classes=("unavailable-card",),
     )
     _populate_controls_card(Gtk, controls_body, dashboard)
-    grid.attach(controls_frame, 1, 2, 1, 1)
+    unavailable_grid.attach(controls_frame, 1, 0, 1, 1)
 
-    container.append(grid)
+    container.append(unavailable_grid)
 
 
 def _render_display_model(Gtk, container, model: DiagnosticsControlUiModel) -> None:
@@ -735,27 +1085,68 @@ def run_gui() -> int:
     def on_activate(app) -> None:
         window = Gtk.ApplicationWindow(application=app)
         window.set_title(APP_NAME)
-        window.set_default_size(960, 800)
+        window.set_default_size(1040, 900)
+        _install_dashboard_styles(Gtk, window)
 
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        content.set_margin_top(24)
-        content.set_margin_bottom(24)
-        content.set_margin_start(24)
-        content.set_margin_end(24)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        content.set_margin_top(28)
+        content.set_margin_bottom(28)
+        content.set_margin_start(28)
+        content.set_margin_end(28)
 
-        _add_text_label(Gtk, content, APP_NAME, css_class="title-1")
+        app_header = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=16,
+        )
+        header_copy = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=4,
+        )
+        header_copy.set_hexpand(True)
+        _add_text_label(Gtk, header_copy, APP_NAME, css_class="title-1")
         _add_text_label(
             Gtk,
-            content,
-            "Native read-only companion",
+            header_copy,
+            "Native Dashboard",
             css_class="title-3",
         )
         _add_text_label(
             Gtk,
-            content,
+            header_copy,
+            "Local VR readiness and diagnostics at a glance.",
+            css_class="dim-label",
+        )
+        app_header.append(header_copy)
+        header_badges = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=6,
+        )
+        _add_status_badge(
+            Gtk,
+            header_badges,
+            StatusSeverity.UNKNOWN,
+            text="NATIVE GTK",
+        )
+        _add_status_badge(
+            Gtk,
+            header_badges,
+            StatusSeverity.OK,
+            text="READ-ONLY",
+        )
+        app_header.append(header_badges)
+        content.append(app_header)
+
+        connection_frame, connection_body = _new_card(
+            Gtk,
+            title="Connect to Local Daemon",
+            severity=None,
+        )
+        _add_text_label(
+            Gtk,
+            connection_body,
             "Enter the API token configured for the local VRhotspot daemon. "
             "The token is used in memory for this validation only and is not saved.",
         )
@@ -772,7 +1163,14 @@ def run_gui() -> int:
 
         connect_button = Gtk.Button(label="Connect / Validate token")
         connection_row.append(connect_button)
-        content.append(connection_row)
+        connection_body.append(connection_row)
+        _add_text_label(
+            Gtk,
+            connection_body,
+            "The entry is cleared before validation. Pairing does not persist a session.",
+            css_class="dim-label",
+        )
+        content.append(connection_frame)
 
         display_sections = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
