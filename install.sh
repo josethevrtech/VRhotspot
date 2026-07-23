@@ -684,6 +684,10 @@ detect_os() {
             ;;
     esac
     print_success "Detected $OS_NAME ($PKG_MANAGER)."
+    if [ "$OS_ID" = "bazzite" ]; then
+        print_info "Bazzite support policy: supported through the rpm-ostree path with bundled hostapd/dnsmasq."
+        print_info "Missing base tools may be layered; if live application is unavailable, reboot and rerun the installer."
+    fi
 }
 
 calculate_dependency_list() {
@@ -703,18 +707,14 @@ calculate_dependency_list() {
             ;;
         rpm-ostree)
             DEPENDENCIES=(python3 python3-pip iw iproute iptables)
-            local script_dir vendor_bundle force_vendor
-            script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-            vendor_bundle=0
-            if [ "$OS_ID" = "bazzite" ] && [ -x "$script_dir/backend/vendor/bin/bazzite/hostapd" ]; then
-                vendor_bundle=1
-            fi
-            force_vendor=0
-            case "$(echo "${VR_HOTSPOT_FORCE_VENDOR_BIN:-}" | tr '[:upper:]' '[:lower:]')" in
-                1|true|yes|on) force_vendor=1 ;;
-            esac
-            if [ "$vendor_bundle" -eq 0 ] && [ "$force_vendor" -eq 0 ]; then
-                DEPENDENCIES+=("hostapd" "dnsmasq")
+            if [ "$OS_ID" != "bazzite" ]; then
+                local force_vendor=0
+                case "$(echo "${VR_HOTSPOT_FORCE_VENDOR_BIN:-}" | tr '[:upper:]' '[:lower:]')" in
+                    1|true|yes|on) force_vendor=1 ;;
+                esac
+                if [ "$force_vendor" -eq 0 ]; then
+                    DEPENDENCIES+=("hostapd" "dnsmasq")
+                fi
             fi
             ;;
     esac
@@ -794,21 +794,14 @@ install_dependencies() {
             ;;
         rpm-ostree)
             # Check for missing dependencies to avoid unnecessary layering
-            local script_dir
-            script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-            local vendor_bundle=0
-            if [ "$OS_ID" = "bazzite" ] && [ -x "$script_dir/backend/vendor/bin/bazzite/hostapd" ]; then
-                vendor_bundle=1
-            fi
-
             local force_vendor=0
             case "$(echo "${VR_HOTSPOT_FORCE_VENDOR_BIN:-}" | tr '[:upper:]' '[:lower:]')" in
                 1|true|yes|on) force_vendor=1 ;;
             esac
 
             local deps=("python3" "python3-pip" "iw" "iproute" "iptables")
-            if [ "$vendor_bundle" -eq 1 ]; then
-                print_info "Bazzite vendor bundle detected; skipping hostapd/dnsmasq layering."
+            if [ "$OS_ID" = "bazzite" ]; then
+                print_info "Bazzite uses bundled hostapd/dnsmasq; they will not be layered with rpm-ostree."
             elif [ "$force_vendor" -eq 1 ]; then
                 print_info "VR_HOTSPOT_FORCE_VENDOR_BIN=1 set; skipping hostapd/dnsmasq layering."
             else
@@ -922,12 +915,8 @@ configure_install() {
     fi
     if [ "$OS_ID" = "bazzite" ]; then
         echo "VR_HOTSPOT_VENDOR_PROFILE=bazzite" >> "$ENV_FILE"
-        if [ -x "$TEMP_INSTALL_DIR/backend/vendor/bin/bazzite/hostapd" ]; then
-            echo "VR_HOTSPOT_FORCE_VENDOR_BIN=1" >> "$ENV_FILE"
-            print_info "Bazzite vendor bundle detected; forcing bundled hostapd/dnsmasq."
-        else
-            print_warning "Bazzite vendor bundle not found. Using system hostapd until bundled binaries are added."
-        fi
+        echo "VR_HOTSPOT_FORCE_VENDOR_BIN=1" >> "$ENV_FILE"
+        print_info "Bazzite detected; forcing bundled hostapd/dnsmasq."
     fi
     print_success "Configuration saved to $ENV_FILE."
 }

@@ -392,6 +392,33 @@ def test_report_distinguishes_steamos_from_mutable_linux():
     assert report["platform"]["is_mutable_linux"] is False
 
 
+def test_report_classifies_bazzite_as_immutable_rpm_ostree():
+    bazzite_platform = {
+        **PLATFORM,
+        "os": {
+            "pretty_name": "Bazzite 42",
+            "id": "bazzite",
+            "version_id": "42",
+            "variant_id": "",
+            "id_like": ["fedora"],
+        },
+        "immutability": {
+            "is_immutable": True,
+            "signal": "rpm-ostree",
+            "writable_paths": {},
+        },
+    }
+
+    report = _build(platform_matrix=bazzite_platform)
+
+    assert report["platform"]["os_family"] == "fedora"
+    assert report["platform"]["os_flavor"] == "bazzite"
+    assert report["platform"]["package_manager_family"] == "rpm-ostree"
+    assert report["platform"]["host_kind"] == "immutable_linux"
+    assert report["platform"]["is_immutable"] is True
+    assert report["platform"]["is_mutable_linux"] is False
+
+
 def test_report_blocks_on_missing_required_host_facts_with_human_actions():
     report = _build(
         binaries={
