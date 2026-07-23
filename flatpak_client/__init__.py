@@ -26,6 +26,22 @@ from .pairing import (
     PairingClientFactory,
     TokenPairingController,
 )
+from .ui import (
+    AdapterReadinessCard,
+    AdapterReadinessModel,
+    DaemonStatusModel,
+    DiagnosticsControlUiController,
+    DiagnosticsControlUiModel,
+    DiagnosticsUiClient,
+    PairingStatusModel,
+    PreflightActionModel,
+    PreflightIssueModel,
+    PreflightSummaryModel,
+    PresentationMode,
+    StatusSeverity,
+    SummaryFact,
+    SupportBundleAffordance,
+)
 
 __all__ = [
     "DEFAULT_BASE_URL",
@@ -50,4 +66,18 @@ __all__ = [
     "PairingClient",
     "PairingClientFactory",
     "TokenPairingController",
+    "AdapterReadinessCard",
+    "AdapterReadinessModel",
+    "DaemonStatusModel",
+    "DiagnosticsControlUiController",
+    "DiagnosticsControlUiModel",
+    "DiagnosticsUiClient",
+    "PairingStatusModel",
+    "PreflightActionModel",
+    "PreflightIssueModel",
+    "PreflightSummaryModel",
+    "PresentationMode",
+    "StatusSeverity",
+    "SummaryFact",
+    "SupportBundleAffordance",
 ]
