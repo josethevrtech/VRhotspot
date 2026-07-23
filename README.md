@@ -41,9 +41,18 @@ sudo bash /tmp/vrhotspot-install.sh --non-interactive
 curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh | sudo bash
 ```
 
+**Bazzite support policy**
+
+Bazzite is a supported target through the dedicated `rpm-ostree` installer
+path. VR Hotspot uses its bundled hostapd/dnsmasq stack on Bazzite instead of
+layering system copies. If another required base tool is missing, the installer
+first attempts live package layering; when that is unavailable, it stages the
+packages and asks you to reboot and rerun the installer. The installer does not
+reboot the system automatically.
+
 **Features:**
 - ✅ Auto-detects your OS (SteamOS, Bazzite, CachyOS, Arch, EndeavourOS, Ubuntu, Fedora)
-- ✅ Installs all dependencies automatically (iw, python, libnl, etc.)
+- ✅ Installs required dependencies automatically where the platform permits it
 - ✅ Configures NetworkManager to prevent interference
 - ✅ Starts service and shows you the web UI URL and API token
 - ✅ Perfect for beginners - no Linux knowledge required

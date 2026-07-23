@@ -209,6 +209,18 @@ enable_firewalld_uplink_forwarding() {
   ensure_firewalld_action "add-forward" "permanent" "$zone"
 }
 
+validate_bazzite_vendor_stack() {
+  local vendor_bin_dir="$1"
+  local binary
+
+  for binary in hostapd dnsmasq; do
+    if [[ -x "$vendor_bin_dir/bazzite/$binary" || -x "$vendor_bin_dir/$binary" ]]; then
+      continue
+    fi
+    die "Bazzite requires bundled $binary in $vendor_bin_dir/bazzite or $vendor_bin_dir"
+  done
+}
+
 # Allow focused tests to source the firewall helpers without running installation.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
@@ -270,7 +282,9 @@ if [[ -d "$INSTALL_DIR/backend/vendor/bin" ]]; then
   chmod +x "$INSTALL_DIR/backend/vendor/bin/"* 2>/dev/null || true
 fi
 
-# Ensure Bazzite prefers bundled hostapd/dnsmasq (system hostapd has been unstable on some installs).
+# Ensure Bazzite uses the bundled hostapd/dnsmasq stack (system hostapd has
+# been unstable on some installs). OS-specific binaries are preferred when
+# present; the tracked base bundle is the supported fallback.
 OS_ID=""
 OS_ID_LIKE=""
 if [[ -r /etc/os-release ]]; then
@@ -280,7 +294,8 @@ if [[ -r /etc/os-release ]]; then
   OS_ID_LIKE="${ID_LIKE:-}"
 fi
 if [[ "$OS_ID" == "bazzite" ]]; then
-  log "Bazzite detected: enforcing bundled vendor binaries in /etc/vr-hotspot/env"
+  validate_bazzite_vendor_stack "$INSTALL_DIR/backend/vendor/bin"
+  log "Bazzite detected: enforcing bundled hostapd/dnsmasq in /etc/vr-hotspot/env"
   install -d -m 755 /etc/vr-hotspot
   touch /etc/vr-hotspot/env
   if grep -q "^VR_HOTSPOT_FORCE_VENDOR_BIN=" /etc/vr-hotspot/env; then
