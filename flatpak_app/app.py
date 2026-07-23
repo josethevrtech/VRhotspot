@@ -1,9 +1,9 @@
-"""Launchable, read-only Flatpak application shell prototype."""
+"""Launchable, read-only Flatpak native dashboard foundation."""
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import getpass
 import json
 import sys
@@ -11,13 +11,18 @@ from typing import Any, Sequence
 import warnings
 
 from flatpak_client import (
+    AdapterReadinessModel,
+    DaemonStatusModel,
     DiagnosticsControlUiController,
     DiagnosticsControlUiModel,
     FirstRunResult,
     FirstRunState,
     LocalApiClient,
+    PairingStatusModel,
+    PreflightSummaryModel,
     PresentationMode,
     StatusSeverity,
+    SupportBundleAffordance,
     TokenPairingController,
 )
 
@@ -38,6 +43,31 @@ _LIVE_SMOKE_INPUT_EXIT = 2
 
 class GuiUnavailableError(RuntimeError):
     """GTK 4 or PyGObject is unavailable for the graphical shell."""
+
+
+@dataclass(frozen=True)
+class DashboardControlsBoundary:
+    """Visible proof that this dashboard has no mutation surface."""
+
+    visible: bool
+    severity: StatusSeverity
+    title: str
+    readiness_label: str
+    summary: str
+    mutation_actions: tuple[str, ...] = ()
+    action_enabled: bool = False
+
+
+@dataclass(frozen=True)
+class NativeDashboardModel:
+    """Safe sections consumed by the native GTK dashboard."""
+
+    daemon: DaemonStatusModel
+    pairing: PairingStatusModel
+    adapter_readiness: AdapterReadinessModel
+    preflight: PreflightSummaryModel
+    support_bundle: SupportBundleAffordance
+    controls: DashboardControlsBoundary
 
 
 class FirstRunTokenEntryController:
@@ -89,6 +119,32 @@ def build_initial_model() -> DiagnosticsControlUiModel:
     return DiagnosticsControlUiController().build(
         pairing_result=FirstRunResult(FirstRunState.INVALID_RESPONSE),
         mode=PresentationMode.BASIC,
+    )
+
+
+def build_dashboard_model(
+    model: DiagnosticsControlUiModel,
+) -> NativeDashboardModel:
+    """Project the existing safe UI model into the native dashboard sections."""
+
+    if not isinstance(model, DiagnosticsControlUiModel):
+        model = build_initial_model()
+    return NativeDashboardModel(
+        daemon=model.daemon,
+        pairing=model.pairing,
+        adapter_readiness=model.adapters,
+        preflight=model.preflight,
+        support_bundle=model.support_bundle,
+        controls=DashboardControlsBoundary(
+            visible=True,
+            severity=StatusSeverity.UNKNOWN,
+            title="Controls boundary",
+            readiness_label="Unavailable",
+            summary=(
+                "This foundation is read-only. Lifecycle and configuration "
+                "actions are not available."
+            ),
+        ),
     )
 
 
@@ -314,37 +370,120 @@ def _clear_box(container) -> None:
         child = next_child
 
 
-def _add_section_heading(Gtk, container, text: str) -> None:
-    _add_text_label(Gtk, container, text, css_class="heading")
+def _severity_text(severity: StatusSeverity) -> str:
+    if not isinstance(severity, StatusSeverity):
+        severity = StatusSeverity.UNKNOWN
+    return severity.value.replace("_", " ").upper()
 
 
-def _render_display_model(Gtk, container, model: DiagnosticsControlUiModel) -> None:
-    """Render only bounded, token-free fields from the existing UI model."""
+def _severity_css_class(severity: StatusSeverity) -> str:
+    return {
+        StatusSeverity.OK: "success",
+        StatusSeverity.WARNING: "warning",
+        StatusSeverity.BLOCKED: "error",
+        StatusSeverity.ERROR: "error",
+        StatusSeverity.UNKNOWN: "dim-label",
+    }.get(severity, "dim-label")
 
-    _clear_box(container)
 
-    _add_section_heading(Gtk, container, "Daemon status")
-    _add_text_label(Gtk, container, model.daemon.title, css_class="title-4")
-    _add_text_label(Gtk, container, model.daemon.message)
+def _new_card(Gtk, *, title: str, severity: StatusSeverity):
+    frame = Gtk.Frame()
+    frame.add_css_class("card")
+    frame.set_hexpand(True)
 
-    _add_section_heading(Gtk, container, "Pairing status")
-    _add_text_label(Gtk, container, model.pairing.title, css_class="title-4")
-    _add_text_label(Gtk, container, model.pairing.message)
+    body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    body.set_margin_top(16)
+    body.set_margin_bottom(16)
+    body.set_margin_start(16)
+    body.set_margin_end(16)
 
-    _add_section_heading(Gtk, container, "Adapter readiness")
-    _add_text_label(Gtk, container, model.adapters.title, css_class="title-4")
-    _add_text_label(Gtk, container, model.adapters.summary)
-    if model.adapters.cards:
-        for card in model.adapters.cards:
-            bands = ", ".join(card.supported_bands) or "Bands not reported"
-            recommendation = " · Recommended" if card.recommended else ""
-            _add_text_label(
-                Gtk,
-                container,
-                f"{card.interface}: {card.readiness_label}{recommendation}",
-                css_class="heading",
-            )
-            _add_text_label(Gtk, container, f"{bands} · {card.summary}")
+    heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    title_label = _add_text_label(
+        Gtk,
+        heading,
+        title,
+        css_class="title-3",
+    )
+    title_label.set_hexpand(True)
+    status_label = _add_text_label(
+        Gtk,
+        heading,
+        _severity_text(severity),
+        css_class=_severity_css_class(severity),
+    )
+    status_label.set_xalign(1.0)
+    body.append(heading)
+    frame.set_child(body)
+    return frame, body
+
+
+def _add_adapter_card(Gtk, container, card) -> None:
+    frame = Gtk.Frame()
+    frame.add_css_class("card")
+    frame.set_hexpand(True)
+    body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    body.set_margin_top(12)
+    body.set_margin_bottom(12)
+    body.set_margin_start(12)
+    body.set_margin_end(12)
+
+    recommendation = " · Recommended" if card.recommended else ""
+    _add_text_label(
+        Gtk,
+        body,
+        f"{card.interface}{recommendation}",
+        css_class="title-4",
+    )
+    _add_text_label(
+        Gtk,
+        body,
+        f"Readiness: {card.readiness_label}",
+        css_class=_severity_css_class(card.severity),
+    )
+    _add_text_label(Gtk, body, f"Severity: {_severity_text(card.severity)}")
+    _add_text_label(Gtk, body, card.summary)
+    bands = ", ".join(card.supported_bands) or "Not reported"
+    _add_text_label(Gtk, body, f"Supported bands: {bands}")
+    _add_text_label(Gtk, body, f"Driver: {card.driver} · Bus: {card.bus_type}")
+    if card.reasons:
+        _add_text_label(Gtk, body, "Reasons", css_class="heading")
+        for reason in card.reasons:
+            _add_text_label(Gtk, body, f"• {reason}")
+    else:
+        _add_text_label(
+            Gtk,
+            body,
+            "No readiness reasons were reported.",
+            css_class="dim-label",
+        )
+
+    frame.set_child(body)
+    container.append(frame)
+
+
+def _populate_daemon_card(Gtk, container, dashboard: NativeDashboardModel) -> None:
+    _add_text_label(Gtk, container, dashboard.daemon.title, css_class="title-4")
+    _add_text_label(Gtk, container, dashboard.daemon.message)
+
+
+def _populate_pairing_card(Gtk, container, dashboard: NativeDashboardModel) -> None:
+    _add_text_label(Gtk, container, dashboard.pairing.title, css_class="title-4")
+    _add_text_label(Gtk, container, dashboard.pairing.message)
+
+
+def _populate_adapter_card(Gtk, container, dashboard: NativeDashboardModel) -> None:
+    adapters = dashboard.adapter_readiness
+    _add_text_label(Gtk, container, adapters.title, css_class="title-4")
+    _add_text_label(Gtk, container, adapters.summary)
+    _add_text_label(
+        Gtk,
+        container,
+        f"Recommended interface: {adapters.recommended_interface}",
+        css_class="heading",
+    )
+    if adapters.cards:
+        for card in adapters.cards:
+            _add_adapter_card(Gtk, container, card)
     else:
         _add_text_label(
             Gtk,
@@ -353,48 +492,210 @@ def _render_display_model(Gtk, container, model: DiagnosticsControlUiModel) -> N
             css_class="dim-label",
         )
 
-    _add_section_heading(Gtk, container, "Preflight")
+
+def _populate_preflight_card(
+    Gtk,
+    container,
+    dashboard: NativeDashboardModel,
+) -> None:
+    preflight = dashboard.preflight
     _add_text_label(
         Gtk,
         container,
-        f"{model.preflight.readiness_label}: {model.preflight.summary}",
+        f"Readiness: {preflight.readiness_label}",
         css_class="title-4",
     )
-    for fact in model.preflight.facts:
-        _add_text_label(Gtk, container, f"{fact.label}: {fact.value}")
-    for issue in model.preflight.issues:
+    _add_text_label(Gtk, container, f"Severity: {_severity_text(preflight.severity)}")
+    _add_text_label(Gtk, container, preflight.summary)
+
+    _add_text_label(Gtk, container, "Facts", css_class="heading")
+    if preflight.facts:
+        for fact in preflight.facts:
+            _add_text_label(Gtk, container, f"{fact.label}: {fact.value}")
+    else:
         _add_text_label(
             Gtk,
             container,
-            f"Issue ({issue.severity.value}): {issue.message}",
-        )
-    for action in model.preflight.actions:
-        _add_text_label(
-            Gtk,
-            container,
-            f"Guidance (display only): {action.message}",
-        )
-    if not (
-        model.preflight.facts
-        or model.preflight.issues
-        or model.preflight.actions
-    ):
-        _add_text_label(
-            Gtk,
-            container,
-            "No preflight details are available.",
+            "No preflight facts are available.",
             css_class="dim-label",
         )
 
-    _add_section_heading(Gtk, container, model.support_bundle.title)
-    _add_text_label(Gtk, container, model.support_bundle.summary)
-    export_button = Gtk.Button(label=model.support_bundle.action_label)
-    export_button.set_sensitive(model.support_bundle.action_enabled)
+    _add_text_label(Gtk, container, "Issues", css_class="heading")
+    if preflight.issues:
+        for issue in preflight.issues:
+            _add_text_label(
+                Gtk,
+                container,
+                f"{_severity_text(issue.severity)} · {issue.message}",
+            )
+    else:
+        _add_text_label(
+            Gtk,
+            container,
+            "No preflight issues were reported.",
+            css_class="dim-label",
+        )
+
+    _add_text_label(
+        Gtk,
+        container,
+        "Noninteractive actions",
+        css_class="heading",
+    )
+    if preflight.actions:
+        for action in preflight.actions:
+            _add_text_label(
+                Gtk,
+                container,
+                f"Display-only guidance · {action.message}",
+            )
+    else:
+        _add_text_label(
+            Gtk,
+            container,
+            "No noninteractive actions were reported.",
+            css_class="dim-label",
+        )
+
+
+
+def _populate_support_bundle_card(
+    Gtk,
+    container,
+    dashboard: NativeDashboardModel,
+) -> None:
+    support_bundle = dashboard.support_bundle
+    _add_text_label(Gtk, container, support_bundle.summary)
+    export_button = Gtk.Button(label=support_bundle.action_label)
+    export_button.set_sensitive(False)
     container.append(export_button)
+    _add_text_label(
+        Gtk,
+        container,
+        "Export remains disabled in this foundation.",
+        css_class="dim-label",
+    )
+
+
+def _populate_controls_card(
+    Gtk,
+    container,
+    dashboard: NativeDashboardModel,
+) -> None:
+    controls = dashboard.controls
+    _add_text_label(
+        Gtk,
+        container,
+        controls.readiness_label,
+        css_class="title-4",
+    )
+    _add_text_label(Gtk, container, controls.summary)
+    _add_text_label(
+        Gtk,
+        container,
+        "Mutation actions: none",
+        css_class="dim-label",
+    )
+
+
+def _render_dashboard_model(
+    Gtk,
+    container,
+    dashboard: NativeDashboardModel,
+) -> None:
+    """Render the bounded native dashboard with no interactive host actions."""
+
+    _clear_box(container)
+    _add_text_label(Gtk, container, "Read-only dashboard", css_class="title-2")
+    _add_text_label(
+        Gtk,
+        container,
+        "Daemon-owned readiness and diagnostics, presented without host mutation.",
+        css_class="dim-label",
+    )
+
+    grid = Gtk.Grid(column_spacing=16, row_spacing=16)
+    grid.set_column_homogeneous(True)
+
+    daemon_frame, daemon_body = _new_card(
+        Gtk,
+        title="Daemon status",
+        severity=dashboard.daemon.severity,
+    )
+    _populate_daemon_card(Gtk, daemon_body, dashboard)
+    grid.attach(daemon_frame, 0, 0, 1, 1)
+
+    pairing_frame, pairing_body = _new_card(
+        Gtk,
+        title="Pairing status",
+        severity=dashboard.pairing.severity,
+    )
+    _populate_pairing_card(Gtk, pairing_body, dashboard)
+    grid.attach(pairing_frame, 1, 0, 1, 1)
+
+    adapters_frame, adapters_body = _new_card(
+        Gtk,
+        title="Adapter readiness",
+        severity=dashboard.adapter_readiness.severity,
+    )
+    _populate_adapter_card(Gtk, adapters_body, dashboard)
+    grid.attach(adapters_frame, 0, 1, 1, 1)
+
+    preflight_frame, preflight_body = _new_card(
+        Gtk,
+        title="Preflight diagnostics",
+        severity=dashboard.preflight.severity,
+    )
+    _populate_preflight_card(Gtk, preflight_body, dashboard)
+    grid.attach(preflight_frame, 1, 1, 1, 1)
+
+    support_frame, support_body = _new_card(
+        Gtk,
+        title=dashboard.support_bundle.title,
+        severity=dashboard.support_bundle.severity,
+    )
+    _populate_support_bundle_card(Gtk, support_body, dashboard)
+    grid.attach(support_frame, 0, 2, 1, 1)
+
+    controls_frame, controls_body = _new_card(
+        Gtk,
+        title=dashboard.controls.title,
+        severity=dashboard.controls.severity,
+    )
+    _populate_controls_card(Gtk, controls_body, dashboard)
+    grid.attach(controls_frame, 1, 2, 1, 1)
+
+    container.append(grid)
+
+
+def _render_display_model(Gtk, container, model: DiagnosticsControlUiModel) -> None:
+    """Render only bounded, token-free fields from the existing UI model."""
+
+    _render_dashboard_model(Gtk, container, build_dashboard_model(model))
+
+
+def _connect_from_token_entry(
+    *,
+    token_entry,
+    connect_button,
+    controller: FirstRunTokenEntryController,
+    render_model,
+) -> None:
+    """Clear caller input before validating and render only the safe result."""
+
+    token = token_entry.get_text()
+    token_entry.set_text("")
+    connect_button.set_sensitive(False)
+    try:
+        updated_model = controller.connect(token=token)
+        render_model(updated_model)
+    finally:
+        token = ""
+        connect_button.set_sensitive(True)
 
 
 def run_gui() -> int:
-    """Run the first-run GTK prototype against the read-only local API client."""
+    """Run the native read-only dashboard against the local API client."""
 
     Gtk = _load_gtk()
     model = build_initial_model()
@@ -404,7 +705,7 @@ def run_gui() -> int:
     def on_activate(app) -> None:
         window = Gtk.ApplicationWindow(application=app)
         window.set_title(APP_NAME)
-        window.set_default_size(680, 760)
+        window.set_default_size(960, 800)
 
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -419,7 +720,7 @@ def run_gui() -> int:
         _add_text_label(
             Gtk,
             content,
-            "First-run connection prototype",
+            "Native read-only companion",
             css_class="title-3",
         )
         _add_text_label(
@@ -429,42 +730,41 @@ def run_gui() -> int:
             "The token is used in memory for this validation only and is not saved.",
         )
 
+        connection_row = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL,
+            spacing=8,
+        )
         token_entry = Gtk.PasswordEntry()
         token_entry.set_placeholder_text("API token")
         token_entry.set_show_peek_icon(True)
-        content.append(token_entry)
+        token_entry.set_hexpand(True)
+        connection_row.append(token_entry)
 
         connect_button = Gtk.Button(label="Connect / Validate token")
-        content.append(connect_button)
+        connection_row.append(connect_button)
+        content.append(connection_row)
 
         display_sections = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL,
-            spacing=8,
+            spacing=16,
         )
         content.append(display_sections)
         _render_display_model(Gtk, display_sections, model)
 
         def on_connect(_widget) -> None:
-            token = token_entry.get_text()
-            token_entry.set_text("")
-            connect_button.set_sensitive(False)
-            try:
-                updated_model = token_entry_controller.connect(token=token)
-                _render_display_model(Gtk, display_sections, updated_model)
-            finally:
-                token = ""
-                connect_button.set_sensitive(True)
+            _connect_from_token_entry(
+                token_entry=token_entry,
+                connect_button=connect_button,
+                controller=token_entry_controller,
+                render_model=lambda updated_model: _render_display_model(
+                    Gtk,
+                    display_sections,
+                    updated_model,
+                ),
+            )
 
         connect_button.connect("clicked", on_connect)
         token_entry.connect("activate", on_connect)
-
-        _add_text_label(
-            Gtk,
-            content,
-            "Support-bundle export remains disabled. No lifecycle or "
-            "configuration controls are available.",
-            css_class="dim-label",
-        )
 
         scroller.set_child(content)
         window.set_child(scroller)
@@ -496,7 +796,7 @@ def _argument_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the deterministic smoke path or launch the GTK placeholder."""
+    """Run a deterministic smoke path or launch the GTK dashboard."""
 
     args = _argument_parser().parse_args(argv)
     if args.smoke_json:
@@ -509,7 +809,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_gui()
     except GuiUnavailableError:
         print(
-            "The graphical prototype requires GTK 4 and PyGObject. "
+            "The native dashboard requires GTK 4 and PyGObject. "
             "Use --smoke-json for the offline shell check.",
             file=sys.stderr,
         )

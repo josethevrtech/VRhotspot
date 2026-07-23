@@ -1,4 +1,4 @@
-"""Module entry point for the VRhotspot Flatpak shell."""
+"""Module entry point for the VRhotspot Flatpak native dashboard."""
 
 from .app import main
 
