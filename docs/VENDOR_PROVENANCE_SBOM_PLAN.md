@@ -1,14 +1,15 @@
 # Vendor provenance, SBOM, and checksum manifest plan
 
-Status: PR #73 manifest-addition step; PR #72 established the documentation-only plan
+Status: PR #74 CI manifest-coverage and deterministic vendor-only SBOM step
 
 Date: 2026-07-22
 
 This document defines the supply-chain groundwork for files that VRhotspot
-ships from the repository. PR #73 adds the canonical machine-readable
+ships from the repository. PR #73 added the canonical machine-readable
 [`backend/vendor/VENDOR_MANIFEST.json`](../backend/vendor/VENDOR_MANIFEST.json)
-inventory. It does not generate an SBOM, verify or enforce a checksum, or
-change installation or runtime behavior.
+inventory. PR #74 validates that inventory in CI and generates a deterministic
+vendor-only SBOM under `/tmp`; it does not compare payload checksums or change
+installation or runtime behavior.
 
 ## Problem
 
@@ -31,11 +32,12 @@ The existing repository has useful but fragmented attribution:
   but the implemented support bundle does not report file provenance or
   checksum state.
 
-PR #73 establishes a canonical machine-readable inventory for the current
-`backend/vendor/` tree. There is still no generated SBOM, checksum enforcement,
-or proof that the inventoried bytes came from the documented sources. A
-successful version probe also does not prove that a file came from the
-documented source or that its bytes match a reviewed upstream artifact.
+PR #73 established a canonical machine-readable inventory for the current
+`backend/vendor/` tree. PR #74 can deterministically generate a temporary SBOM
+from that inventory, but there is still no payload checksum comparison or
+enforcement and no proof that the inventoried bytes came from the documented
+sources. A successful version probe also does not prove that a file came from
+the documented source or that its bytes match a reviewed upstream artifact.
 
 Future hardware support may increase pressure to add firmware, helper tools,
 driver-related material, device metadata, or other vendor-specific files. The
@@ -89,22 +91,23 @@ not imply that VRhotspot supplied or checksummed those host files.
   `backend/vendor/VENDOR_MANIFEST.json`, added by PR #73.
 - Derive a deterministic SBOM from reviewed manifest data rather than maintain
   a second hand-edited source of truth.
-- Add CI coverage for manifest completeness and schema validity in a later PR.
+- Add CI coverage for manifest completeness and schema validity in PR #74.
 - Add reviewed checksum verification in a later PR, likely in CI before any
   installer or runtime use.
 - Expose bounded, sanitized provenance status in support bundles later.
 - Make the acquisition and review process repeatable before another vendor
   asset can be added or updated.
 
-## PR #72 non-goals and PR #73 retained boundaries
+## PR #74 scope and retained boundaries
 
 - No runtime enforcement.
 - No installer behavior change or enforcement.
-- No CI behavior change in PR #73; manifest coverage remains future PR #74 work.
-- No checksum verification or enforcement in PR #73; that remains future PR
-  #75 work.
-- PR #73 adds `backend/vendor/VENDOR_MANIFEST.json`, but no generated SBOM
-  exists yet and the manifest does not claim repository-wide SBOM completeness.
+- PR #74 adds CI manifest structure, coverage, path, and executable-mode checks.
+- SHA-256 validation in PR #74 is syntax-only. Payload bytes are not hashed or
+  compared; checksum verification remains future PR #75 work.
+- PR #74 generates an untracked, deterministic CycloneDX JSON SBOM from the
+  manifest at `/tmp/vrhotspot-vendor-sbom.json`. It covers only
+  `backend/vendor/` and does not claim repository-wide SBOM completeness.
 - No new or replaced vendored binaries, libraries, firmware, scripts, or
   other vendor files.
 - No Steam Frame driver support.
@@ -160,10 +163,10 @@ The following rules govern subsequent implementation work:
 PR #73 selects reviewable JSON with `schema_version` `1.0.0` for the canonical
 manifest at `backend/vendor/VENDOR_MANIFEST.json`. Because the control file is
 inside the namespace it inventories, `manifest_scope.excluded_paths` explicitly
-excludes the manifest from self-hashing. PR #74 may validate that control file
-separately. Unknown historical facts are represented as `null`, `unknown`, or
-an explicit unverified/conflicting provenance status rather than filled with
-guesses.
+excludes the manifest from self-hashing. PR #74 validates that exclusion and
+the control file's structure separately. Unknown historical facts are
+represented as `null`, `unknown`, or an explicit unverified/conflicting
+provenance status rather than filled with guesses or rejected by CI.
 
 Each file entry has these fields:
 
@@ -192,10 +195,11 @@ level assumption.
 ### Manifest and SBOM roles
 
 The vendor manifest is the repository's reviewed file-level source of truth.
-An SBOM should be generated deterministically from it in SPDX or CycloneDX
-format once PR #73 has selected the representation and PR #74 has a validation
-path. The SBOM should identify shipped third-party components, versions,
-licenses, file relationships, and external system dependencies where useful.
+PR #74 generates CycloneDX 1.6 JSON deterministically from it. The generated
+document identifies the inventoried files, declared versions and licenses,
+declared SHA-256 values, and their relationship to the `backend/vendor/`
+inventory. It explicitly identifies its coverage as vendor-only rather than a
+full-project SBOM.
 
 The generated SBOM must not become a separately edited inventory. CI or a
 release process should be able to reproduce it from the same reviewed manifest,
@@ -203,13 +207,21 @@ and generation must not require downloading current upstream metadata. A
 component appearing in the SBOM does not replace its per-file checksum or
 redistribution review.
 
+`tools/ci/vendor_manifest_check.py` uses sorted entries and keys and emits no
+timestamp, hostname, absolute repository path, random identifier, or
+environment-derived field. CI writes the generated document only to
+`/tmp/vrhotspot-vendor-sbom.json`; it is not a tracked second source of truth.
+The tool checks that each declared SHA-256 is 64-character lowercase hex but
+does not read payload bytes to recompute it. That CI checksum comparison remains
+the separate PR #75 step, and runtime or installer enforcement remains absent.
+
 ## Staged roadmap
 
 | Stage | Scope | Exit condition |
 |---|---|---|
 | PR #72 | This documentation-only provenance, SBOM, and checksum-manifest plan. | Boundaries, current gaps, schema fields, stages, and future acceptance criteria are reviewable with no behavior change. |
 | PR #73 | Add `backend/vendor/VENDOR_MANIFEST.json` for the 13 current files under `backend/vendor/` and record exact current SHA-256 values as non-enforced inventory metadata. Keep outside-tree assets as future audit candidates. | Every covered current file has one honest entry; unknowns are explicit; the manifest excludes its own recursive self-hash; no payload, CI, installer, or runtime behavior changes. |
-| PR #74 | Add CI schema and manifest-coverage checks. | CI fails for missing, extra, duplicate, invalid, or stale manifest paths. |
+| PR #74 | Add CI schema, manifest-coverage, executable-mode, and deterministic vendor-only SBOM checks. | CI fails for missing, extra, duplicate, invalid, unsorted, outside-scope, or stale manifest paths and mode mismatches; SHA-256 is syntax-only and the untracked SBOM is reproducible. |
 | PR #75 | Add checksum verification, likely CI-only first. | Exact checked-in bytes and executable modes match reviewed entries; changes require a manifest diff; installer/runtime behavior remains unchanged unless separately approved. |
 | PR #76 | Add sanitized support-bundle provenance output. | A bundle can report bounded component, selection, provenance, and checksum status without arbitrary file reads or secret disclosure. |
 | PR #77 | Write the Flatpak architecture plan. | The UI/control-app boundary, daemon API, host installation/update ownership, and trust/update story are explicit before packaging starts. |
