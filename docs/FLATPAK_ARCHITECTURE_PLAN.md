@@ -1,14 +1,15 @@
 # Flatpak control app architecture plan
 
-Status: PR #78 local API client prototype; PR #77 architecture retained
+Status: PR #79 token pairing / first-run foundation; PRs #77-#78 retained
 
 Date: 2026-07-23
 
 This document defines the boundary for a possible future Flatpak control
-application for VRhotspot. PR #78 adds only the testable, read-only local API
-client prototype described below. It does not add a Flatpak package, manifest,
-desktop application, API endpoint, UI, or runtime behavior. No Flatpak package
-or manifest exists yet, and the Flatpak application does not exist yet.
+application for VRhotspot. PR #79 adds only the testable token pairing and
+first-run state foundation described below, on top of PR #78's read-only local
+API client. It does not add a Flatpak package, manifest, desktop application,
+graphical UI, API endpoint, or runtime behavior. No Flatpak package or manifest
+exists yet, and no graphical Flatpak application exists yet.
 
 ## Architectural decision
 
@@ -158,32 +159,58 @@ The Flatpak must explain that the host daemon needs configuration; it must not
 mint a replacement token locally or treat the failure as an unauthenticated
 setup mode.
 
-The first API-client prototype in PR #78 may accept a manually entered token.
-PR #79 is responsible for a separately reviewed token pairing and first-run
-flow. That design must meet these requirements:
+PR #79 accepts a token explicitly from its caller and asks the existing daemon
+to validate it through the authenticated, read-only
+`GET /v1/adapters/readiness` endpoint. In this foundation, "pairing" means that
+the daemon accepted the existing credential; it does not mean credential
+issuance, token exchange, or a new daemon-side pairing endpoint.
+
+The `flatpak_client/pairing.py` controller first calls public `/healthz` without
+a token. Health success proves daemon reachability only. Without a caller-
+supplied token, the result remains `daemon_reachable_unpaired`. With a supplied
+token, the controller creates a token-bearing `LocalApiClient` only for the
+authenticated read-only validation call and maps the result to one of these
+fixed states:
+
+- `daemon_unreachable`
+- `daemon_reachable_unpaired`
+- `token_accepted`
+- `token_rejected`
+- `daemon_token_missing`
+- `invalid_response`
+
+The returned messages and detail codes are fixed, bounded, and token-free.
+Client or transport exception text is not copied into pairing state. The
+controller does not log the token, retain it after evaluation, discover it from
+the environment or host files, or persist it. PR #79 adds no storage backend:
+the caller must keep the token in memory for the current interaction and supply
+it again when needed.
+
+The PR #79 foundation has these boundaries:
 
 - Pairing is authorized and completed by the daemon. The sandbox cannot read
   `/etc/vr-hotspot/env` or other protected host configuration.
 - Initial pairing requires an explicit, local user action and must not expose
   a long-lived token in a URL, process argument, notification, or log.
-- Whether pairing reuses the current daemon token or issues a derived,
-  revocable credential remains unresolved. It must not weaken the current
-  token requirement.
+- PR #79 validates the current daemon token. Whether a future pairing protocol
+  issues a derived, revocable credential remains unresolved and requires
+  separate daemon API review.
 - Token rotation, invalidation, and authorization decisions remain daemon
-  responsibilities. The client handles `401`/`403` by discarding invalid
-  credentials and returning to pairing or login.
+  responsibilities. The controller maps `401`/`403` to `token_rejected`, so a
+  future UI can return to token entry without retaining the rejected value.
 - Tokens are attached only to the pinned local origin and are never forwarded
   across redirects.
 - Tokens are not logged, included in analytics, copied into support bundles,
   or exposed in error text. Debug output may record only non-secret facts such
   as whether a credential was present.
-- Long-lived credentials should use an appropriate desktop secret-storage
-  mechanism available to the sandbox. App-private files are not automatically
-  equivalent to secret storage. If safe storage is unavailable, the client
-  should prefer an in-memory session and prompt again.
-
-The pairing threat model, credential scope, recovery path, rotation behavior,
-and storage backend must be documented before PR #79 is considered complete.
+- Long-lived credential storage remains future work and should use an
+  appropriate desktop secret-storage mechanism available to the sandbox.
+  App-private files are not automatically equivalent to secret storage. Until
+  a backend is separately approved, the client uses an in-memory session and
+  prompts again.
+- Missing daemon, rejected token, missing daemon token, and malformed response
+  recovery are represented as state only. Graphical guidance, compatibility
+  UX, rotation workflows, and recovery controls remain future UI/API work.
 
 ## Sandbox and portal expectations
 
@@ -268,8 +295,8 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | Phase | Scope | Exit condition |
 |---|---|---|
 | PR #77 | Architecture plan only. No package, manifest, API, UI, runtime, installer, CI, or vendor change. | This document makes ownership, API/authentication, sandbox, privacy, support-bundle, distribution, and non-goal boundaries reviewable. |
-| PR #78 | Flatpak local API client prototype (current phase). Add the small `flatpak_client/` layer against an injectable fake transport, with explicit loopback pinning, authentication-header handling, redirect rejection, bounded timeouts, compatibility/error mapping, and no host command execution. | Unit tests demonstrate safe request construction and failure handling without privileged host mutation. No Flatpak package or manifest exists; exact packaging scope requires separate approval. |
-| PR #79 | Token pairing and first-run flow. Define and implement the daemon-authorized pairing protocol, secure credential storage/recovery, missing-daemon and missing-token guidance, and version compatibility UX. | Pairing cannot bypass fail-closed daemon auth, leak tokens, or read protected host configuration; security tests cover expiry, rotation, rejection, and interrupted first run. |
+| PR #78 | Flatpak local API client prototype. Add the small `flatpak_client/` layer against an injectable fake transport, with explicit loopback pinning, authentication-header handling, redirect rejection, bounded timeouts, compatibility/error mapping, and no host command execution. | Unit tests demonstrate safe request construction and failure handling without privileged host mutation. No Flatpak package or manifest exists; exact packaging scope requires separate approval. |
+| PR #79 | Token pairing and first-run foundation (current phase). Add deterministic model/controller state that probes public health for reachability and validates an explicitly supplied token through the existing authenticated, read-only client contract. Add no daemon endpoint, storage backend, packaging, or graphical UI. | The six first-run states are covered offline; health alone never means paired; `401`, fail-closed `503/api_token_missing`, connection failure, and invalid responses map safely; tokens do not enter results, exceptions, logs, files, or controller state. |
 | PR #80 | Flatpak diagnostics/control UI. Implement reviewed Basic/Pro views using the client contract, including daemon-owned status, lifecycle controls, diagnostics, and support-bundle export. | UI behavior is tested, sandbox permissions remain minimal, and all privileged effects are mediated by authenticated daemon calls. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
@@ -351,13 +378,14 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #78
+## Explicit non-goals for PR #79
 
 - No Flatpak packaging, manifest, build definition, finish-args, desktop file,
   icon set, metainfo, repository submission, or release artifact.
 - No Flatpak GUI, control panel, diagnostics UI, or existing Web UI change.
-- No token pairing, discovery, storage, keyring, rotation, or first-run flow;
-  those remain future PR #79 work.
+- No token discovery, persistent storage, keyring/portal integration, token
+  issuance, rotation, or daemon-side pairing endpoint. PR #79 only validates a
+  caller-supplied token and returns first-run state.
 - No daemon endpoint, API response, authentication, pairing, lifecycle,
   diagnostics, support-bundle, or runtime behavior change.
 - No installer, uninstaller, systemd-unit, platform, or CI behavior change.
@@ -375,8 +403,8 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No known-adapter registry or adapter-policy implementation.
 - No HostFactsSnapshot work or consumer change.
 
-PR #78 authorizes only the isolated read-only client prototype, its offline
-tests, and this plan update. It does not claim that a Flatpak package or UI,
-Steam Frame support, VR Direct Link support, or a known-adapter registry
-exists. PR #79 token pairing/first-run and PR #80 diagnostics/control UI remain
-future, separately approved work.
+PR #79 authorizes only the isolated token pairing/first-run state foundation,
+its offline tests, the required exports, and this plan update. It does not
+claim that a Flatpak package or graphical UI, Steam Frame support, VR Direct
+Link support, or a known-adapter registry exists. PR #80 diagnostics/control
+UI and all other future phases remain separately approved work.

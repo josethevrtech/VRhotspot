@@ -19,6 +19,13 @@ from .client import (
     Transport,
     UrlLibTransport,
 )
+from .pairing import (
+    FirstRunResult,
+    FirstRunState,
+    PairingClient,
+    PairingClientFactory,
+    TokenPairingController,
+)
 
 __all__ = [
     "DEFAULT_BASE_URL",
@@ -38,4 +45,9 @@ __all__ = [
     "ResponseTooLargeError",
     "Transport",
     "UrlLibTransport",
+    "FirstRunResult",
+    "FirstRunState",
+    "PairingClient",
+    "PairingClientFactory",
+    "TokenPairingController",
 ]
