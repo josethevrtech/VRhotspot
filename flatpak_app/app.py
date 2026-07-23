@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import getpass
 import json
 import sys
 from typing import Any, Sequence
+import warnings
 
 from flatpak_client import (
     DiagnosticsControlUiController,
@@ -15,6 +17,7 @@ from flatpak_client import (
     FirstRunState,
     LocalApiClient,
     PresentationMode,
+    StatusSeverity,
     TokenPairingController,
 )
 
@@ -22,6 +25,15 @@ from flatpak_client import (
 APP_ID = "io.github.josethevrtech.VRhotspot"
 APP_NAME = "VR Hotspot"
 MAX_SMOKE_JSON_BYTES = 8_192
+MAX_LIVE_SMOKE_JSON_BYTES = 65_536
+
+_LIVE_SMOKE_SUCCESS = "success"
+_LIVE_SMOKE_INVALID_RESPONSE = "invalid_response"
+_LIVE_SMOKE_INTERACTIVE_INPUT_REQUIRED = "interactive_input_required"
+_LIVE_SMOKE_TOKEN_INPUT_EMPTY = "token_input_empty"
+_LIVE_SMOKE_TOKEN_INPUT_CANCELLED = "token_input_cancelled"
+_LIVE_SMOKE_FAILURE_EXIT = 1
+_LIVE_SMOKE_INPUT_EXIT = 2
 
 
 class GuiUnavailableError(RuntimeError):
@@ -114,6 +126,159 @@ def render_smoke_json() -> str:
     if len(rendered.encode("utf-8")) > MAX_SMOKE_JSON_BYTES:
         raise RuntimeError("The Flatpak shell smoke payload exceeded its size limit.")
     return rendered
+
+
+def _build_live_smoke_payload(
+    *,
+    model: DiagnosticsControlUiModel,
+    status: str,
+) -> dict[str, Any]:
+    """Build one bounded-model live smoke result without credential fields."""
+
+    return {
+        "application": {
+            "id": APP_ID,
+            "name": APP_NAME,
+        },
+        "live_smoke": {
+            "status": status,
+        },
+        "daemon": asdict(model.daemon),
+        "pairing": asdict(model.pairing),
+        "adapter_readiness": asdict(model.adapters),
+        "preflight": asdict(model.preflight),
+        "support_bundle": asdict(model.support_bundle),
+        "controls": {
+            "mutation_actions": [],
+            "support_bundle_export_enabled": False,
+        },
+    }
+
+
+def _render_live_smoke_json(
+    *,
+    model: DiagnosticsControlUiModel,
+    status: str,
+) -> str:
+    """Serialize a sanitized live smoke model under a fixed output bound."""
+
+    rendered = json.dumps(
+        _build_live_smoke_payload(model=model, status=status),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    if len(rendered.encode("utf-8")) > MAX_LIVE_SMOKE_JSON_BYTES:
+        raise RuntimeError("The Flatpak live smoke payload exceeded its size limit.")
+    return rendered
+
+
+def _live_smoke_status(model: DiagnosticsControlUiModel) -> str:
+    if model.pairing.paired:
+        if (
+            model.adapters.severity is StatusSeverity.UNKNOWN
+            or model.preflight.severity is StatusSeverity.UNKNOWN
+        ):
+            return _LIVE_SMOKE_INVALID_RESPONSE
+        return _LIVE_SMOKE_SUCCESS
+
+    statuses = {
+        "authentication_failed": "token_rejected",
+        "daemon_unreachable": "daemon_unreachable",
+        "api_token_missing": "daemon_token_missing",
+        "unexpected_daemon_response": _LIVE_SMOKE_INVALID_RESPONSE,
+    }
+    return statuses.get(
+        model.pairing.detail_code,
+        _LIVE_SMOKE_INVALID_RESPONSE,
+    )
+
+
+def _emit_live_smoke(
+    *,
+    model: DiagnosticsControlUiModel,
+    status: str,
+    exit_code: int,
+) -> int:
+    try:
+        rendered = _render_live_smoke_json(model=model, status=status)
+    except Exception:
+        model = build_initial_model()
+        status = _LIVE_SMOKE_INVALID_RESPONSE
+        exit_code = _LIVE_SMOKE_FAILURE_EXIT
+        rendered = _render_live_smoke_json(model=model, status=status)
+    print(rendered)
+    return exit_code
+
+
+def run_live_pairing_smoke_json(
+    *,
+    input_stream=None,
+    token_prompt=None,
+    client_factory=None,
+) -> int:
+    """Prompt for one in-memory token and render authenticated read-only state."""
+
+    stream = sys.stdin if input_stream is None else input_stream
+    try:
+        interactive = stream.isatty() is True
+    except Exception:
+        interactive = False
+    if not interactive:
+        return _emit_live_smoke(
+            model=build_initial_model(),
+            status=_LIVE_SMOKE_INTERACTIVE_INPUT_REQUIRED,
+            exit_code=_LIVE_SMOKE_INPUT_EXIT,
+        )
+
+    prompt = getpass.getpass if token_prompt is None else token_prompt
+    token = ""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            token = prompt("VRhotspot daemon API token: ")
+    except KeyboardInterrupt:
+        return _emit_live_smoke(
+            model=build_initial_model(),
+            status=_LIVE_SMOKE_TOKEN_INPUT_CANCELLED,
+            exit_code=_LIVE_SMOKE_INPUT_EXIT,
+        )
+    except Exception:
+        return _emit_live_smoke(
+            model=build_initial_model(),
+            status=_LIVE_SMOKE_TOKEN_INPUT_CANCELLED,
+            exit_code=_LIVE_SMOKE_INPUT_EXIT,
+        )
+
+    if not isinstance(token, str) or token == "":
+        token = ""
+        return _emit_live_smoke(
+            model=build_initial_model(),
+            status=_LIVE_SMOKE_TOKEN_INPUT_EMPTY,
+            exit_code=_LIVE_SMOKE_INPUT_EXIT,
+        )
+
+    factory = LocalApiClient if client_factory is None else client_factory
+    try:
+        try:
+            model = FirstRunTokenEntryController(client_factory=factory).connect(
+                token=token
+            )
+        except KeyboardInterrupt:
+            model = build_initial_model()
+        except Exception:
+            model = build_initial_model()
+    finally:
+        token = ""
+
+    status = _live_smoke_status(model)
+    return _emit_live_smoke(
+        model=model,
+        status=status,
+        exit_code=(
+            0 if status == _LIVE_SMOKE_SUCCESS else _LIVE_SMOKE_FAILURE_EXIT
+        ),
+    )
 
 
 def _load_gtk():
@@ -319,6 +484,14 @@ def _argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print a bounded offline shell model as JSON and exit",
     )
+    parser.add_argument(
+        "--live-pairing-smoke-json",
+        action="store_true",
+        help=(
+            "prompt interactively for an in-memory daemon token, print bounded "
+            "authenticated read-only state as JSON, and exit"
+        ),
+    )
     return parser
 
 
@@ -329,6 +502,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.smoke_json:
         print(render_smoke_json())
         return 0
+    if args.live_pairing_smoke_json:
+        return run_live_pairing_smoke_json()
 
     try:
         return run_gui()
