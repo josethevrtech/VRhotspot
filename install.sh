@@ -15,6 +15,8 @@ FIREWALL_LEDGER="$INSTALL_ROOT/firewall-rules.json"
 CONFIG_DIR="/etc/vr-hotspot"
 ENV_FILE="$CONFIG_DIR/env"
 SYSTEMD_DIR="/etc/systemd/system"
+FLATPAK_COMPANION_APP_ID="io.github.josethevrtech.VRhotspot"
+FLATPAK_COMPANION_MANIFEST_RELATIVE="packaging/flatpak/io.github.josethevrtech.VRhotspot.json"
 
 # --- Colors and Formatting ---
 RED='\033[0;31m'
@@ -380,12 +382,15 @@ VR Hotspot Installer
 
 Usage:
   sudo ./install.sh [options]
-  curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh | sudo bash
+  curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
+  sudo bash /tmp/vrhotspot-install.sh [options]
 
 Options:
   --interactive       Prompt for installer choices when a real TTY is available
   --non-interactive   Disable prompts and use safe defaults
   --yes, -y           Alias for --non-interactive
+  --install-flatpak-companion
+                      Build and install the prototype Flatpak companion for the invoking user
   --check-os          Detect OS and print dependency plan only
   --no-clear          Do not clear the terminal before output
   -h, --help          Show this help
@@ -477,6 +482,179 @@ prompt_yes_no() {
                 ;;
         esac
     done
+}
+
+# --- Optional Flatpak Companion ---
+configure_flatpak_companion_install() {
+    INSTALL_FLATPAK_COMPANION="n"
+
+    if [ "${FLATPAK_COMPANION_OPT_IN:-0}" -eq 1 ]; then
+        INSTALL_FLATPAK_COMPANION="y"
+        print_info "Flatpak companion install explicitly requested."
+    elif [ "$INTERACTIVE" -eq 1 ]; then
+        if prompt_yes_no "Install the Flatpak companion app? (y/N) " "n"; then
+            INSTALL_FLATPAK_COMPANION="y"
+        else
+            print_info "Flatpak companion app install skipped."
+        fi
+    else
+        print_info "Flatpak companion app install skipped (default: No)."
+    fi
+}
+
+resolve_flatpak_companion_user() {
+    local candidate current_uid candidate_uid candidate_gid
+    current_uid="$(id -u)"
+
+    if [ "$current_uid" -eq 0 ]; then
+        candidate="${SUDO_USER:-}"
+        if [ -z "$candidate" ] || [ "$candidate" = "root" ]; then
+            print_warning "Cannot determine a non-root invoking user for the user-scoped Flatpak install."
+            print_info "Run the installer through sudo from the desktop user that should own the companion app."
+            return 1
+        fi
+    else
+        candidate="$(id -un)"
+    fi
+
+    if ! candidate_uid="$(id -u "$candidate" 2>/dev/null)" ||
+       ! candidate_gid="$(id -g "$candidate" 2>/dev/null)"; then
+        print_warning "Cannot resolve the Flatpak companion install user '$candidate'."
+        return 1
+    fi
+    if [ "$candidate_uid" -eq 0 ]; then
+        print_warning "Refusing to install the user-scoped Flatpak companion for root."
+        return 1
+    fi
+
+    FLATPAK_COMPANION_USER="$candidate"
+    FLATPAK_COMPANION_UID="$candidate_uid"
+    FLATPAK_COMPANION_GID="$candidate_gid"
+}
+
+run_flatpak_companion_as_user() {
+    local current_uid
+    current_uid="$(id -u)"
+
+    # Remove daemon credential variables without inspecting their values.
+    if [ "$current_uid" -eq "$FLATPAK_COMPANION_UID" ]; then
+        env -u VR_HOTSPOTD_API_TOKEN -u API_TOKEN "$@"
+    else
+        sudo -H -u "$FLATPAK_COMPANION_USER" -- \
+            env -u VR_HOTSPOTD_API_TOKEN -u API_TOKEN "$@"
+    fi
+}
+
+check_flatpak_companion_prerequisites() {
+    local -a missing_tools=()
+
+    command -v flatpak >/dev/null 2>&1 || missing_tools+=("flatpak")
+    if command -v flatpak-builder >/dev/null 2>&1; then
+        FLATPAK_BUILDER_BIN="$(command -v flatpak-builder)"
+    else
+        missing_tools+=("flatpak-builder")
+    fi
+
+    if [ "${#missing_tools[@]}" -gt 0 ]; then
+        print_warning "Flatpak companion install skipped; missing required tool(s): ${missing_tools[*]}."
+        print_info "Install the missing tools and the GNOME 50 runtime/SDK, then rerun with --install-flatpak-companion."
+        return 1
+    fi
+
+    FLATPAK_COMPANION_MANIFEST="$TEMP_INSTALL_DIR/$FLATPAK_COMPANION_MANIFEST_RELATIVE"
+    if [ ! -f "$FLATPAK_COMPANION_MANIFEST" ]; then
+        print_warning "Flatpak companion install skipped; manifest not found at $FLATPAK_COMPANION_MANIFEST."
+        return 1
+    fi
+
+    if ! resolve_flatpak_companion_user; then
+        return 1
+    fi
+
+    if [ "$(id -u)" -ne "$FLATPAK_COMPANION_UID" ] &&
+       ! command -v sudo >/dev/null 2>&1; then
+        print_warning "Flatpak companion install skipped; sudo is required to install for $FLATPAK_COMPANION_USER."
+        return 1
+    fi
+}
+
+cleanup_flatpak_companion_build_root() {
+    local build_root="$1"
+
+    case "$build_root" in
+        /tmp/vrhotspot-flatpak-companion.*)
+            rm -rf -- "$build_root"
+            ;;
+        *)
+            print_warning "Refusing to clean unexpected Flatpak companion build path: $build_root"
+            return 1
+            ;;
+    esac
+}
+
+build_and_install_flatpak_companion() {
+    local build_root build_dir state_dir build_log current_uid build_status
+
+    if ! build_root="$(mktemp -d /tmp/vrhotspot-flatpak-companion.XXXXXX)"; then
+        print_warning "Could not create a temporary Flatpak companion build directory."
+        return 1
+    fi
+    build_dir="$build_root/build"
+    state_dir="$build_root/state"
+    build_log="$build_root/flatpak-builder.log"
+    current_uid="$(id -u)"
+
+    chmod 700 "$build_root"
+    if [ "$current_uid" -ne "$FLATPAK_COMPANION_UID" ] &&
+       ! chown "$FLATPAK_COMPANION_UID:$FLATPAK_COMPANION_GID" "$build_root"; then
+        print_warning "Could not prepare the Flatpak companion build directory for $FLATPAK_COMPANION_USER."
+        cleanup_flatpak_companion_build_root "$build_root"
+        return 1
+    fi
+
+    print_step "Building and installing the Flatpak companion app for $FLATPAK_COMPANION_USER..."
+    build_status=0
+    if run_flatpak_companion_as_user \
+        "$FLATPAK_BUILDER_BIN" \
+        --user \
+        --install \
+        --assumeyes \
+        --force-clean \
+        --delete-build-dirs \
+        --state-dir="$state_dir" \
+        "$build_dir" \
+        "$FLATPAK_COMPANION_MANIFEST" >"$build_log" 2>&1; then
+        print_success "Flatpak companion app ($FLATPAK_COMPANION_APP_ID) installed for $FLATPAK_COMPANION_USER."
+    else
+        build_status=$?
+        print_warning "Flatpak companion build/install failed (exit $build_status)."
+        if [ -s "$build_log" ]; then
+            print_info "Last Flatpak builder messages:"
+            tail -n 20 "$build_log" | cut -c 1-500
+        fi
+        print_info "The daemon installation remains complete. This installer does not add Flatpak remotes."
+        print_info "Install the GNOME 50 runtime/SDK from a trusted configured source, then retry with --install-flatpak-companion."
+    fi
+
+    if ! cleanup_flatpak_companion_build_root "$build_root"; then
+        print_warning "Temporary Flatpak companion build files may remain at $build_root."
+    fi
+    return "$build_status"
+}
+
+install_flatpak_companion_if_requested() {
+    if [ "${INSTALL_FLATPAK_COMPANION:-n}" != "y" ]; then
+        return 0
+    fi
+
+    if ! check_flatpak_companion_prerequisites; then
+        print_warning "Continuing without the optional Flatpak companion app."
+        return 0
+    fi
+    if ! build_and_install_flatpak_companion; then
+        print_warning "Continuing without the optional Flatpak companion app."
+    fi
+    return 0
 }
 
 _fix_apt_code_repo_signedby_conflict() {
@@ -885,6 +1063,7 @@ configure_install() {
         ENABLE_AUTOSTART="n"
         ENABLE_REMOTE="n"
     fi
+    configure_flatpak_companion_install
 
     BIND_IP="127.0.0.1"
     if [ "$ENABLE_REMOTE" == "y" ]; then
@@ -1041,6 +1220,8 @@ main() {
     CHECK_ONLY=0
     SKIP_CLEAR=0
     REQUESTED_INTERACTIVE_MODE="auto"
+    FLATPAK_COMPANION_OPT_IN=0
+    INSTALL_FLATPAK_COMPANION="n"
 
     for arg in "$@"; do
         case "$arg" in
@@ -1049,6 +1230,9 @@ main() {
                 ;;
             --non-interactive|--yes|-y)
                 REQUESTED_INTERACTIVE_MODE="non-interactive"
+                ;;
+            --install-flatpak-companion)
+                FLATPAK_COMPANION_OPT_IN=1
                 ;;
             --check-os)
                 CHECK_ONLY=1
@@ -1101,6 +1285,7 @@ main() {
     if [[ "$OS_ID" == "steamos" || "$OS_ID" == "bazzite" || "$OS_ID" == "fedora" || "$OS_ID" == "endeavouros" || "$OS_ID_LIKE" == *"fedora"* ]]; then
         enable_firewalld_uplink_forwarding
     fi
+    install_flatpak_companion_if_requested
     
     show_completion
 

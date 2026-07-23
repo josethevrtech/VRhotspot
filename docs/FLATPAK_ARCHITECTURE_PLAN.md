@@ -1,17 +1,18 @@
 # Flatpak control app architecture plan
 
-Status: PR #83 live daemon pairing smoke path; PRs #77-#82 retained
+Status: PR #84 optional installer companion prompt; PRs #77-#83 retained
 
 Date: 2026-07-23
 
 This document defines the boundary for the VRhotspot Flatpak control
-application. PR #83 adds an explicit terminal-only live daemon pairing smoke
-path to PR #82's in-memory first-run token entry flow and PR #81's rough
-installable and testable Flatpak shell. It uses PR #78's read-only local API
-client, PR #79's pairing state, and PR #80's toolkit-agnostic UI
-model/controller foundation. It is not a finished production UI and adds no
-daemon API, daemon runtime, installer, privileged action, token persistence, or
-credential-storage behavior.
+application. PR #84 adds an optional, best-effort installer prompt for PR #81's
+rough installable and testable Flatpak shell. PR #83's explicit terminal-only
+live daemon pairing smoke path and PR #82's in-memory first-run token entry flow
+remain unchanged. The shell uses PR #78's read-only local API client, PR #79's
+pairing state, and PR #80's toolkit-agnostic UI model/controller foundation. It
+is not a finished production UI. PR #84 changes only the top-level guided
+installer path; it adds no daemon API/runtime behavior, privileged Flatpak
+action, token persistence, or credential-storage behavior.
 
 ## Architectural decision
 
@@ -427,6 +428,48 @@ lifecycle/configuration controls, production and Flathub polish, Steam Frame,
 VR Direct Link, and adapter-registry work remain separately reviewed future
 work.
 
+## PR #84 optional installer companion prompt
+
+PR #84 adds one guided question to the existing top-level installer:
+`Install the Flatpak companion app?` The default is No while the companion
+remains a prototype with local repository packaging. A No answer preserves the
+existing daemon install path. Noninteractive installs also default to no
+companion; `--install-flatpak-companion` is the only explicit unattended opt-in.
+
+When selected, the installer checks for `flatpak` and `flatpak-builder`, resolves
+the non-root user who invoked the root installer through `sudo`, and attempts a
+user-scoped build/install from
+`packaging/flatpak/io.github.josethevrtech.VRhotspot.json`. Build and state
+directories use a private cleanup-safe temporary directory outside the tracked
+tree. Builder output is captured and only a bounded tail is shown on failure.
+The installer uses already available runtimes and SDKs; it does not add Flathub,
+install another remote, or make a system-wide Flatpak change.
+
+The companion is optional and best-effort. Missing tools, an unavailable GNOME
+50 runtime/SDK, or another build/install failure is explained, temporary build
+state is removed, and the completed daemon install remains successful. PR #84
+does not add a strict companion-failure mode. The installer does not run either
+Flatpak smoke command or attempt live daemon pairing.
+
+The installer never supplies a daemon API token to the Flatpak build or app. It
+does not read daemon credentials from environment variables, files, keyrings,
+portals, daemon configuration, `/etc`, `/var/lib`, or another filesystem
+location. Known daemon-token environment variable names are removed from the
+builder process environment without inspecting their values. After install, the
+user pairs manually by entering the existing daemon token in the companion's
+hidden field; the existing in-memory-only handling remains unchanged.
+
+Daemon uninstallers do not automatically remove the user-owned companion or any
+Flatpak remote. A user may separately remove only this app with:
+
+```bash
+flatpak uninstall --user io.github.josethevrtech.VRhotspot
+```
+
+Token persistence/keyring storage, lifecycle/configuration controls,
+support-bundle portal export, Flathub production polish, Steam Frame, VR Direct
+Link, and adapter-registry work remain separately reviewed future work.
+
 ## Sandbox and portal expectations
 
 The future Flatpak should begin from a minimal permission set and justify every
@@ -515,7 +558,8 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | PR #80 | Diagnostics/control UI foundation. Add toolkit-agnostic, bounded UI models for daemon/pairing status, adapter readiness, preflight diagnostics, Basic/Pro presentation depth, and a disabled support-bundle affordance. Add no lifecycle control, support-bundle download/export wiring, GUI toolkit, desktop window, package, or manifest. | Offline behavior tests cover connection/authentication states, safe response projection, severity mapping, malformed-data fallback, Basic/Pro presentation fields, secret/path sanitization, output bounds, and the absence of mutation methods. |
 | PR #81 | Flatpak packaging/app shell prototype. Add the first rough installable/testable Flatpak shell, JSON manifest, lazy GTK 4 placeholder window, standard-library smoke mode, and static desktop metadata. Add no production control UI, credential entry, portal export, lifecycle/configuration action, daemon or installer behavior, or privileged host integration. | Offline tests prove import without GTK, bounded safe smoke JSON, metadata/ID consistency, minimal manifest permissions and package scope, safe launcher behavior, and the absence of mutation controls. |
 | PR #82 | First-run/token entry UI prototype. Add a hidden GTK token entry, an explicit validation action, and shell-level orchestration through the existing local client, pairing controller, and diagnostics UI controller. Keep tokens in memory only, keep GTK optional for tests, and add no persistence, mutation, portal, daemon, installer, or permission behavior. | Offline tests cover accepted, rejected, unreachable, missing-daemon-token, and malformed outcomes; safe display model updates; token non-disclosure/non-persistence; unchanged smoke behavior; static Flatpak packaging; and the absence of discovery or mutation controls. |
-| PR #83 | Live daemon pairing smoke path (current phase). Add an explicit terminal-only installed-Flatpak command with strict hidden manual token entry and bounded sanitized JSON assembled through the existing pairing, local-client, and diagnostics UI boundaries. Add no token argument or discovery/storage path, mutation control, daemon/installer behavior, or permission. | Offline tests cover TTY and hidden-input refusal, success, token rejection, daemon unreachability, missing daemon token, malformed data, output bounds and redaction, unchanged offline/GUI behavior, and the absence of discovery or mutation controls. A real-daemon run of the documented command is required before live pairing is claimed. |
+| PR #83 | Live daemon pairing smoke path. Add an explicit terminal-only installed-Flatpak command with strict hidden manual token entry and bounded sanitized JSON assembled through the existing pairing, local-client, and diagnostics UI boundaries. Add no token argument or discovery/storage path, mutation control, daemon/installer behavior, or permission. | Offline tests cover TTY and hidden-input refusal, success, token rejection, daemon unreachability, missing daemon token, malformed data, output bounds and redaction, unchanged offline/GUI behavior, and the absence of discovery or mutation controls. A real-daemon run of the documented command is required before live pairing is claimed. |
+| PR #84 | Optional installer companion prompt (current phase). Add a default-No guided choice and an explicit `--install-flatpak-companion` unattended opt-in for a best-effort user-scoped local build/install. Add no remote configuration, token transfer/storage, smoke execution, daemon/runtime behavior, uninstaller mutation, or permission change. | Deterministic installer tests cover guided No/Yes, unattended default/opt-in, missing tools, bounded build failure, cleanup, credential-environment scrubbing, unchanged manifest permissions, and non-destructive uninstall boundaries. Existing Flatpak tests and real packaging validation remain required. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
 Each phase is independently reviewable. A later phase is not authorized merely
@@ -539,7 +583,7 @@ a production Flatpak release:
 | Release process | Define source provenance, dependency review, reproducible build inputs, signing, store submission, release notes, and coordination with host-daemon releases. |
 | Installation/update ownership | Keep daemon installation and privileged updates separate from Flatpak updates; document how users avoid incompatible independent versions. |
 
-PR #83's prototype choices are not blanket approval for production packaging
+PR #84's prototype choices are not blanket approval for production packaging
 or additional permissions.
 
 ## Future test and validation expectations
@@ -596,7 +640,7 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #83
+## Explicit non-goals for PR #84
 
 - No finished production UI or existing Web UI change. The GTK window is a
   rough first-run and display-only prototype, not a production control surface.
@@ -613,7 +657,9 @@ reporting. Flatpak work must not weaken or bypass those controls.
   for the current in-memory call.
 - No daemon endpoint, API response, authentication, pairing, lifecycle,
   diagnostics, support-bundle, or runtime behavior change.
-- No installer, uninstaller, systemd-unit, platform, or CI behavior change.
+- No backend installer, uninstaller, systemd-unit, platform matrix, or CI-script
+  behavior change. PR #84 changes only the top-level optional installer path and
+  adds deterministic tests for it.
 - No privileged networking in the Flatpak.
 - No direct Flatpak control of firewall rules, NetworkManager, iwd, hostapd,
   dnsmasq, systemd units, kernel or network namespaces, interfaces, routes,
@@ -628,12 +674,12 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No known-adapter registry or adapter-policy implementation.
 - No HostFactsSnapshot work or consumer change.
 
-PR #83 authorizes only the explicit terminal live-pairing smoke orchestration in
-the existing Flatpak shell, its offline tests, and this plan update. It does not
-claim live pairing until the documented command succeeds against a real daemon.
-It does not claim token persistence, keyring integration, lifecycle or
-configuration controls, support-bundle portal export, a Flathub-polished
-release, Steam Frame support, VR Direct Link support, or a known-adapter
-registry. Production UI work, persistence, portal export, Flathub polish, Steam
-Frame, VR Direct Link, adapter registry work, and all later phases remain
-separately approved work.
+PR #84 authorizes only the default-No guided choice, the explicit unattended
+opt-in, the best-effort user-scoped local build/install helper, its deterministic
+tests, and documentation updates. PR #83's live-pairing validation remains the
+recorded manual result; the installer does not repeat it. PR #84 does not claim
+token persistence, keyring integration, lifecycle/configuration controls,
+support-bundle portal export, a Flathub-polished release, Steam Frame support,
+VR Direct Link support, or a known-adapter registry. Production UI work,
+persistence, portal export, Flathub polish, Steam Frame, VR Direct Link, adapter
+registry work, and all later phases remain separately approved work.

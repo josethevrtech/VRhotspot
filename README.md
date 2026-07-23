@@ -35,10 +35,39 @@ curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install
 sudo bash /tmp/vrhotspot-install.sh --non-interactive
 ```
 
+### Optional prototype Flatpak companion
+
+The guided installer asks `Install the Flatpak companion app?` and defaults to
+No while the companion and its local packaging mature. Choosing No leaves the
+existing daemon installation unchanged. Choosing Yes makes a best-effort,
+user-scoped build/install from
+`packaging/flatpak/io.github.josethevrtech.VRhotspot.json`.
+
+Unattended installs do not install the companion by default. Explicitly opt in
+with:
+
+```bash
+sudo bash /tmp/vrhotspot-install.sh --non-interactive \
+  --install-flatpak-companion
+```
+
+The optional path requires `flatpak`, `flatpak-builder`, and the GNOME 50
+runtime/SDK to already be available. It does not add Flathub or another Flatpak
+remote. Missing prerequisites or a failed build are reported clearly, temporary
+build files are removed, and the daemon install continues.
+
+After installation, launch the companion and enter the existing daemon API
+token manually in its hidden token field. The installer does not read, pass,
+copy, or store the daemon token for the Flatpak. Token persistence/keyring
+storage, lifecycle/configuration controls, support-bundle portal export,
+Flathub polish, Steam Frame, VR Direct Link, and adapter-registry work remain
+future work.
+
 **Other Linux distributions**
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
+sudo bash /tmp/vrhotspot-install.sh
 ```
 
 **Bazzite support policy**
@@ -60,7 +89,15 @@ reboot the system automatically.
 **To uninstall:**
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/uninstall.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/uninstall.sh -o /tmp/vrhotspot-uninstall.sh
+sudo bash /tmp/vrhotspot-uninstall.sh
+```
+
+The daemon uninstaller leaves any user-scoped Flatpak companion and configured
+Flatpak remotes untouched. Remove only this companion explicitly, if desired:
+
+```bash
+flatpak uninstall --user io.github.josethevrtech.VRhotspot
 ```
 
 ---
