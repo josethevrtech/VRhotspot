@@ -1,16 +1,16 @@
 # Flatpak control app architecture plan
 
-Status: PR #80 diagnostics/control UI foundation; PRs #77-#79 retained
+Status: PR #81 Flatpak packaging/app shell prototype; PRs #77-#80 retained
 
 Date: 2026-07-23
 
-This document defines the boundary for a possible future Flatpak control
-application for VRhotspot. PR #80 adds only the toolkit-agnostic, testable UI
-model/controller foundation described below, on top of PR #78's read-only local
-API client and PR #79's pairing state. It does not add a Flatpak package,
-manifest, desktop application, finished graphical UI, API endpoint, or runtime
-behavior. No Flatpak package or manifest exists yet, and no graphical Flatpak
-application exists yet.
+This document defines the boundary for the VRhotspot Flatpak control
+application. PR #81 adds the first rough installable and testable Flatpak app
+shell on top of PR #78's read-only local API client, PR #79's pairing state, and
+PR #80's toolkit-agnostic UI model/controller foundation. It proves packaging,
+launching, a deterministic standard-library smoke path, and a lazy GTK 4
+placeholder window. It is not a finished production UI and adds no daemon API,
+daemon runtime, installer, privileged action, or credential-storage behavior.
 
 ## Architectural decision
 
@@ -254,6 +254,54 @@ with a generic label. API tokens and Wi-Fi passphrases are not model fields.
 The controller copies no exception text into UI state and exposes no raw
 preflight report or response body.
 
+## PR #81 packaging and app shell prototype
+
+PR #81 adds `flatpak_app/` and the JSON manifest
+`packaging/flatpak/io.github.josethevrtech.VRhotspot.json` for application ID
+`io.github.josethevrtech.VRhotspot`. The manifest installs only the app shell,
+the existing `flatpak_client` prototype, and simple static desktop metadata and
+icon assets. It does not include the daemon package, privileged networking
+code, systemd units, installers, or `backend/vendor/` payload.
+
+The default launcher opens a rough GTK 4 placeholder when the selected GNOME
+runtime supplies GTK and PyGObject. Toolkit loading is lazy, so importing the
+shell and running repository tests do not require GTK on the development host.
+The window is display-only: it starts from a safe offline/unpaired Basic-mode
+model, does not contact the daemon, and contains no lifecycle, repair,
+configuration, adapter-selection, or other privileged action.
+
+The standard-library smoke path is:
+
+```bash
+python -m flatpak_app --smoke-json
+```
+
+It prints one bounded JSON document built from the existing pairing and
+diagnostics/control UI concepts. It performs no network request, credential
+discovery, host-file access, portal call, or persistence.
+
+With the required Flatpak tooling and GNOME runtime available, a developer can
+build, install, and launch the prototype from the repository root:
+
+```bash
+flatpak-builder --user --install --force-clean build-dir \
+  packaging/flatpak/io.github.josethevrtech.VRhotspot.json
+flatpak run io.github.josethevrtech.VRhotspot
+```
+
+The manifest grants ordinary network sharing only because Flatpak has no
+loopback-only network permission and the existing client must eventually reach
+the pinned local HTTP API. The client still permits only literal HTTP loopback
+origins. The remaining finish arguments provide Wayland and fallback X11
+display access. There is no filesystem permission, system-bus access, session-
+bus name ownership, device permission, or host networking authority.
+
+Real credential entry UI and live authenticated daemon wiring are not included.
+The shell does not discover or persist credentials through files, environment,
+keyrings, portals, or daemon configuration. Support-bundle export remains a
+disabled placeholder; portal export and bounded download handling require
+separate review.
+
 ## Sandbox and portal expectations
 
 The future Flatpak should begin from a minimal permission set and justify every
@@ -339,7 +387,8 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | PR #77 | Architecture plan only. No package, manifest, API, UI, runtime, installer, CI, or vendor change. | This document makes ownership, API/authentication, sandbox, privacy, support-bundle, distribution, and non-goal boundaries reviewable. |
 | PR #78 | Flatpak local API client prototype. Add the small `flatpak_client/` layer against an injectable fake transport, with explicit loopback pinning, authentication-header handling, redirect rejection, bounded timeouts, compatibility/error mapping, and no host command execution. | Unit tests demonstrate safe request construction and failure handling without privileged host mutation. No Flatpak package or manifest exists; exact packaging scope requires separate approval. |
 | PR #79 | Token pairing and first-run foundation. Add deterministic model/controller state that probes public health for reachability and validates an explicitly supplied token through the existing authenticated, read-only client contract. Add no daemon endpoint, storage backend, packaging, or graphical UI. | The six first-run states are covered offline; health alone never means paired; `401`, fail-closed `503/api_token_missing`, connection failure, and invalid responses map safely; tokens do not enter results, exceptions, logs, files, or controller state. |
-| PR #80 | Diagnostics/control UI foundation (current phase). Add toolkit-agnostic, bounded UI models for daemon/pairing status, adapter readiness, preflight diagnostics, Basic/Pro presentation depth, and a disabled support-bundle affordance. Add no lifecycle control, support-bundle download/export wiring, GUI toolkit, desktop window, package, or manifest. | Offline behavior tests cover connection/authentication states, safe response projection, severity mapping, malformed-data fallback, Basic/Pro presentation fields, secret/path sanitization, output bounds, and the absence of mutation methods. |
+| PR #80 | Diagnostics/control UI foundation. Add toolkit-agnostic, bounded UI models for daemon/pairing status, adapter readiness, preflight diagnostics, Basic/Pro presentation depth, and a disabled support-bundle affordance. Add no lifecycle control, support-bundle download/export wiring, GUI toolkit, desktop window, package, or manifest. | Offline behavior tests cover connection/authentication states, safe response projection, severity mapping, malformed-data fallback, Basic/Pro presentation fields, secret/path sanitization, output bounds, and the absence of mutation methods. |
+| PR #81 | Flatpak packaging/app shell prototype (current phase). Add the first rough installable/testable Flatpak shell, JSON manifest, lazy GTK 4 placeholder window, standard-library smoke mode, and static desktop metadata. Add no production control UI, credential entry, portal export, lifecycle/configuration action, daemon or installer behavior, or privileged host integration. | Offline tests prove import without GTK, bounded safe smoke JSON, metadata/ID consistency, minimal manifest permissions and package scope, safe launcher behavior, and the absence of mutation controls. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
 Each phase is independently reviewable. A later phase is not authorized merely
@@ -352,19 +401,19 @@ a production Flatpak release:
 
 | Question | Required decision |
 |---|---|
-| Application ID | Select a stable reverse-DNS ID and confirm naming/ownership before creating manifests or published metadata. |
-| Permissions | Document the minimum finish-args and portals, the practical breadth of network sharing, and the reason for every exception. |
-| Runtime and SDK | Select supported versions, update cadence, end-of-life policy, architecture targets, and reproducible/offline build expectations. |
-| Desktop file | Define name, categories, startup behavior, actions, and whether any URL scheme is justified. |
-| Icons and metainfo | Produce reviewed icon sizes and AppStream/metainfo with accurate screenshots, releases, licenses, privacy statements, and no unsupported feature claims. Existing Web UI assets are not automatically release-ready desktop metadata. |
+| Application ID | PR #81 uses `io.github.josethevrtech.VRhotspot`; confirm naming and publication ownership before a store submission. |
+| Permissions | PR #81 documents its prototype finish-args; reassess network breadth, display compatibility, and any future portal before production. |
+| Runtime and SDK | PR #81 selects GNOME 50 for the prototype; define update cadence, end-of-life policy, architecture targets, and reproducible/offline release expectations. |
+| Desktop file | PR #81 provides a minimal launcher entry with no desktop actions or URL scheme; review production naming and startup behavior. |
+| Icons and metainfo | PR #81 provides simple prototype SVG and AppStream metadata; production artwork, screenshots, releases, privacy copy, and store polish remain unresolved. Existing Web UI assets are not automatically release-ready desktop metadata. |
 | Local daemon discovery | Decide how to detect an installed/compatible daemon without broad filesystem access, service-manager control, or token leakage. |
 | Offline/local-first behavior | Confirm that installed control functions need no cloud service; define behavior when the internet is unavailable and distinguish that from daemon unavailability. |
 | Versioning and compatibility | Define client, API, and daemon compatibility ranges, upgrade ordering, unsupported-version messaging, and rollback expectations. |
 | Release process | Define source provenance, dependency review, reproducible build inputs, signing, store submission, release notes, and coordination with host-daemon releases. |
 | Installation/update ownership | Keep daemon installation and privileged updates separate from Flatpak updates; document how users avoid incompatible independent versions. |
 
-No candidate answer in this table is a packaging implementation or permission
-approval.
+PR #81's prototype choices are not blanket approval for production packaging
+or additional permissions.
 
 ## Future test and validation expectations
 
@@ -420,12 +469,12 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #80
+## Explicit non-goals for PR #81
 
-- No Flatpak packaging, manifest, build definition, finish-args, desktop file,
-  icon set, metainfo, repository submission, or release artifact.
-- No finished Flatpak GUI, GTK/libadwaita or Qt dependency, desktop window, or
-  existing Web UI change. PR #80 is a view-model/controller foundation only.
+- No finished production UI or existing Web UI change. The GTK window is a
+  rough display-only placeholder, not a production control surface.
+- No Flathub submission, release artifact, production metadata polish,
+  screenshots, signing, or distribution automation.
 - No start, stop, restart, repair, configuration, passphrase, adapter-selection,
   or other mutation control.
 - No support-bundle download, temporary file handling, file chooser, portal
@@ -450,9 +499,10 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No known-adapter registry or adapter-policy implementation.
 - No HostFactsSnapshot work or consumer change.
 
-PR #80 authorizes only the isolated toolkit-agnostic diagnostics/control UI
-model foundation, its offline tests, the required exports, and this plan
-update. It does not claim that a Flatpak package, finished graphical UI,
-support-bundle export flow, Steam Frame support, VR Direct Link support, or a
-known-adapter registry exists. Packaging, production GUI work, lifecycle
-controls, portal wiring, and all later phases remain separately approved work.
+PR #81 authorizes only the isolated Flatpak packaging/app shell prototype, its
+lazy GTK placeholder, static metadata, offline tests, and this plan update. It
+does not claim that a finished graphical UI, credential-entry flow,
+support-bundle portal export, Flathub-polished release, Steam Frame support, VR
+Direct Link support, or a known-adapter registry exists. Production UI work,
+credential entry, portal export, Flathub polish, Steam Frame, VR Direct Link,
+adapter registry work, and all later phases remain separately approved work.
