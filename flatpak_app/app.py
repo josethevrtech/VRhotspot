@@ -13,7 +13,9 @@ from flatpak_client import (
     DiagnosticsControlUiModel,
     FirstRunResult,
     FirstRunState,
+    LocalApiClient,
     PresentationMode,
+    TokenPairingController,
 )
 
 
@@ -24,6 +26,49 @@ MAX_SMOKE_JSON_BYTES = 8_192
 
 class GuiUnavailableError(RuntimeError):
     """GTK 4 or PyGObject is unavailable for the graphical shell."""
+
+
+class FirstRunTokenEntryController:
+    """Build one token-free display model from an explicitly supplied token."""
+
+    def __init__(self, *, client_factory=LocalApiClient, pairing_controller=None):
+        self._client_factory = client_factory
+        self._pairing_controller = (
+            pairing_controller
+            if pairing_controller is not None
+            else TokenPairingController(client_factory)
+        )
+
+    def __repr__(self) -> str:
+        return (
+            "FirstRunTokenEntryController("
+            "client_factory_configured=True, pairing_controller_configured=True)"
+        )
+
+    def connect(self, *, token: str) -> DiagnosticsControlUiModel:
+        """Validate caller-provided text and build read-only UI state in memory."""
+
+        try:
+            pairing_result = self._pairing_controller.evaluate(token=token)
+        except Exception:
+            pairing_result = FirstRunResult(FirstRunState.INVALID_RESPONSE)
+        if not isinstance(pairing_result, FirstRunResult):
+            pairing_result = FirstRunResult(FirstRunState.INVALID_RESPONSE)
+
+        client = None
+        if pairing_result.state is FirstRunState.TOKEN_ACCEPTED:
+            try:
+                client = self._client_factory(token=token)
+            except Exception:
+                pairing_result = FirstRunResult(FirstRunState.INVALID_RESPONSE)
+
+        try:
+            return DiagnosticsControlUiController(client).build(
+                pairing_result=pairing_result,
+                mode=PresentationMode.BASIC,
+            )
+        finally:
+            client = None
 
 
 def build_initial_model() -> DiagnosticsControlUiModel:
@@ -86,26 +131,118 @@ def _load_gtk():
     return Gtk
 
 
-def _add_text_label(Gtk, container, text: str, *, css_class: str | None = None) -> None:
+def _add_text_label(Gtk, container, text: str, *, css_class: str | None = None):
     label = Gtk.Label(label=text)
     label.set_wrap(True)
     label.set_xalign(0.0)
     if css_class:
         label.add_css_class(css_class)
     container.append(label)
+    return label
+
+
+def _clear_box(container) -> None:
+    child = container.get_first_child()
+    while child is not None:
+        next_child = child.get_next_sibling()
+        container.remove(child)
+        child = next_child
+
+
+def _add_section_heading(Gtk, container, text: str) -> None:
+    _add_text_label(Gtk, container, text, css_class="heading")
+
+
+def _render_display_model(Gtk, container, model: DiagnosticsControlUiModel) -> None:
+    """Render only bounded, token-free fields from the existing UI model."""
+
+    _clear_box(container)
+
+    _add_section_heading(Gtk, container, "Daemon status")
+    _add_text_label(Gtk, container, model.daemon.title, css_class="title-4")
+    _add_text_label(Gtk, container, model.daemon.message)
+
+    _add_section_heading(Gtk, container, "Pairing status")
+    _add_text_label(Gtk, container, model.pairing.title, css_class="title-4")
+    _add_text_label(Gtk, container, model.pairing.message)
+
+    _add_section_heading(Gtk, container, "Adapter readiness")
+    _add_text_label(Gtk, container, model.adapters.title, css_class="title-4")
+    _add_text_label(Gtk, container, model.adapters.summary)
+    if model.adapters.cards:
+        for card in model.adapters.cards:
+            bands = ", ".join(card.supported_bands) or "Bands not reported"
+            recommendation = " · Recommended" if card.recommended else ""
+            _add_text_label(
+                Gtk,
+                container,
+                f"{card.interface}: {card.readiness_label}{recommendation}",
+                css_class="heading",
+            )
+            _add_text_label(Gtk, container, f"{bands} · {card.summary}")
+    else:
+        _add_text_label(
+            Gtk,
+            container,
+            "No adapter cards are available.",
+            css_class="dim-label",
+        )
+
+    _add_section_heading(Gtk, container, "Preflight")
+    _add_text_label(
+        Gtk,
+        container,
+        f"{model.preflight.readiness_label}: {model.preflight.summary}",
+        css_class="title-4",
+    )
+    for fact in model.preflight.facts:
+        _add_text_label(Gtk, container, f"{fact.label}: {fact.value}")
+    for issue in model.preflight.issues:
+        _add_text_label(
+            Gtk,
+            container,
+            f"Issue ({issue.severity.value}): {issue.message}",
+        )
+    for action in model.preflight.actions:
+        _add_text_label(
+            Gtk,
+            container,
+            f"Guidance (display only): {action.message}",
+        )
+    if not (
+        model.preflight.facts
+        or model.preflight.issues
+        or model.preflight.actions
+    ):
+        _add_text_label(
+            Gtk,
+            container,
+            "No preflight details are available.",
+            css_class="dim-label",
+        )
+
+    _add_section_heading(Gtk, container, model.support_bundle.title)
+    _add_text_label(Gtk, container, model.support_bundle.summary)
+    export_button = Gtk.Button(label=model.support_bundle.action_label)
+    export_button.set_sensitive(model.support_bundle.action_enabled)
+    container.append(export_button)
 
 
 def run_gui() -> int:
-    """Run the rough GTK window without contacting the host daemon."""
+    """Run the first-run GTK prototype against the read-only local API client."""
 
     Gtk = _load_gtk()
     model = build_initial_model()
+    token_entry_controller = FirstRunTokenEntryController()
     application = Gtk.Application(application_id=APP_ID)
 
     def on_activate(app) -> None:
         window = Gtk.ApplicationWindow(application=app)
         window.set_title(APP_NAME)
-        window.set_default_size(560, 420)
+        window.set_default_size(680, 760)
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         content.set_margin_top(24)
@@ -117,44 +254,55 @@ def run_gui() -> int:
         _add_text_label(
             Gtk,
             content,
-            "Flatpak app shell prototype",
+            "First-run connection prototype",
             css_class="title-3",
         )
         _add_text_label(
             Gtk,
             content,
-            "This rough shell is intentionally offline and unpaired. "
-            "Credential entry and live daemon wiring remain future work.",
+            "Enter the API token configured for the local VRhotspot daemon. "
+            "The token is used in memory for this validation only and is not saved.",
         )
+
+        token_entry = Gtk.PasswordEntry()
+        token_entry.set_placeholder_text("API token")
+        token_entry.set_show_peek_icon(True)
+        content.append(token_entry)
+
+        connect_button = Gtk.Button(label="Connect / Validate token")
+        content.append(connect_button)
+
+        display_sections = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=8,
+        )
+        content.append(display_sections)
+        _render_display_model(Gtk, display_sections, model)
+
+        def on_connect(_widget) -> None:
+            token = token_entry.get_text()
+            token_entry.set_text("")
+            connect_button.set_sensitive(False)
+            try:
+                updated_model = token_entry_controller.connect(token=token)
+                _render_display_model(Gtk, display_sections, updated_model)
+            finally:
+                token = ""
+                connect_button.set_sensitive(True)
+
+        connect_button.connect("clicked", on_connect)
+        token_entry.connect("activate", on_connect)
+
         _add_text_label(
             Gtk,
             content,
-            f"Presentation mode: {model.mode.value.capitalize()}",
-        )
-        _add_text_label(
-            Gtk,
-            content,
-            f"Daemon: {model.daemon.title}",
-        )
-        _add_text_label(
-            Gtk,
-            content,
-            f"Pairing: {model.pairing.title}",
-        )
-        _add_text_label(
-            Gtk,
-            content,
-            "Support-bundle export is visible as a disabled placeholder; "
-            "no portal or file access is wired.",
-        )
-        _add_text_label(
-            Gtk,
-            content,
-            "No lifecycle or configuration controls are available.",
+            "Support-bundle export remains disabled. No lifecycle or "
+            "configuration controls are available.",
             css_class="dim-label",
         )
 
-        window.set_child(content)
+        scroller.set_child(content)
+        window.set_child(scroller)
         window.present()
 
     application.connect("activate", on_activate)

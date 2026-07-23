@@ -3,6 +3,7 @@
 from .app import (
     APP_ID,
     APP_NAME,
+    FirstRunTokenEntryController,
     MAX_SMOKE_JSON_BYTES,
     build_initial_model,
     build_smoke_payload,
@@ -13,6 +14,7 @@ from .app import (
 __all__ = [
     "APP_ID",
     "APP_NAME",
+    "FirstRunTokenEntryController",
     "MAX_SMOKE_JSON_BYTES",
     "build_initial_model",
     "build_smoke_payload",

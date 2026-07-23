@@ -1,16 +1,16 @@
 # Flatpak control app architecture plan
 
-Status: PR #81 Flatpak packaging/app shell prototype; PRs #77-#80 retained
+Status: PR #82 first-run/token entry UI prototype; PRs #77-#81 retained
 
 Date: 2026-07-23
 
 This document defines the boundary for the VRhotspot Flatpak control
-application. PR #81 adds the first rough installable and testable Flatpak app
-shell on top of PR #78's read-only local API client, PR #79's pairing state, and
-PR #80's toolkit-agnostic UI model/controller foundation. It proves packaging,
-launching, a deterministic standard-library smoke path, and a lazy GTK 4
-placeholder window. It is not a finished production UI and adds no daemon API,
-daemon runtime, installer, privileged action, or credential-storage behavior.
+application. PR #82 adds an in-memory first-run token entry flow to PR #81's
+rough installable and testable Flatpak shell. It uses PR #78's read-only local
+API client, PR #79's pairing state, and PR #80's toolkit-agnostic UI
+model/controller foundation. It is not a finished production UI and adds no
+daemon API, daemon runtime, installer, privileged action, token persistence, or
+credential-storage behavior.
 
 ## Architectural decision
 
@@ -296,11 +296,74 @@ origins. The remaining finish arguments provide Wayland and fallback X11
 display access. There is no filesystem permission, system-bus access, session-
 bus name ownership, device permission, or host networking authority.
 
-Real credential entry UI and live authenticated daemon wiring are not included.
-The shell does not discover or persist credentials through files, environment,
-keyrings, portals, or daemon configuration. Support-bundle export remains a
-disabled placeholder; portal export and bounded download handling require
-separate review.
+PR #81 did not include credential entry or live authenticated daemon wiring.
+The shell did not discover or persist credentials through files, environment,
+keyrings, portals, or daemon configuration. Support-bundle export remained a
+disabled placeholder; portal export and bounded download handling still
+require separate review.
+
+## PR #82 first-run/token entry UI prototype
+
+PR #82 adds one intentional credential input to the GTK shell: a hidden
+password-style entry and a `Connect / Validate token` button. The button gives
+the caller-provided text to a shell-level `FirstRunTokenEntryController`, which
+uses the existing `TokenPairingController` and its loopback-only
+`LocalApiClient` factory. When pairing succeeds, a short-lived client is passed
+to the existing `DiagnosticsControlUiController` to build the display model.
+There is no network call outside `LocalApiClient`.
+
+The entered token exists only in process memory for the current validation and
+model-build call. The GTK entry is cleared as soon as the click is handled, the
+shell controller has no token field, and the temporary token-bearing client is
+discarded after the model is built. The token is not written, logged, placed in
+a process argument, copied into the model, or included in smoke JSON,
+representations, exceptions, diagnostics, or window labels. This prototype
+does not discover tokens from environment variables, files, keyrings, portals,
+daemon configuration, `/etc`, `/var/lib`, or any other host location.
+
+The GTK shell renders only the existing bounded display models:
+
+- daemon status and safe reachability state;
+- pairing accepted, rejected, unavailable, missing-daemon-token, or unknown
+  state;
+- daemon-provided adapter readiness summary and cards after successful
+  validation;
+- daemon-provided preflight summary, facts, issues, and non-interactive
+  guidance after successful validation; and
+- the existing disabled support-bundle affordance.
+
+Rejected tokens never enter the result text. Connection failure renders an
+offline/unreachable state, the daemon's fail-closed
+`503`/`api_token_missing` response renders a missing-token state, and malformed
+or unsupported responses degrade to unknown. The UI has no start, stop,
+restart, repair, configuration, adapter-selection, or other mutation action.
+Support-bundle portal export remains future work and its placeholder remains
+disabled.
+
+GTK loading remains lazy. Importing `flatpak_app` and running the deterministic
+smoke mode still require neither PyGObject nor a token, make no API request,
+and perform no credential discovery:
+
+```bash
+python -m flatpak_app --smoke-json
+```
+
+PR #82 does not change the Flatpak permissions. A developer can force a clean
+rebuild, install, and run the current repository checkout with:
+
+```bash
+rm -rf .flatpak-test-build .flatpak-builder
+flatpak-builder --user --install --force-clean \
+  --install-deps-from=flathub .flatpak-test-build \
+  packaging/flatpak/io.github.josethevrtech.VRhotspot.json
+flatpak run io.github.josethevrtech.VRhotspot
+rm -rf .flatpak-test-build .flatpak-builder
+```
+
+Token persistence and keyring integration remain separately reviewed future
+work. Lifecycle/configuration controls, start/stop actions, support-bundle
+portal export, production UI polish, Flathub polish, Steam Frame, VR Direct
+Link, and adapter-registry work also remain separate future phases.
 
 ## Sandbox and portal expectations
 
@@ -388,7 +451,8 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | PR #78 | Flatpak local API client prototype. Add the small `flatpak_client/` layer against an injectable fake transport, with explicit loopback pinning, authentication-header handling, redirect rejection, bounded timeouts, compatibility/error mapping, and no host command execution. | Unit tests demonstrate safe request construction and failure handling without privileged host mutation. No Flatpak package or manifest exists; exact packaging scope requires separate approval. |
 | PR #79 | Token pairing and first-run foundation. Add deterministic model/controller state that probes public health for reachability and validates an explicitly supplied token through the existing authenticated, read-only client contract. Add no daemon endpoint, storage backend, packaging, or graphical UI. | The six first-run states are covered offline; health alone never means paired; `401`, fail-closed `503/api_token_missing`, connection failure, and invalid responses map safely; tokens do not enter results, exceptions, logs, files, or controller state. |
 | PR #80 | Diagnostics/control UI foundation. Add toolkit-agnostic, bounded UI models for daemon/pairing status, adapter readiness, preflight diagnostics, Basic/Pro presentation depth, and a disabled support-bundle affordance. Add no lifecycle control, support-bundle download/export wiring, GUI toolkit, desktop window, package, or manifest. | Offline behavior tests cover connection/authentication states, safe response projection, severity mapping, malformed-data fallback, Basic/Pro presentation fields, secret/path sanitization, output bounds, and the absence of mutation methods. |
-| PR #81 | Flatpak packaging/app shell prototype (current phase). Add the first rough installable/testable Flatpak shell, JSON manifest, lazy GTK 4 placeholder window, standard-library smoke mode, and static desktop metadata. Add no production control UI, credential entry, portal export, lifecycle/configuration action, daemon or installer behavior, or privileged host integration. | Offline tests prove import without GTK, bounded safe smoke JSON, metadata/ID consistency, minimal manifest permissions and package scope, safe launcher behavior, and the absence of mutation controls. |
+| PR #81 | Flatpak packaging/app shell prototype. Add the first rough installable/testable Flatpak shell, JSON manifest, lazy GTK 4 placeholder window, standard-library smoke mode, and static desktop metadata. Add no production control UI, credential entry, portal export, lifecycle/configuration action, daemon or installer behavior, or privileged host integration. | Offline tests prove import without GTK, bounded safe smoke JSON, metadata/ID consistency, minimal manifest permissions and package scope, safe launcher behavior, and the absence of mutation controls. |
+| PR #82 | First-run/token entry UI prototype (current phase). Add a hidden GTK token entry, an explicit validation action, and shell-level orchestration through the existing local client, pairing controller, and diagnostics UI controller. Keep tokens in memory only, keep GTK optional for tests, and add no persistence, mutation, portal, daemon, installer, or permission behavior. | Offline tests cover accepted, rejected, unreachable, missing-daemon-token, and malformed outcomes; safe display model updates; token non-disclosure/non-persistence; unchanged smoke behavior; static Flatpak packaging; and the absence of discovery or mutation controls. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
 Each phase is independently reviewable. A later phase is not authorized merely
@@ -412,7 +476,7 @@ a production Flatpak release:
 | Release process | Define source provenance, dependency review, reproducible build inputs, signing, store submission, release notes, and coordination with host-daemon releases. |
 | Installation/update ownership | Keep daemon installation and privileged updates separate from Flatpak updates; document how users avoid incompatible independent versions. |
 
-PR #81's prototype choices are not blanket approval for production packaging
+PR #82's prototype choices are not blanket approval for production packaging
 or additional permissions.
 
 ## Future test and validation expectations
@@ -469,10 +533,10 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #81
+## Explicit non-goals for PR #82
 
 - No finished production UI or existing Web UI change. The GTK window is a
-  rough display-only placeholder, not a production control surface.
+  rough first-run and display-only prototype, not a production control surface.
 - No Flathub submission, release artifact, production metadata polish,
   screenshots, signing, or distribution automation.
 - No start, stop, restart, repair, configuration, passphrase, adapter-selection,
@@ -481,7 +545,8 @@ reporting. Flatpak work must not weaken or bypass those controls.
   integration, or export implementation. The disabled model affordance is
   non-interactive and performs no request.
 - No token discovery, persistent storage, keyring/portal integration, token
-  issuance, rotation, or daemon-side pairing endpoint.
+  issuance, rotation, or daemon-side pairing endpoint. The only token source is
+  intentional entry in the hidden GTK field for the current in-memory call.
 - No daemon endpoint, API response, authentication, pairing, lifecycle,
   diagnostics, support-bundle, or runtime behavior change.
 - No installer, uninstaller, systemd-unit, platform, or CI behavior change.
@@ -499,10 +564,11 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No known-adapter registry or adapter-policy implementation.
 - No HostFactsSnapshot work or consumer change.
 
-PR #81 authorizes only the isolated Flatpak packaging/app shell prototype, its
-lazy GTK placeholder, static metadata, offline tests, and this plan update. It
-does not claim that a finished graphical UI, credential-entry flow,
-support-bundle portal export, Flathub-polished release, Steam Frame support, VR
-Direct Link support, or a known-adapter registry exists. Production UI work,
-credential entry, portal export, Flathub polish, Steam Frame, VR Direct Link,
-adapter registry work, and all later phases remain separately approved work.
+PR #82 authorizes only the isolated in-memory token entry and display-model
+wiring in the existing Flatpak GTK shell, its offline tests, and this plan
+update. It does not claim token persistence, keyring integration, lifecycle or
+configuration controls, support-bundle portal export, a Flathub-polished
+release, Steam Frame support, VR Direct Link support, or a known-adapter
+registry. Production UI work, persistence, portal export, Flathub polish,
+Steam Frame, VR Direct Link, adapter registry work, and all later phases remain
+separately approved work.
