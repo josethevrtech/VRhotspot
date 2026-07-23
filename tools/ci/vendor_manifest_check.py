@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Validate the source-tree vendor manifest and emit a deterministic vendor-only SBOM.
 
-This CI tool intentionally validates only SHA-256 syntax. It does not hash or compare
-vendored payload bytes and is not installer or runtime security enforcement.
+This CI tool compares declared SHA-256 values with current vendored file bytes. It is
+committed-tree consistency checking, not installer or runtime security enforcement.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -178,7 +179,10 @@ def _validate_top_level(manifest: dict[str, Any], errors: list[str]) -> None:
     if manifest.get("policy_doc") != POLICY_PATH:
         errors.append(f"policy_doc must be {POLICY_PATH!r}")
     if manifest.get("enforcement_status") != "inventory_only_not_enforced":
-        errors.append("enforcement_status must remain 'inventory_only_not_enforced' for PR #74")
+        errors.append(
+            "enforcement_status must remain 'inventory_only_not_enforced' "
+            "for CI/source-tree verification"
+        )
     _validate_string_list(errors, manifest.get("notes"), "notes", require_nonempty=True)
 
 
@@ -242,7 +246,10 @@ def _validate_hashing(manifest: dict[str, Any], errors: list[str]) -> None:
     if hashing.get("input") != "exact_file_bytes":
         errors.append("hashing.input must be 'exact_file_bytes'")
     if hashing.get("status") != "recorded_not_enforced":
-        errors.append("hashing.status must remain 'recorded_not_enforced' for PR #74")
+        errors.append(
+            "hashing.status must remain 'recorded_not_enforced' "
+            "for CI/source-tree verification"
+        )
 
 
 def _validate_entry(entry: Any, index: int, errors: list[str]) -> Optional[str]:
@@ -293,7 +300,15 @@ def _worktree_executable(path: Path) -> bool:
     return bool(mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
 
 
-def _validate_coverage_and_modes(
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as payload:
+        for chunk in iter(lambda: payload.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_source_tree(
     manifest: dict[str, Any],
     tracked_files: list[TrackedFile],
     repo_root: Path,
@@ -348,7 +363,10 @@ def _validate_coverage_and_modes(
             )
 
         entry = entries_by_path.get(path)
-        if isinstance(entry, dict) and type(entry.get("executable")) is bool:
+        if not isinstance(entry, dict):
+            continue
+
+        if type(entry.get("executable")) is bool:
             declared = entry["executable"]
             if declared != tracked.executable:
                 errors.append(
@@ -360,6 +378,17 @@ def _validate_coverage_and_modes(
                     f"manifest executable does not match working-tree mode for {path}: "
                     f"manifest={declared}, working tree={worktree_executable}"
                 )
+
+        declared_sha256 = entry.get("sha256")
+        if not isinstance(declared_sha256, str) or SHA256_RE.fullmatch(declared_sha256) is None:
+            continue
+        try:
+            actual_sha256 = _sha256_file(worktree_path)
+        except OSError:
+            errors.append(f"cannot read current file bytes for SHA-256 verification: {path}")
+            continue
+        if actual_sha256 != declared_sha256:
+            errors.append(f"manifest SHA-256 does not match current file bytes for {path}")
 
 
 def validate_manifest(
@@ -388,7 +417,7 @@ def validate_manifest(
     if entry_paths != sorted(entry_paths):
         errors.append("manifest files entries must be sorted lexicographically by path")
 
-    _validate_coverage_and_modes(manifest, tracked_files, repo_root, entry_paths, errors)
+    _validate_source_tree(manifest, tracked_files, repo_root, entry_paths, errors)
     return errors
 
 
@@ -402,7 +431,7 @@ def _component_properties(entry: dict[str, Any]) -> list[dict[str, str]]:
         "vrhotspot:license-status": entry["license_status"],
         "vrhotspot:provenance-status": entry["provenance_status"],
         "vrhotspot:runtime-trust-boundary": entry["runtime_trust_boundary"],
-        "vrhotspot:sha256-verification": "declared-syntax-only-not-compared",
+        "vrhotspot:sha256-verification": "ci-source-tree-payload-bytes-compared",
         "vrhotspot:source-project": entry["source_project"],
     }
     return [{"name": name, "value": values[name]} for name in sorted(values)]
@@ -457,7 +486,7 @@ def generate_sbom(manifest: dict[str, Any]) -> dict[str, Any]:
                     {"name": "vrhotspot:source-manifest", "value": MANIFEST_PATH},
                     {
                         "name": "vrhotspot:sha256-verification",
-                        "value": "syntax-only; payload bytes not compared",
+                        "value": "CI/source-tree payload bytes compared before SBOM output",
                     },
                 ],
                 "type": "data",
@@ -513,7 +542,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"deterministic vendor-only SBOM written: {args.sbom_output} "
         f"({vendor_file_count} file components)"
     )
-    print("SHA-256 validation: syntax only; payload bytes were not compared")
+    print(
+        f"SHA-256 validation passed: {vendor_file_count} source-tree files "
+        "matched manifest values"
+    )
     return 0
 
 

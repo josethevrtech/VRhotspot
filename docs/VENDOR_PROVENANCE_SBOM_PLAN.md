@@ -1,6 +1,6 @@
 # Vendor provenance, SBOM, and checksum manifest plan
 
-Status: PR #74 CI manifest-coverage and deterministic vendor-only SBOM step
+Status: PR #75 CI/source-tree payload SHA-256 verification
 
 Date: 2026-07-22
 
@@ -8,8 +8,9 @@ This document defines the supply-chain groundwork for files that VRhotspot
 ships from the repository. PR #73 added the canonical machine-readable
 [`backend/vendor/VENDOR_MANIFEST.json`](../backend/vendor/VENDOR_MANIFEST.json)
 inventory. PR #74 validates that inventory in CI and generates a deterministic
-vendor-only SBOM under `/tmp`; it does not compare payload checksums or change
-installation or runtime behavior.
+vendor-only SBOM under `/tmp`. PR #75 extends that existing validator to compare
+each declared SHA-256 with the exact bytes in the committed source tree. This
+does not change installation or runtime behavior.
 
 ## Problem
 
@@ -34,7 +35,8 @@ The existing repository has useful but fragmented attribution:
 
 PR #73 established a canonical machine-readable inventory for the current
 `backend/vendor/` tree. PR #74 can deterministically generate a temporary SBOM
-from that inventory, but there is still no payload checksum comparison or
+from that inventory, and PR #75 verifies that current source-tree payload bytes
+match the committed manifest. There is still no installer or runtime checksum
 enforcement and no proof that the inventoried bytes came from the documented
 sources. A successful version probe also does not prove that a file came from
 the documented source or that its bytes match a reviewed upstream artifact.
@@ -92,22 +94,27 @@ not imply that VRhotspot supplied or checksummed those host files.
 - Derive a deterministic SBOM from reviewed manifest data rather than maintain
   a second hand-edited source of truth.
 - Add CI coverage for manifest completeness and schema validity in PR #74.
-- Add reviewed checksum verification in a later PR, likely in CI before any
-  installer or runtime use.
-- Expose bounded, sanitized provenance status in support bundles later.
+- Add CI/source-tree payload checksum verification in PR #75 without installer
+  or runtime enforcement.
+- Expose bounded, sanitized provenance status in support bundles in future PR
+  #76.
 - Make the acquisition and review process repeatable before another vendor
   asset can be added or updated.
 
-## PR #74 scope and retained boundaries
+## PR #75 scope and retained boundaries
 
 - No runtime enforcement.
 - No installer behavior change or enforcement.
 - PR #74 adds CI manifest structure, coverage, path, and executable-mode checks.
-- SHA-256 validation in PR #74 is syntax-only. Payload bytes are not hashed or
-  compared; checksum verification remains future PR #75 work.
+- PR #75 extends the existing CI/source-tree validator to hash exact current
+  file bytes and compare them with each manifest SHA-256.
+- This is committed-tree consistency checking, not end-user runtime tamper
+  protection. Installed files are not checked.
 - PR #74 generates an untracked, deterministic CycloneDX JSON SBOM from the
   manifest at `/tmp/vrhotspot-vendor-sbom.json`. It covers only
-  `backend/vendor/` and does not claim repository-wide SBOM completeness.
+  `backend/vendor/` and does not claim repository-wide SBOM completeness. PR
+  #75 does not change its deterministic generation behavior.
+- Support-bundle provenance output remains future PR #76 work.
 - No new or replaced vendored binaries, libraries, firmware, scripts, or
   other vendor files.
 - No Steam Frame driver support.
@@ -142,9 +149,9 @@ The following rules govern subsequent implementation work:
    credentials, tokens, account data, and other unrelated content must not be
    committed or included in support bundles.
 6. Existing bundled hostapd-, dnsmasq-, lnxrouter-, and libnl-style assets must
-   be fully documented before checksum enforcement is introduced. Current
-   filenames, executable bits, version output, or notices are evidence inputs;
-   none alone proves origin or integrity.
+   be fully documented before installer or runtime checksum enforcement is
+   introduced. Current filenames, executable bits, version output, or notices
+   are evidence inputs; none alone proves origin or integrity.
 7. A changed payload byte, executable bit, source reference, license status,
    platform allowlist, or trust-boundary classification requires explicit
    manifest review. Checksum-only update commits without a source/update
@@ -211,9 +218,11 @@ redistribution review.
 timestamp, hostname, absolute repository path, random identifier, or
 environment-derived field. CI writes the generated document only to
 `/tmp/vrhotspot-vendor-sbom.json`; it is not a tracked second source of truth.
-The tool checks that each declared SHA-256 is 64-character lowercase hex but
-does not read payload bytes to recompute it. That CI checksum comparison remains
-the separate PR #75 step, and runtime or installer enforcement remains absent.
+PR #75 keeps those deterministic SBOM properties and extends the tool to compare
+each declared SHA-256 with the exact current source-tree file bytes before
+writing the SBOM. The manifest control file remains excluded from its own
+recursive hash. This comparison is CI/source-tree validation only; runtime and
+installer checksum enforcement remain absent.
 
 ## Staged roadmap
 
@@ -222,7 +231,7 @@ the separate PR #75 step, and runtime or installer enforcement remains absent.
 | PR #72 | This documentation-only provenance, SBOM, and checksum-manifest plan. | Boundaries, current gaps, schema fields, stages, and future acceptance criteria are reviewable with no behavior change. |
 | PR #73 | Add `backend/vendor/VENDOR_MANIFEST.json` for the 13 current files under `backend/vendor/` and record exact current SHA-256 values as non-enforced inventory metadata. Keep outside-tree assets as future audit candidates. | Every covered current file has one honest entry; unknowns are explicit; the manifest excludes its own recursive self-hash; no payload, CI, installer, or runtime behavior changes. |
 | PR #74 | Add CI schema, manifest-coverage, executable-mode, and deterministic vendor-only SBOM checks. | CI fails for missing, extra, duplicate, invalid, unsorted, outside-scope, or stale manifest paths and mode mismatches; SHA-256 is syntax-only and the untracked SBOM is reproducible. |
-| PR #75 | Add checksum verification, likely CI-only first. | Exact checked-in bytes and executable modes match reviewed entries; changes require a manifest diff; installer/runtime behavior remains unchanged unless separately approved. |
+| PR #75 | Add CI/source-tree payload checksum verification. | Exact committed-tree bytes and executable modes match reviewed entries; changes require a manifest diff; this is not end-user runtime tamper protection, and installer/runtime behavior remains unchanged. |
 | PR #76 | Add sanitized support-bundle provenance output. | A bundle can report bounded component, selection, provenance, and checksum status without arbitrary file reads or secret disclosure. |
 | PR #77 | Write the Flatpak architecture plan. | The UI/control-app boundary, daemon API, host installation/update ownership, and trust/update story are explicit before packaging starts. |
 | PR #81+ | Begin Steam Frame / VR Direct Link evidence and adapter-intelligence work only after explicit approval. | Research starts from lawful, user-provided or public evidence and derived metadata, not redistributed drivers or automatic depot downloads. |
