@@ -1,4 +1,5 @@
 import configparser
+from dataclasses import asdict
 import importlib
 import inspect
 import json
@@ -7,6 +8,8 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
+import pytest
+
 
 APP_ID = "io.github.josethevrtech.VRhotspot"
 APP_NAME = "VR Hotspot"
@@ -14,6 +17,102 @@ MANIFEST_PATH = Path("packaging/flatpak") / f"{APP_ID}.json"
 DESKTOP_PATH = Path("packaging/flatpak") / f"{APP_ID}.desktop"
 METAINFO_PATH = Path("packaging/flatpak") / f"{APP_ID}.metainfo.xml"
 LAUNCHER_PATH = Path("packaging/flatpak/vrhotspot-flatpak")
+
+
+def _api_response(data):
+    from flatpak_client import ApiResponse
+
+    return ApiResponse(
+        correlation_id="token-entry-ui-test",
+        result_code="ok",
+        warnings=(),
+        data=data,
+    )
+
+
+def _readiness_response():
+    return _api_response(
+        {
+            "recommended": "wlan1",
+            "basic_mode_recommended": "wlan1",
+            "adapters": [
+                {
+                    "interface": "wlan1",
+                    "driver": "example",
+                    "bus_type": "usb",
+                    "supports_5ghz": True,
+                    "readiness_state": "ready",
+                    "explanation": "Ready for display-only diagnostics.",
+                }
+            ],
+        }
+    )
+
+
+def _preflight_response():
+    return _api_response(
+        {
+            "schema_version": 1,
+            "overall_readiness": "warning",
+            "platform": {},
+            "firewall": {},
+            "services": {},
+            "network": {},
+            "wifi": {"selected_adapter": "wlan1"},
+            "issues": [
+                {
+                    "severity": "warning",
+                    "code": "review_example",
+                    "message": "Review the daemon-reported readiness.",
+                }
+            ],
+            "recommended_actions": [
+                {
+                    "code": "review_example",
+                    "message": "Review this display-only guidance.",
+                }
+            ],
+        }
+    )
+
+
+class ScriptedReadOnlyClientFactory:
+    def __init__(
+        self,
+        *,
+        health_result=True,
+        readiness_result=None,
+        preflight_result=None,
+    ):
+        self.health_result = health_result
+        self.readiness_result = readiness_result or _readiness_response()
+        self.preflight_result = preflight_result or _preflight_response()
+        self.token_presence = []
+
+    def __repr__(self):
+        return "ScriptedReadOnlyClientFactory(token_storage=False)"
+
+    def __call__(self, *, token):
+        self.token_presence.append(bool(token))
+        factory = self
+
+        class Client:
+            def health(self):
+                if isinstance(factory.health_result, BaseException):
+                    raise factory.health_result
+                return factory.health_result
+
+            def adapter_readiness(self):
+                if isinstance(factory.readiness_result, BaseException):
+                    raise factory.readiness_result
+                return factory.readiness_result
+
+            def preflight_report(self):
+                if isinstance(factory.preflight_result, BaseException):
+                    raise factory.preflight_result
+                return factory.preflight_result
+
+        return Client()
 
 
 def _manifest():
@@ -93,6 +192,153 @@ def test_smoke_json_contains_no_secret_or_host_path_leak_markers():
         assert forbidden not in rendered
 
 
+def test_token_entry_requires_only_a_caller_supplied_token():
+    from flatpak_app import FirstRunTokenEntryController
+
+    factory = ScriptedReadOnlyClientFactory()
+    controller = FirstRunTokenEntryController(client_factory=factory)
+
+    with pytest.raises(TypeError):
+        controller.connect()
+
+    model = controller.connect(token="caller-provided-value")
+
+    assert model.pairing.paired is True
+    assert factory.token_presence == [False, True, True]
+    assert not hasattr(controller, "token")
+    assert not hasattr(controller, "_token")
+
+
+def test_successful_token_validation_updates_all_display_only_sections():
+    from flatpak_app import FirstRunTokenEntryController
+
+    controller = FirstRunTokenEntryController(
+        client_factory=ScriptedReadOnlyClientFactory()
+    )
+
+    model = controller.connect(token="accepted-in-memory-value")
+
+    assert model.daemon.title == "Daemon connected"
+    assert model.pairing.title == "Paired"
+    assert model.adapters.recommended_interface == "wlan1"
+    assert [card.interface for card in model.adapters.cards] == ["wlan1"]
+    assert model.preflight.readiness_label == "Needs attention"
+    assert [issue.code for issue in model.preflight.issues] == ["review_example"]
+    assert [action.code for action in model.preflight.actions] == ["review_example"]
+    assert model.preflight.actions[0].interactive is False
+    assert model.support_bundle.action_enabled is False
+    assert model.support_bundle.request_performed is False
+
+
+def test_rejected_token_is_safe_and_never_enters_output_or_logs(caplog):
+    from flatpak_app import FirstRunTokenEntryController
+    from flatpak_client import AuthenticationError
+
+    secret = "rejected-ui-value-must-not-escape"
+    controller = FirstRunTokenEntryController(
+        client_factory=ScriptedReadOnlyClientFactory(
+            readiness_result=AuthenticationError(401)
+        )
+    )
+
+    model = controller.connect(token=secret)
+    exposed = repr(model) + repr(asdict(model)) + repr(controller) + caplog.text
+
+    assert model.daemon.reachable is True
+    assert model.pairing.title == "Token rejected"
+    assert model.pairing.paired is False
+    assert secret not in exposed
+
+
+def test_unreachable_daemon_updates_the_safe_offline_display_state():
+    from flatpak_app import FirstRunTokenEntryController
+    from flatpak_client import ConnectionFailure
+
+    controller = FirstRunTokenEntryController(
+        client_factory=ScriptedReadOnlyClientFactory(
+            health_result=ConnectionFailure("offline")
+        )
+    )
+
+    model = controller.connect(token="in-memory-offline-value")
+
+    assert model.daemon.title == "Daemon unavailable"
+    assert model.daemon.reachable is False
+    assert model.pairing.title == "Pairing unavailable"
+    assert model.adapters.cards == ()
+    assert model.preflight.issues == ()
+
+
+def test_missing_daemon_token_updates_the_safe_blocked_display_state():
+    from flatpak_app import FirstRunTokenEntryController
+    from flatpak_client import DaemonTokenMissingError
+
+    controller = FirstRunTokenEntryController(
+        client_factory=ScriptedReadOnlyClientFactory(
+            readiness_result=DaemonTokenMissingError()
+        )
+    )
+
+    model = controller.connect(token="caller-provided-missing-config-value")
+
+    assert model.daemon.reachable is True
+    assert model.pairing.title == "Daemon token missing"
+    assert model.pairing.detail_code == "api_token_missing"
+    assert model.pairing.paired is False
+
+
+def test_malformed_pairing_response_degrades_the_entire_display_to_unknown():
+    from flatpak_app import FirstRunTokenEntryController
+    from flatpak_client import StatusSeverity
+
+    controller = FirstRunTokenEntryController(
+        client_factory=ScriptedReadOnlyClientFactory(
+            readiness_result={"unexpected": "response"}
+        )
+    )
+
+    model = controller.connect(token="caller-provided-malformed-value")
+
+    assert model.daemon.severity is StatusSeverity.UNKNOWN
+    assert model.pairing.severity is StatusSeverity.UNKNOWN
+    assert model.adapters.severity is StatusSeverity.UNKNOWN
+    assert model.preflight.severity is StatusSeverity.UNKNOWN
+
+
+def test_token_entry_flow_does_not_retain_persist_log_or_emit_token(
+    caplog,
+    monkeypatch,
+    tmp_path,
+):
+    from flatpak_app import (
+        FirstRunTokenEntryController,
+        build_smoke_payload,
+        render_smoke_json,
+    )
+
+    secret = "ephemeral-ui-value-never-persist"
+    factory = ScriptedReadOnlyClientFactory()
+    controller = FirstRunTokenEntryController(client_factory=factory)
+    monkeypatch.chdir(tmp_path)
+    before = tuple(tmp_path.rglob("*"))
+
+    model = controller.connect(token=secret)
+    exposed = (
+        repr(controller)
+        + repr(model)
+        + repr(asdict(model))
+        + repr(build_smoke_payload())
+        + render_smoke_json()
+        + caplog.text
+    )
+
+    assert tuple(tmp_path.rglob("*")) == before
+    assert secret not in exposed
+    assert secret not in repr(vars(controller))
+    assert not hasattr(controller, "token")
+    assert not hasattr(controller, "_token")
+
+
 def test_shell_exposes_no_mutation_controls_or_actions():
     from flatpak_app import build_smoke_payload
     from flatpak_app import app
@@ -133,10 +379,13 @@ def test_app_shell_has_no_direct_host_secret_or_network_access():
         "import urllib",
         "import requests",
         "os.environ",
-        "LocalApiClient(",
-        "TokenPairingController(",
+        "getenv(",
+        "keyring",
+        "SecretService",
+        "portal",
         "/etc/",
         "/var/lib/",
+        "VR_HOTSPOTD_API_TOKEN",
         "systemctl",
         "nmcli",
         "hostapd",
@@ -144,6 +393,25 @@ def test_app_shell_has_no_direct_host_secret_or_network_access():
         "firewall",
     ):
         assert forbidden not in source
+
+
+def test_shell_has_no_token_cli_argument_or_discovery_source():
+    from flatpak_app import app
+
+    parser = app._argument_parser()
+    option_strings = {
+        option
+        for action in parser._actions
+        for option in action.option_strings
+    }
+    source = Path("flatpak_app/app.py").read_text(encoding="utf-8")
+
+    assert "--token" not in option_strings
+    assert "--api-token" not in option_strings
+    assert "FirstRunTokenEntryController" in source
+    assert "LocalApiClient" in source
+    assert "TokenPairingController" in source
+    assert "DiagnosticsControlUiController" in source
 
 
 def test_manifest_is_valid_json_and_matches_app_id_command_and_runtime():
