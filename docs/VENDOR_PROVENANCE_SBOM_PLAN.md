@@ -1,12 +1,14 @@
 # Vendor provenance, SBOM, and checksum manifest plan
 
-Status: PR #72 documentation-only plan
+Status: PR #73 manifest-addition step; PR #72 established the documentation-only plan
 
 Date: 2026-07-22
 
 This document defines the supply-chain groundwork for files that VRhotspot
-ships from the repository. It does not add a manifest, generate an SBOM,
-verify a checksum, or change installation or runtime behavior.
+ships from the repository. PR #73 adds the canonical machine-readable
+[`backend/vendor/VENDOR_MANIFEST.json`](../backend/vendor/VENDOR_MANIFEST.json)
+inventory. It does not generate an SBOM, verify or enforce a checksum, or
+change installation or runtime behavior.
 
 ## Problem
 
@@ -29,10 +31,11 @@ The existing repository has useful but fragmented attribution:
   but the implemented support bundle does not report file provenance or
   checksum state.
 
-There is no canonical machine-readable vendor inventory, generated SBOM, or
-reviewed checksum manifest today. A successful version probe also does not
-prove that a file came from the documented source or that its bytes match a
-reviewed artifact.
+PR #73 establishes a canonical machine-readable inventory for the current
+`backend/vendor/` tree. There is still no generated SBOM, checksum enforcement,
+or proof that the inventoried bytes came from the documented sources. A
+successful version probe also does not prove that a file came from the
+documented source or that its bytes match a reviewed upstream artifact.
 
 Future hardware support may increase pressure to add firmware, helper tools,
 driver-related material, device metadata, or other vendor-specific files. The
@@ -41,9 +44,9 @@ before that pressure produces more opaque assets.
 
 ## Current inventory observation
 
-This is an observation for planning, not the future manifest and not an
-approval of the current provenance records. PR #73 must inventory files
-individually and resolve or explicitly mark unknown facts.
+This observation informed the PR #73 manifest; it is not an approval of the
+current provenance records. The manifest inventories files individually and
+explicitly retains unresolved facts.
 
 | Repository area | Files observed | Current documentation | Trust relevance |
 |---|---|---|---|
@@ -52,18 +55,22 @@ individually and resolve or explicitly mark unknown facts.
 | `backend/vendor/licenses/` | `dnsmasq.LICENSE.txt`, `hostapd.LICENSE.txt`, `libnl.LICENSE.txt`, `linux-router.LICENSE.txt` | License identifiers, upstream links, and a partial libnl notice | Attribution/control material; its presence does not by itself establish the exact payload source. |
 | `backend/vendor/README.md` | bundle README | Partial version and update notes | Human-readable control material that is not machine-enforced. |
 
-All 13 files above are tracked. No profile-specific directories are present in
+All 13 files above are tracked and have one entry each in
+[`backend/vendor/VENDOR_MANIFEST.json`](../backend/vendor/VENDOR_MANIFEST.json).
+The manifest control file explicitly excludes itself from the hashed file list
+to avoid a recursive self-hash. No profile-specific directories are present in
 the current tree even though runtime lookup supports profile-specific `bin`
 and `lib` directories.
 
-The PR #73 scope audit must also classify repository-copied third-party assets
-outside `backend/vendor/`. In particular, `assets/qrcode.js` contains an
-upstream origin and MIT license notice, while `assets/chart.js` appears to be a
-prebuilt Chart.js distribution but has no visible version or license banner in
-the checked-in file. These are audit candidates, not newly approved provenance
-claims. Project-authored images, scripts, and generated assets must be
-distinguished from copied third-party material using evidence rather than file
-extension or location alone.
+Repository-copied third-party assets outside `backend/vendor/` remain a future
+scope audit. In particular, `assets/qrcode.js` contains an upstream origin and
+MIT license notice, while `assets/chart.js` appears to be a prebuilt Chart.js
+distribution but has no visible version or license banner in the checked-in
+file. They are future/outside-tree audit candidates documented here, not
+entries in the PR #73 backend vendor manifest and not newly approved
+provenance claims. Project-authored images, scripts, and generated assets must
+be distinguished from copied third-party material using evidence rather than
+file extension or location alone.
 
 System-provided hostapd, dnsmasq, and libraries are outside the file-level
 vendor manifest because their bytes are owned by the host package manager.
@@ -72,14 +79,14 @@ not imply that VRhotspot supplied or checksummed those host files.
 
 ## Goals
 
-- Inventory every vendored file, including executable payloads, shared
-  libraries, license/control material, profile-specific variants, and copied
-  third-party assets outside the current vendor directory.
+- Inventory every file in the declared `backend/vendor/` scope, including
+  executable payloads, shared libraries, and license/control material.
 - Document the source and provenance of every inventoried file.
 - Document its license and redistribution status, including an explicit
   unknown or blocked state where evidence is incomplete.
 - Document its purpose and runtime trust boundary.
-- Add one canonical machine-readable vendor manifest in a later PR.
+- Maintain one canonical machine-readable vendor manifest at
+  `backend/vendor/VENDOR_MANIFEST.json`, added by PR #73.
 - Derive a deterministic SBOM from reviewed manifest data rather than maintain
   a second hand-edited source of truth.
 - Add CI coverage for manifest completeness and schema validity in a later PR.
@@ -89,13 +96,15 @@ not imply that VRhotspot supplied or checksummed those host files.
 - Make the acquisition and review process repeatable before another vendor
   asset can be added or updated.
 
-## Non-goals for PR #72
+## PR #72 non-goals and PR #73 retained boundaries
 
 - No runtime enforcement.
-- No installer behavior change.
-- No CI behavior change.
-- No checksum verification yet.
-- No machine-readable manifest or generated SBOM yet.
+- No installer behavior change or enforcement.
+- No CI behavior change in PR #73; manifest coverage remains future PR #74 work.
+- No checksum verification or enforcement in PR #73; that remains future PR
+  #75 work.
+- PR #73 adds `backend/vendor/VENDOR_MANIFEST.json`, but no generated SBOM
+  exists yet and the manifest does not claim repository-wide SBOM completeness.
 - No new or replaced vendored binaries, libraries, firmware, scripts, or
   other vendor files.
 - No Steam Frame driver support.
@@ -146,16 +155,17 @@ The following rules govern subsequent implementation work:
     approval after the documentation, manifest, CI coverage, and checksum
     process have demonstrated stable behavior.
 
-## Future manifest contract
+## Manifest contract
 
-PR #73 should choose a documented format and schema for one canonical manifest.
-Its control file should live outside the payload namespace it hashes where
-practical; otherwise the schema must explicitly exclude the manifest from
-self-hashing while CI still validates that control file. Unknown historical
-facts must be represented honestly and assigned a review status rather than
-filled with guesses.
+PR #73 selects reviewable JSON with `schema_version` `1.0.0` for the canonical
+manifest at `backend/vendor/VENDOR_MANIFEST.json`. Because the control file is
+inside the namespace it inventories, `manifest_scope.excluded_paths` explicitly
+excludes the manifest from self-hashing. PR #74 may validate that control file
+separately. Unknown historical facts are represented as `null`, `unknown`, or
+an explicit unverified/conflicting provenance status rather than filled with
+guesses.
 
-Each file entry needs at least these fields:
+Each file entry has these fields:
 
 | Field | Required meaning |
 |---|---|
@@ -163,11 +173,11 @@ Each file entry needs at least these fields:
 | `file_type` | Controlled value such as ELF executable, shared library, script, browser JavaScript, firmware, license text, or documentation. |
 | `executable` | Boolean matching the reviewed Git executable bit, independently of `file_type`. |
 | `purpose` | Why VRhotspot ships the file and which component consumes it. |
-| `source_project_or_vendor` | Upstream project, vendor, or documented project-authored origin. |
-| `upstream_url_or_source_note` | Stable upstream URL or an explicit source note when no public URL applies. |
-| `version`, `commit`, `release` | Exact version evidence when known; fields may be null only with an explicit unknown status and reviewer note. |
-| `license` | SPDX identifier when reliable, otherwise the exact declared license name. |
-| `license_status` | Reviewed redistribution state such as allowed, restricted, blocked, or unknown, with evidence linkage. |
+| `source_project` | Upstream project or documented project-authored origin. |
+| `upstream_url` | Stable upstream project URL, or `null` for project-authored control material with no separate upstream. |
+| `version`, `version_evidence` | Exact version when supported and the current repository evidence for it; unresolved or conflicting versions remain `null`. |
+| `license`, `license_evidence` | SPDX identifier when reliable, otherwise the exact declared license name, with local or upstream evidence references. |
+| `license_status` | Reviewed redistribution state such as allowed, restricted, blocked, or unknown. An existing license claim is not treated as verified payload provenance. |
 | `sha256` | Lowercase SHA-256 of the exact checked-in bytes; no newline or binary normalization. |
 | `allowed_platforms` | Explicit platform/profile allowlist or a reviewed `all-supported` value. |
 | `runtime_trust_boundary` | Whether the file is privileged executable code, dynamically loaded code, unprivileged/browser code, data, or documentation-only material. |
@@ -198,8 +208,8 @@ redistribution review.
 | Stage | Scope | Exit condition |
 |---|---|---|
 | PR #72 | This documentation-only provenance, SBOM, and checksum-manifest plan. | Boundaries, current gaps, schema fields, stages, and future acceptance criteria are reviewable with no behavior change. |
-| PR #73 | Add the canonical vendor manifest and complete the initial provenance/license inventory. Classify copied third-party assets outside `backend/vendor/` and define deterministic SBOM output. | Every covered current file has one honest entry; unknowns are explicit; no payload is added or replaced merely to complete the inventory. |
-| PR #74 | Add CI schema and manifest-coverage checks, plus deterministic SBOM generation or validation once the chosen format is stable. | CI fails for missing, extra, duplicate, invalid, or stale manifest paths and can reproduce the reviewed SBOM representation. |
+| PR #73 | Add `backend/vendor/VENDOR_MANIFEST.json` for the 13 current files under `backend/vendor/` and record exact current SHA-256 values as non-enforced inventory metadata. Keep outside-tree assets as future audit candidates. | Every covered current file has one honest entry; unknowns are explicit; the manifest excludes its own recursive self-hash; no payload, CI, installer, or runtime behavior changes. |
+| PR #74 | Add CI schema and manifest-coverage checks. | CI fails for missing, extra, duplicate, invalid, or stale manifest paths. |
 | PR #75 | Add checksum verification, likely CI-only first. | Exact checked-in bytes and executable modes match reviewed entries; changes require a manifest diff; installer/runtime behavior remains unchanged unless separately approved. |
 | PR #76 | Add sanitized support-bundle provenance output. | A bundle can report bounded component, selection, provenance, and checksum status without arbitrary file reads or secret disclosure. |
 | PR #77 | Write the Flatpak architecture plan. | The UI/control-app boundary, daemon API, host installation/update ownership, and trust/update story are explicit before packaging starts. |
