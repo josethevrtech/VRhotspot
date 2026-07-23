@@ -1,6 +1,6 @@
 # Vendor provenance, SBOM, and checksum manifest plan
 
-Status: PR #75 CI/source-tree payload SHA-256 verification
+Status: PR #76 read-only support-bundle vendor provenance output
 
 Date: 2026-07-22
 
@@ -9,8 +9,10 @@ ships from the repository. PR #73 added the canonical machine-readable
 [`backend/vendor/VENDOR_MANIFEST.json`](../backend/vendor/VENDOR_MANIFEST.json)
 inventory. PR #74 validates that inventory in CI and generates a deterministic
 vendor-only SBOM under `/tmp`. PR #75 extends that existing validator to compare
-each declared SHA-256 with the exact bytes in the committed source tree. This
-does not change installation or runtime behavior.
+each declared SHA-256 with the exact bytes in the committed source tree. PR #76
+adds a bounded `vr-hotspot/vendor_provenance.json` support-bundle report of the
+manifest claims and safely checkable local file/checksum status. These stages
+do not change installation or runtime trust enforcement.
 
 ## Problem
 
@@ -29,17 +31,19 @@ The existing repository has useful but fragmented attribution:
 - `THIRD_PARTY_NOTICES.md` names the current upstream projects and licenses.
 - `backend/vendor/licenses/` contains license texts or references.
 - `README.md` lists the bundled components.
-- `docs/support-bundle.md` anticipates reporting bundled component versions,
-  but the implemented support bundle does not report file provenance or
-  checksum state.
+- `docs/support-bundle.md` anticipates reporting bundled component versions.
+  PR #76 adds file provenance and checksum state to the implemented support
+  bundle without including payload contents.
 
 PR #73 established a canonical machine-readable inventory for the current
 `backend/vendor/` tree. PR #74 can deterministically generate a temporary SBOM
 from that inventory, and PR #75 verifies that current source-tree payload bytes
-match the committed manifest. There is still no installer or runtime checksum
-enforcement and no proof that the inventoried bytes came from the documented
-sources. A successful version probe also does not prove that a file came from
-the documented source or that its bytes match a reviewed upstream artifact.
+match the committed manifest. PR #76 reports manifest entries and bounded local
+checksum results for support diagnostics only. There is still no installer or
+runtime checksum enforcement and no proof that the inventoried bytes came from
+the documented sources. A successful version probe or local checksum match
+also does not prove that a file came from the documented source or that its
+bytes match a reviewed upstream artifact.
 
 Future hardware support may increase pressure to add firmware, helper tools,
 driver-related material, device metadata, or other vendor-specific files. The
@@ -96,25 +100,36 @@ not imply that VRhotspot supplied or checksummed those host files.
 - Add CI coverage for manifest completeness and schema validity in PR #74.
 - Add CI/source-tree payload checksum verification in PR #75 without installer
   or runtime enforcement.
-- Expose bounded, sanitized provenance status in support bundles in future PR
-  #76.
+- Expose bounded, sanitized provenance and local checksum status in support
+  bundles in PR #76 without using the result as a trust gate.
 - Make the acquisition and review process repeatable before another vendor
   asset can be added or updated.
 
-## PR #75 scope and retained boundaries
+## PR #76 scope and retained boundaries
 
 - No runtime enforcement.
 - No installer behavior change or enforcement.
 - PR #74 adds CI manifest structure, coverage, path, and executable-mode checks.
 - PR #75 extends the existing CI/source-tree validator to hash exact current
   file bytes and compare them with each manifest SHA-256.
-- This is committed-tree consistency checking, not end-user runtime tamper
-  protection. Installed files are not checked.
+- PR #76 adds `vr-hotspot/vendor_provenance.json` to authenticated support
+  bundles. It reports the manifest schema and relative paths, selected
+  provenance fields, manifest SHA-256 values, bounded local checksum results,
+  and summary counts.
+- Missing, unreadable, and mismatched vendor files are diagnostic findings
+  only. They do not block bundle generation, daemon startup, hotspot start,
+  installer execution, or any API action.
+- The support report reads only normalized manifest paths inside
+  `backend/vendor/`, refuses symlinked or non-regular local payloads, includes
+  no payload contents or absolute host paths, and passes through the existing
+  support-bundle redaction path.
+- PR #75 is committed-tree consistency checking. PR #76 may compare the local
+  installed payload bytes when generating a bundle, but the result is
+  diagnostic reporting rather than end-user runtime tamper protection.
 - PR #74 generates an untracked, deterministic CycloneDX JSON SBOM from the
   manifest at `/tmp/vrhotspot-vendor-sbom.json`. It covers only
   `backend/vendor/` and does not claim repository-wide SBOM completeness. PR
   #75 does not change its deterministic generation behavior.
-- Support-bundle provenance output remains future PR #76 work.
 - No new or replaced vendored binaries, libraries, firmware, scripts, or
   other vendor files.
 - No Steam Frame driver support.
@@ -232,7 +247,7 @@ installer checksum enforcement remain absent.
 | PR #73 | Add `backend/vendor/VENDOR_MANIFEST.json` for the 13 current files under `backend/vendor/` and record exact current SHA-256 values as non-enforced inventory metadata. Keep outside-tree assets as future audit candidates. | Every covered current file has one honest entry; unknowns are explicit; the manifest excludes its own recursive self-hash; no payload, CI, installer, or runtime behavior changes. |
 | PR #74 | Add CI schema, manifest-coverage, executable-mode, and deterministic vendor-only SBOM checks. | CI fails for missing, extra, duplicate, invalid, unsorted, outside-scope, or stale manifest paths and mode mismatches; SHA-256 is syntax-only and the untracked SBOM is reproducible. |
 | PR #75 | Add CI/source-tree payload checksum verification. | Exact committed-tree bytes and executable modes match reviewed entries; changes require a manifest diff; this is not end-user runtime tamper protection, and installer/runtime behavior remains unchanged. |
-| PR #76 | Add sanitized support-bundle provenance output. | A bundle can report bounded component, selection, provenance, and checksum status without arbitrary file reads or secret disclosure. |
+| PR #76 | Add sanitized support-bundle provenance output. | Authenticated bundles include `vr-hotspot/vendor_provenance.json` with bounded manifest fields, honest unknown/unverified provenance, and present/missing/unreadable plus match/mismatch/not-checked local status; collection does not read arbitrary paths, include payload bytes, or enforce the result. |
 | PR #77 | Write the Flatpak architecture plan. | The UI/control-app boundary, daemon API, host installation/update ownership, and trust/update story are explicit before packaging starts. |
 | PR #81+ | Begin Steam Frame / VR Direct Link evidence and adapter-intelligence work only after explicit approval. | Research starts from lawful, user-provided or public evidence and derived metadata, not redistributed drivers or automatic depot downloads. |
 
@@ -269,10 +284,9 @@ installer checksum enforcement remain absent.
 
 ### Support output and enforcement gate
 
-- The support bundle can report manifest/schema version, relative component
-  path or ID, declared source/version/license status, selected/not-selected
-  state where known, and checksum state such as `match`, `mismatch`, `missing`,
-  or `unreadable`.
+- The support bundle reports manifest/schema version, relative component path,
+  declared source/version/license and provenance status, and checksum state
+  such as `match`, `mismatch`, `missing`, or `unreadable`.
 - Support collection reads only allowlisted manifest paths, does not follow
   arbitrary symlinks, does not include payload bytes, and applies the existing
   redaction policy before archive creation.

@@ -1,4 +1,5 @@
 import copy
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -41,6 +42,10 @@ from vr_hotspotd.diagnostics.support_bundle import (
     assemble_support_bundle,
     file_collection_result,
     redact_support_bundle_data,
+)
+from vr_hotspotd.diagnostics.vendor_provenance import (
+    collect_vendor_provenance,
+    unavailable_vendor_provenance_report,
 )
 from vr_hotspotd import __version__
 from vr_hotspotd import telemetry
@@ -988,6 +993,7 @@ class APIHandler(BaseHTTPRequestHandler):
         )
 
     def _build_support_bundle(self):
+        generated_at = datetime.now(timezone.utc)
         files = [
             self._support_bundle_json_file(
                 "vr-hotspot/version.json",
@@ -1065,8 +1071,29 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
             )
 
+        try:
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/vendor_provenance.json",
+                    "vendor provenance",
+                    collect_vendor_provenance(generated_at=generated_at),
+                )
+            )
+        except Exception:
+            warnings.append("vendor_provenance_unavailable")
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/vendor_provenance.json",
+                    "vendor provenance",
+                    unavailable_vendor_provenance_report(generated_at=generated_at),
+                    status=CollectorStatus.FAILED,
+                    error_summary="vendor provenance unavailable",
+                )
+            )
+
         return assemble_support_bundle(
             files=files,
+            generated_at=generated_at,
             vr_hotspot_version=APP_VERSION,
             warnings=warnings,
         )

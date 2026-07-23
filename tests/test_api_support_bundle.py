@@ -1,3 +1,4 @@
+from datetime import timezone
 import io
 import json
 import zipfile
@@ -75,6 +76,47 @@ def _stub_bundle_sources(monkeypatch):
             "secret": "raw-readiness-secret",
         },
     )
+    monkeypatch.setattr(
+        api,
+        "collect_vendor_provenance",
+        lambda **kwargs: {
+            "report_schema_version": 1,
+            "generated_at": kwargs["generated_at"]
+            .astimezone(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "manifest_status": "present",
+            "manifest_schema_version": "1.0.0",
+            "manifest_path": "backend/vendor/VENDOR_MANIFEST.json",
+            "policy_doc_path": "docs/VENDOR_PROVENANCE_SBOM_PLAN.md",
+            "enforcement_boundary": "reporting_only",
+            "total_manifest_entries": 1,
+            "entries": [
+                {
+                    "path": "backend/vendor/bin/example",
+                    "file_type": "test_payload",
+                    "executable": True,
+                    "purpose": "support diagnostics",
+                    "source_project": "test-project",
+                    "version": None,
+                    "license": "unknown",
+                    "provenance_status": "unknown",
+                    "sha256": "1" * 64,
+                    "local_file_status": "present",
+                    "checksum_status": "hash_match",
+                    "local_computed_sha256": "1" * 64,
+                }
+            ],
+            "summary": {
+                "present": 1,
+                "missing": 0,
+                "unreadable": 0,
+                "hash_match": 1,
+                "hash_mismatch": 0,
+                "not_checked": 0,
+            },
+        },
+    )
 
 
 def test_support_bundle_requires_auth(monkeypatch):
@@ -103,7 +145,17 @@ def test_support_bundle_returns_zip_headers_and_required_members(monkeypatch):
     assert headers["content-disposition"].endswith(".zip\"")
     assert "manifest.json" in members
     assert "README.txt" in members
-    assert json.loads(members["manifest.json"].decode("utf-8"))
+    bundle_manifest = json.loads(members["manifest.json"].decode("utf-8"))
+    vendor_provenance = json.loads(
+        members["vr-hotspot/vendor_provenance.json"].decode("utf-8")
+    )
+    assert any(
+        item["path"] == "vr-hotspot/vendor_provenance.json"
+        for item in bundle_manifest["files"]
+    )
+    assert vendor_provenance["generated_at"] == bundle_manifest["generated_at"]
+    assert vendor_provenance["enforcement_boundary"] == "reporting_only"
+    assert vendor_provenance["entries"][0]["checksum_status"] == "hash_match"
 
 
 def test_support_bundle_archive_does_not_leak_raw_tokens_or_passphrases(monkeypatch):
@@ -124,3 +176,30 @@ def test_support_bundle_archive_does_not_leak_raw_tokens_or_passphrases(monkeypa
     assert b"raw-config-passphrase" not in all_member_bytes
     assert b"raw-adapter-token" not in all_member_bytes
     assert b"raw-readiness-secret" not in all_member_bytes
+
+
+def test_support_bundle_reports_vendor_collector_failure_without_failing_bundle(
+    monkeypatch,
+):
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
+    _stub_bundle_sources(monkeypatch)
+    monkeypatch.setattr(
+        api,
+        "collect_vendor_provenance",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("collector failed")),
+    )
+
+    handler = _make_handler()
+    handler.headers["X-Api-Token"] = "secret"
+    handler.do_GET()
+
+    members = _zip_members(handler)
+    bundle_manifest = json.loads(members["manifest.json"].decode("utf-8"))
+    vendor_provenance = json.loads(
+        members["vr-hotspot/vendor_provenance.json"].decode("utf-8")
+    )
+
+    assert handler._last_code == 200
+    assert "vendor_provenance_unavailable" in bundle_manifest["warnings"]
+    assert vendor_provenance["manifest_status"] == "unreadable"
+    assert vendor_provenance["enforcement_boundary"] == "reporting_only"

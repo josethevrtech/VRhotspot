@@ -76,6 +76,11 @@ def test_manifest_includes_file_metadata_and_archive_layout_metadata():
         "collector": "iw dev",
         "content_type": "text/plain",
     } in layout
+    assert {
+        "path": "vr-hotspot/vendor_provenance.json",
+        "collector": "vendor provenance",
+        "content_type": "application/json",
+    } in layout
 
 
 def test_manifest_records_missing_command():
