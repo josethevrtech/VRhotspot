@@ -1,25 +1,29 @@
 # Flatpak control app architecture plan
 
-Status: PR #91 Flatpak system-tray control surface and desktop identity; PRs #77-#90 retained
+Status: PR #92 Web Portal-only Flatpak graphical UI; PRs #77-#91 retained
 
 Date: 2026-07-24
 
 This document defines the boundary for the VRhotspot Flatpak control
-application. PR #91 adds a functional Plasma-compatible system-tray control
-surface, close-to-tray lifecycle, current hotspot status, narrowly scoped
-daemon controls, explicit authentication UI, optional Secret Service storage,
-and cyan/black desktop identity. PR #90's fixed, bounded WebKit display zoom
-and PR #88's origin-locked Web Portal shell remain unchanged. The browser
-`/ui` route continues to use the shared assets at normal browser scale. The
-native GTK dashboard remains the default window and fallback; switching the
-default to the Web Portal shell is separately reviewed future work.
+application. PR #92 makes the origin-locked, daemon-served Web Portal the only
+Flatpak graphical UI. Normal launch, tray primary activation, and
+**Show VR Hotspot** all open or restore one locked WebKitGTK window;
+**Hide VR Hotspot** and close-to-tray hide that same window. The pre-PR #92 GTK
+content implementation, its token-entry flow, and every launch or failure path
+that could reach it have been removed from active code. GTK remains only for
+the WebKit host window, tray integration, the explicit authentication dialog,
+bounded error surfaces, and small desktop utility dialogs.
 
-The shell retains PR #86's installed GTK `PasswordEntry` compatibility fix,
-PR #82's native in-memory first-run token entry, PR #83's explicit terminal-only
-live daemon pairing smoke path, and PR #84's optional installer prompt. PR #91
-does not inject a token into WebKit, change the shared Web Portal assets, add
-direct host command execution, add host filesystem access, or move privileged
-network ownership out of the daemon.
+PR #90's fixed 1.75x WebKit display zoom and PR #88's exact loopback origin,
+navigation lock, CSP, and ephemeral session remain unchanged. If WebKit is
+unavailable or construction fails, the host window shows fixed bounded error
+copy; it never opens another graphical surface. The browser `/ui` route
+continues to use the shared assets at normal browser scale.
+
+PR #83's explicit terminal-only live daemon pairing smoke path and PR #84's
+optional installer prompt remain. PR #92 does not inject a token into WebKit,
+change the shared Web Portal assets, add direct host command execution, add host
+filesystem access, or move privileged network ownership out of the daemon.
 
 ## Architectural decision
 
@@ -313,24 +317,25 @@ require separate review.
 
 ## PR #82 first-run/token entry UI prototype
 
-PR #82 adds one intentional credential input to the GTK shell: a hidden
-password-style entry and a `Connect / Validate token` button. The button gives
-the caller-provided text to a shell-level `FirstRunTokenEntryController`, which
-uses the existing `TokenPairingController` and its loopback-only
-`LocalApiClient` factory. When pairing succeeds, a short-lived client is passed
-to the existing `DiagnosticsControlUiController` to build the display model.
-There is no network call outside `LocalApiClient`.
+Historical record: PR #82 added a hidden password-style entry and a
+`Connect / Validate token` action to the then-current GTK content surface.
+PR #92 deleted that graphical credential flow and its shell controller
+together with the retired surface. The terminal-only live smoke still uses the
+existing `TokenPairingController`, loopback-only `LocalApiClient`, and
+`DiagnosticsControlUiController`; there is no network call outside
+`LocalApiClient`.
 
-The entered token exists only in process memory for the current validation and
-model-build call. The GTK entry is cleared as soon as the click is handled, the
-shell controller has no token field, and the temporary token-bearing client is
-discarded after the model is built. The token is not written, logged, placed in
-a process argument, copied into the model, or included in smoke JSON,
-representations, exceptions, diagnostics, or window labels. This prototype
-does not discover tokens from environment variables, files, keyrings, portals,
-daemon configuration, `/etc`, `/var/lib`, or any other host location.
+The live smoke token exists only in process memory for its current validation
+and model-build call, and its temporary token-bearing client is discarded
+afterward. The tray Authentication dialog accepts explicit user entry and can
+retain it only in memory or, by explicit choice, in Secret Service. Tokens are
+not written to plaintext, logged, placed in process arguments, copied into
+models, or included in smoke JSON, representations, exceptions, diagnostics,
+URLs, or window labels. The companion does not discover tokens from environment
+variables, daemon configuration, `/etc`, `/var/lib`, or any other host
+location.
 
-The GTK shell renders only the existing bounded display models:
+The historical GTK surface rendered only the existing bounded display models:
 
 - daemon status and safe reachability state;
 - pairing accepted, rejected, unavailable, missing-daemon-token, or unknown
@@ -463,8 +468,11 @@ does not read daemon credentials from environment variables, files, keyrings,
 portals, daemon configuration, `/etc`, `/var/lib`, or another filesystem
 location. Known daemon-token environment variable names are removed from the
 builder process environment without inspecting their values. After install, the
-user pairs manually by entering the existing daemon token in the companion's
-hidden field; the existing in-memory-only handling remains unchanged.
+Web Portal shell is the Flatpak graphical UI. The retired GTK content surface
+remains absent; GTK provides only WebKit, tray, explicit authentication,
+bounded-error, and small utility UI infrastructure. Tray controls require a
+daemon token explicitly entered for the session or explicitly saved through
+Secret Service. The companion never discovers a token from `/etc` or `/var/lib`.
 
 Daemon uninstallers do not automatically remove the user-owned companion or any
 Flatpak remote. A user may separately remove only this app with:
@@ -473,16 +481,19 @@ Flatpak remote. A user may separately remove only this app with:
 flatpak uninstall --user io.github.josethevrtech.VRhotspot
 ```
 
-Token persistence/keyring storage, lifecycle/configuration controls,
-support-bundle portal export, Flathub production polish, Steam Frame, VR Direct
-Link, and adapter-registry work remain separately reviewed future work.
+PR #91 provides the tray lifecycle/configuration controls and optional Secret
+Service wallet storage. Missing or rejected credentials produce `Needs
+Authentication`, distinct from unexpected `Error` failures. Support-bundle
+portal export, Flathub production polish, Steam Frame, VR Direct Link, and
+adapter-registry work remain separately reviewed future work.
 
-## PR #85 native dashboard foundation
+## PR #85 retired GTK read-only surface (historical)
 
-PR #85 replaces the GTK window's linear placeholder presentation with a native
-GTK 4 read-only dashboard. The existing hidden token entry remains the only
-graphical credential source. After the daemon accepts the caller-entered token,
-the app renders the already-sanitized `DiagnosticsControlUiModel` as a clear
+Historical record only: PR #92 deleted all implementation and tests described
+in PRs #85-#87. PR #85 had replaced the GTK window's linear placeholder with a
+GTK 4 read-only card surface. Its hidden token entry was the only graphical
+credential source at that time. After the daemon accepted caller-entered text,
+the app rendered the already-sanitized `DiagnosticsControlUiModel` as a
 two-column card layout containing:
 
 - daemon status;
@@ -523,7 +534,7 @@ not expanded.
 
 PR #86 preserves PR #85's behavior while making placeholder setup compatible
 with the GTK 4 `PasswordEntry` binding shipped by the installed GNOME runtime.
-The native shell prefers the direct placeholder setter when available and
+The historical GTK surface preferred the direct placeholder setter when available and
 falls back to the supported GObject property API. If neither form is available,
 the optional placeholder is skipped instead of crashing activation.
 
@@ -532,10 +543,10 @@ intentional, and the entry is still cleared before validation. The hotfix adds
 no token source, retention, storage, logging, model field, daemon call,
 permission, or mutation control.
 
-## PR #87 native dashboard Web Portal parity pass
+## PR #87 retired GTK surface parity pass (historical)
 
 PR #87 uses the existing Web Portal only as a design and product reference for
-the native GTK dashboard. It adopts the Portal's safe hierarchy and terminology
+the retired GTK card surface. It adopted the Portal's safe hierarchy and terminology
 where they describe the same daemon-provided read-only information:
 
 - a clearer application header and connection/pairing area;
@@ -551,7 +562,7 @@ Every `ok`, `warning`, `blocked`, `error`, and `unknown` state is rendered with
 a consistent uppercase severity badge. Paired state and the daemon-recommended
 adapter receive separate, visible emphasis. Disabled sections use honest
 unavailable copy and insensitive widgets rather than appearing broken. The
-layout remains scrollable and uses native GTK frames, boxes, grids, labels,
+layout remains scrollable and uses GTK frames, boxes, grids, labels,
 buttons, and one small bounded GTK stylesheet for spacing, badge shape, and
 card emphasis.
 
@@ -605,15 +616,14 @@ JavaScript, WebKit user script, Local Storage, Session Storage, cookie, model,
 exception, representation, or smoke JSON. It does not read a daemon token from
 the environment, daemon configuration, files, keyrings, portals, `/etc`,
 `/var/lib`, or another filesystem location. Token entry, validation, and use
-remain the existing Web Portal's behavior. The native dashboard's separate
-manual-entry path remains unchanged.
+remain the existing Web Portal's behavior. PR #92 removed the separate GTK
+manual-entry path.
 
 If the `WebKit` 6.0 namespace or required ephemeral-session API is unavailable,
-the explicit spike mode launches the retained native GTK dashboard. If WebKit
-construction fails during activation, that window is also populated with the
-native dashboard instead of crashing. If the fixed local Portal load fails, the
-shell displays a bounded token-free local-daemon error with a retry button that
-reloads only the same fixed URL.
+or WebKit construction fails during activation, PR #92 populates the host
+window with fixed bounded GTK error copy and no alternate interface. If the
+fixed local Portal load fails, the shell displays a bounded token-free
+local-daemon error with a retry button that reloads only the same fixed URL.
 
 The manifest continues to use only its existing network, IPC, Wayland, and
 fallback X11 finish arguments. WebKitGTK is supplied by the selected GNOME 50
@@ -649,12 +659,11 @@ no JavaScript, downloaded dependency, control-semantic change, or API change.
 In particular, the Basic-mode USB Wi-Fi Adapter select remains the same
 `ap_adapter` control and continues through the existing portal behavior.
 
-PR #89 does not change the Flatpak entry point, WebView construction, exact
-origin/navigation policy, Content Security Policy, token behavior, native GTK
-dashboard or fallback, manifest permissions, daemon behavior, or installer.
-`--web-portal-shell` remains explicit and opt-in. A default UI switch and any
-additional WebKit hardening review and prerequisites for that switch remain
-separately approved future work.
+PR #89 did not change the Flatpak entry point, WebView construction, exact
+origin/navigation policy, Content Security Policy, token behavior, then-current
+GTK surface, manifest permissions, daemon behavior, or installer. PR #92 later
+made the locked Web Portal shell the default while preserving those WebKit
+security boundaries.
 
 ## PR #90 Flatpak Web Portal shell display scaling/density polish
 
@@ -664,28 +673,29 @@ CLI, URL, query string, configuration, or environment. A 1.75x value provides a
 substantial desktop-app density increase in the 1200x900 shell without reducing
 the effective viewport as aggressively as 2.0x.
 
-The scaling is a WebKit presentation property on the opt-in
+The scaling is a WebKit presentation property on the Flatpak
 `--web-portal-shell` WebView. The browser Portal remains backed by the same
 shared visual assets but is not forced into the Flatpak shell scale. PR #90
 does not change shared CSS, Web UI JavaScript, daemon-served routes, or browser
 behavior.
 
 The exact local daemon URL pinning, external and new-window navigation blocking,
-ephemeral WebKit network session, token boundaries, manifest permissions, and
-native GTK default/fallback remain unchanged. Switching the default UI and the
-additional WebKit hardening and prerequisite review for such a switch remain
-separately approved future work.
+ephemeral WebKit network session, token boundaries, and manifest permissions
+remain unchanged in PR #92. The 1.75x scale now applies to the only Flatpak
+graphical shell.
 
 ## PR #91 system-tray control surface and desktop identity
 
 PR #91 makes the optional Flatpak companion a persistent desktop utility while
 keeping `vr-hotspotd` as the sole privileged host-mutation boundary. An explicit
-`--tray` launch mode owns a StatusNotifierItem and DBusMenu, shows the native GTK
-dashboard initially, restores it on primary tray activation, and hides it when
-the user closes the window. `Quit VR Hotspot` exits only the companion; it does
-not issue a hotspot stop request. If the tray backend cannot register, the
-normal native application still opens and closes normally instead of crashing
-or becoming hidden without a reachable tray icon.
+`--tray` launch mode owns a StatusNotifierItem and DBusMenu. PR #92 changes its
+lifecycle-owned window to the locked Web Portal shell: it is shown initially,
+restored on primary tray activation or **Show VR Hotspot**, and hidden by
+**Hide VR Hotspot** or close-to-tray. Repeated activation reuses the same
+window. `Quit VR Hotspot` exits only the companion; it does not issue a hotspot
+stop request. If the tray backend cannot register, the Web Portal window still
+opens and closes normally instead of crashing or becoming hidden without a
+reachable tray icon.
 
 The GNOME 50 runtime provides Gio/GDBus and libsecret but does not provide an
 AppIndicator/Ayatana binding. The tray therefore implements the standard
@@ -754,11 +764,24 @@ command permission. The app retains ordinary `--share=network` only for its
 fixed authenticated loopback API origin. Notifications contain fixed bounded
 operation summaries and never include credentials or raw daemon errors.
 
-`--smoke-json`, `--live-pairing-smoke-json`, and the opt-in
-`--web-portal-shell` remain compatible. The Web Portal shell retains its 1.75x
-zoom, ephemeral session, exact loopback origin, CSP, and navigation lock.
-Native GTK remains the default/fallback outside explicit tray mode. A future
-default Web Portal switch remains a separate review.
+`--smoke-json`, `--live-pairing-smoke-json`, and
+`--web-portal-shell` remain compatible. The last is now an alias for the
+default graphical behavior. The Web Portal shell retains its 1.75x zoom,
+ephemeral session, exact loopback origin, CSP, and navigation lock.
+
+Tray status distinguishes `Running`, `Stopped`, `Transitioning`,
+`Needs Authentication`, `Daemon Unavailable`, and `Error`. Missing, rejected,
+or daemon-missing credentials map to `Needs Authentication`; connection
+failure maps to `Daemon Unavailable`; only unexpected or malformed failures
+map to `Error`. Authentication remains enabled while credentials are needed.
+Start, Stop, Restart, and Repair require an authenticated state, and saving or
+testing an explicitly entered token triggers a status refresh.
+
+The exported menu uses deterministic separator-delimited sections in this
+order: Window (Show, Hide), Status (current status, refresh), Hotspot Controls
+(Start, Stop, Restart, Repair), Settings (internet sharing, privacy, hotspot
+autostart), Authentication, Tools (Diagnostics), and Quit. There is no second
+menu action for opening the already-default graphical shell.
 
 ## Sandbox and portal expectations
 
@@ -850,13 +873,14 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | PR #82 | First-run/token entry UI prototype. Add a hidden GTK token entry, an explicit validation action, and shell-level orchestration through the existing local client, pairing controller, and diagnostics UI controller. Keep tokens in memory only, keep GTK optional for tests, and add no persistence, mutation, portal, daemon, installer, or permission behavior. | Offline tests cover accepted, rejected, unreachable, missing-daemon-token, and malformed outcomes; safe display model updates; token non-disclosure/non-persistence; unchanged smoke behavior; static Flatpak packaging; and the absence of discovery or mutation controls. |
 | PR #83 | Live daemon pairing smoke path. Add an explicit terminal-only installed-Flatpak command with strict hidden manual token entry and bounded sanitized JSON assembled through the existing pairing, local-client, and diagnostics UI boundaries. Add no token argument or discovery/storage path, mutation control, daemon/installer behavior, or permission. | Offline tests cover TTY and hidden-input refusal, success, token rejection, daemon unreachability, missing daemon token, malformed data, output bounds and redaction, unchanged offline/GUI behavior, and the absence of discovery or mutation controls. A real-daemon run of the documented command is required before live pairing is claimed. |
 | PR #84 | Optional installer companion prompt. Add a default-No guided choice and an explicit `--install-flatpak-companion` unattended opt-in for a best-effort user-scoped local build/install. Add no remote configuration, token transfer/storage, smoke execution, daemon/runtime behavior, uninstaller mutation, or permission change. | Deterministic installer tests cover guided No/Yes, unattended default/opt-in, missing tools, bounded build failure, cleanup, credential-environment scrubbing, unchanged manifest permissions, and non-destructive uninstall boundaries. Existing Flatpak tests and real packaging validation remain required. |
-| PR #85 | Native dashboard foundation. Replace the linear GTK placeholder presentation with a two-column read-only dashboard that renders the existing safe daemon, pairing, adapter-readiness, preflight, disabled support-bundle, and empty controls models after pairing. Add no refresh, token retention/storage, mutation control, portal behavior, direct networking, or permission. | Deterministic tests prove all six cards render, token input clears before validation, adapter and preflight detail remains bounded and sanitized, rejected/unreachable/malformed states remain safe, support export stays disabled, mutation actions stay empty, GTK remains optional, both smoke commands remain compatible, and the manifest permissions remain unchanged. |
-| PR #86 | Installed GTK PasswordEntry compatibility hotfix. Preserve the hidden password-style field while supporting both the direct placeholder setter and the GTK property API, and safely omit the optional placeholder when neither is available. Add no token, client, model, permission, or control behavior. | Deterministic activation and helper tests cover the installed binding shape, direct setter, supported fallback property, and unsupported-property no-op without weakening token clearing or lazy GTK loading. |
-| PR #87 | Native dashboard Web Portal parity pass. Use the Portal as a design/product reference to improve the native GTK header, connection/pairing hierarchy, readiness summary, recommended-adapter emphasis, preflight facts/issues/actions, severity badges, and honest unavailable sections. Do not embed the Portal, add a WebView or frontend runtime, retain tokens, add actions/export, change Web UI or daemon behavior, or expand permissions. | Deterministic model/view tests prove parity labels, all five severity badges, paired and recommended emphasis, disabled support export, empty controls, absent lifecycle/configuration buttons, hidden/cleared token entry, placeholder compatibility, lazy GTK, token-free smoke contracts, redaction, and unchanged manifest permissions. |
-| PR #88 | Locked Web Portal shell spike. Add an explicit WebKitGTK 6.0 mode that loads only the daemon-served `http://127.0.0.1:8732/ui` Portal in an ephemeral, origin-locked WebView. Keep the native dashboard as default and fallback. Add no copied frontend, arbitrary URL, token injection/discovery/persistence, Web UI or daemon behavior, installer behavior, or permission. | Deterministic tests pin the route and exact origin, deny external and new-window navigation, prove ephemeral/no-injection construction and bounded load failure, exercise WebKit-unavailable and construction fallback, preserve both smoke contracts and native token-entry compatibility, and verify unchanged manifest permissions. Real packaging and manual shell validation remain required. |
-| PR #89 | Web Portal shell layout and theme polish. Improve the shared Portal CSS so Basic mode uses wide, medium, and narrow windows effectively and WebKitGTK renders select/input controls with readable dark, focused, and disabled states. Preserve Pro behavior, WebView security, opt-in launch, native fallback, tokens, APIs, runtime, installer, vendor files, and permissions. | Deterministic asset tests prove flexible Basic card/container rules, wide and narrow breakpoints, dark native-form overrides, focus/disabled contrast, retained Basic/Pro selectors and USB adapter control; the #88 shell/security/token/manifest tests remain green; browser `/ui` and the Flatpak shell consume the same daemon-served assets. |
-| PR #90 | Flatpak Web Portal shell display scaling/density polish. Apply a fixed, bounded 1.75x WebKit zoom only to the opt-in locked shell. Preserve the normal-scale browser Portal, shared assets, exact origin and navigation lock, ephemeral session, token boundaries, native default/fallback, daemon/runtime/installer behavior, vendor files, and permissions. | Deterministic shell tests prove the fixed zoom and clamp, absence of user-controlled zoom inputs, unchanged shared-CSS scaling, retained opt-in/default/fallback behavior, and the existing navigation, token, smoke, and manifest boundaries. Real packaging and manual shell/browser validation remain required. |
-| PR #91 | Flatpak system-tray control surface and desktop identity (current phase). Add a Plasma-compatible StatusNotifierItem/DBusMenu backend, close-to-tray lifecycle, typed live-state model, fixed lifecycle/config controls, existing hotspot boot-autostart control, explicit Secret Service authentication UI, and cyan/black icon variants. | Deterministic tests prove complete menu/state mapping, serialized authenticated mutations, refresh-after-success, canonical `enable_internet` and hotspot-autostart behavior, companion-only quit, safe wallet fallback and token handling, optional desktop imports, retained shell/native/smoke contracts, narrow D-Bus grants, and installed icon identity. Real packaging and manual tray validation remain required. |
+| PR #85 | Historical GTK read-only card surface, removed by PR #92. | Historical tests covered bounded rendering and secret-safe explicit entry; PR #92 deletes that implementation and those view tests. |
+| PR #86 | Historical installed `PasswordEntry` compatibility hotfix, removed by PR #92. | The password field and compatibility helper no longer exist in active shell code. |
+| PR #87 | Historical GTK/Web Portal visual-parity pass, removed by PR #92. | The removed surface no longer competes with the daemon-served Portal. |
+| PR #88 | Locked Web Portal shell spike. Add an explicit WebKitGTK 6.0 mode loading only `http://127.0.0.1:8732/ui` through an ephemeral, origin-locked WebView. | Deterministic tests pin the exact origin, deny external/new-window navigation, prove ephemeral construction and no injection, and retain bounded load-failure handling. |
+| PR #89 | Web Portal shell layout and theme polish. Improve shared Portal CSS across viewport sizes and WebKitGTK form controls. | Asset tests prove responsive layout, dark control states, retained Basic/Pro behavior, and one daemon-served asset source for browser and Flatpak. |
+| PR #90 | Flatpak Web Portal shell scaling/density polish. Apply fixed bounded 1.75x WebKit zoom to the locked shell. | Tests prove fixed zoom/clamping, no user-controlled scale, normal browser scale, and unchanged origin/session/token boundaries. |
+| PR #91 | Flatpak system-tray control surface and desktop identity. Add StatusNotifierItem/DBusMenu, close-to-tray, typed live state, fixed controls, explicit Secret Service authentication, and cyan/black icons. | Tests prove complete menu/state mapping, serialized mutations, refresh-after-success, companion-only quit, safe wallet behavior, narrow D-Bus grants, and installed icon identity. |
+| PR #92 | Web Portal-only Flatpak graphical UI. Delete the retired GTK content surface and all routes/tests supporting it; make default and tray window behavior use one locked Web Portal shell; classify authentication and daemon availability separately; organize the tray menu. | Tests prove default/alias/tray activation, show/hide/close and single-window behavior, bounded WebKit errors with no alternate surface, retained origin/CSP/session/zoom locks, six status classes, explicit-auth refresh, deterministic menu sections, no credential leakage, unchanged permissions, and zero forbidden active references. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
 Each phase is independently reviewable. A later phase is not authorized merely
@@ -937,10 +961,10 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #91
+## Explicit non-goals for PR #92
 
-- No default Web Portal UI switch or native-dashboard removal. The locked
-  WebView remains explicit and opt-in; native GTK remains the default/fallback.
+- No second graphical shell, alternate failure UI, legacy launch route, or
+  development-only route for the removed GTK content surface.
 - No Web UI JavaScript, CSS, route, CSP, origin, navigation, token, or session
   behavior change.
 - No arbitrary URL argument, address bar, external/new-window navigation,
@@ -962,8 +986,10 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No Steam Frame, VR Direct Link, known-adapter registry, or
   HostFactsSnapshot work.
 
-PR #91 authorizes only the tray lifecycle/control/authentication surface, its
-fixed autostart API, narrowly scoped session-bus grants, cyan/black desktop
-identity, deterministic tests, and documentation above. A real daemon pairing
-or live lifecycle result is claimed only when exercised with an explicitly
-entered credential; no credential is printed or exported in validation.
+PR #92 authorizes only deletion of the retired GTK content surface, the default
+and tray-window Web Portal cutover, status classification correction, menu
+organization, deterministic tests, and documentation above. It does not change
+the fixed autostart API, session-bus grants, desktop identity, or permissions.
+A real daemon pairing or live lifecycle result is claimed only when exercised
+with an explicitly entered credential; no credential is printed or exported in
+validation.

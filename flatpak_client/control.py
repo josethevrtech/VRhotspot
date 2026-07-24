@@ -21,6 +21,8 @@ class TrayStatus(str, Enum):
     RUNNING = "running"
     STOPPED = "stopped"
     TRANSITIONING = "transitioning"
+    NEEDS_AUTHENTICATION = "needs_authentication"
+    DAEMON_UNAVAILABLE = "daemon_unavailable"
     ERROR = "error"
 
 
@@ -28,8 +30,8 @@ class TrayStatus(str, Enum):
 class TrayState:
     """Bounded, token-free state consumed by any tray backend."""
 
-    status: TrayStatus = TrayStatus.ERROR
-    status_label: str = "Error"
+    status: TrayStatus = TrayStatus.NEEDS_AUTHENTICATION
+    status_label: str = "Needs Authentication"
     phase: str = "unknown"
     running: bool = False
     daemon_available: bool = False
@@ -90,19 +92,27 @@ class TrayControlController:
             self._state = state
             return state
 
-    def _error_state(
+    def _classified_failure_state(
         self,
         *,
+        status: TrayStatus,
         message: str,
         detail_code: str,
         daemon_available: bool,
         authenticated: bool = False,
     ) -> TrayState:
+        labels = {
+            TrayStatus.NEEDS_AUTHENTICATION: "Needs Authentication",
+            TrayStatus.DAEMON_UNAVAILABLE: "Daemon Unavailable",
+            TrayStatus.ERROR: "Error",
+        }
+        if status not in labels:
+            status = TrayStatus.ERROR
         current = self.state
         return TrayState(
-            status=TrayStatus.ERROR,
-            status_label="Error",
-            phase="error",
+            status=status,
+            status_label=labels[status],
+            phase=status.value,
             daemon_available=daemon_available,
             authenticated=authenticated,
             privacy_mode=current.privacy_mode,
@@ -114,10 +124,7 @@ class TrayControlController:
         token = self._token_provider.token_for_operation()
         if not token:
             return None
-        try:
-            return self._client_factory(token=token)
-        except Exception:
-            return None
+        return self._client_factory(token=token)
 
     def _state_from_responses(
         self,
@@ -182,31 +189,36 @@ class TrayControlController:
                 raise TypeError
             return self._state_from_responses(status_response, config_response)
         except AuthenticationError:
-            return self._error_state(
+            return self._classified_failure_state(
+                status=TrayStatus.NEEDS_AUTHENTICATION,
                 message="Authentication was rejected.",
                 detail_code="authentication_rejected",
                 daemon_available=True,
             )
         except DaemonTokenMissingError:
-            return self._error_state(
+            return self._classified_failure_state(
+                status=TrayStatus.NEEDS_AUTHENTICATION,
                 message="The daemon has no configured API token.",
                 detail_code="daemon_token_missing",
                 daemon_available=True,
             )
         except ConnectionFailure:
-            return self._error_state(
+            return self._classified_failure_state(
+                status=TrayStatus.DAEMON_UNAVAILABLE,
                 message="The local daemon is unavailable.",
                 detail_code="daemon_unavailable",
                 daemon_available=False,
             )
         except (LocalApiClientError, TypeError):
-            return self._error_state(
+            return self._classified_failure_state(
+                status=TrayStatus.ERROR,
                 message="The daemon returned an unsupported response.",
                 detail_code="invalid_response",
                 daemon_available=True,
             )
         except Exception:
-            return self._error_state(
+            return self._classified_failure_state(
+                status=TrayStatus.ERROR,
                 message="The tray operation failed safely.",
                 detail_code="operation_failed",
                 daemon_available=False,
@@ -216,10 +228,30 @@ class TrayControlController:
         if not self._operation_lock.acquire(blocking=False):
             return self.state
         try:
-            client = self._client()
+            try:
+                client = self._client()
+            except LocalApiClientError:
+                return self._set_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.NEEDS_AUTHENTICATION,
+                        message="Enter a valid daemon API token in Authentication.",
+                        detail_code="token_invalid",
+                        daemon_available=False,
+                    )
+                )
+            except Exception:
+                return self._set_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.ERROR,
+                        message="The tray operation failed safely.",
+                        detail_code="operation_failed",
+                        daemon_available=False,
+                    )
+                )
             if client is None:
                 return self._set_state(
-                    self._error_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.NEEDS_AUTHENTICATION,
                         message="Enter the daemon API token in Authentication.",
                         detail_code="token_missing",
                         daemon_available=False,
@@ -261,10 +293,44 @@ class TrayControlController:
 
         self._set_state(self._working_state(action))
         try:
-            client = self._client()
+            try:
+                client = self._client()
+            except LocalApiClientError:
+                state = self._set_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.NEEDS_AUTHENTICATION,
+                        message="Enter a valid daemon API token in Authentication.",
+                        detail_code="token_invalid",
+                        daemon_available=False,
+                    )
+                )
+                return ActionOutcome(
+                    accepted=True,
+                    succeeded=False,
+                    code="token_invalid",
+                    message=state.message,
+                    state=state,
+                )
+            except Exception:
+                state = self._set_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.ERROR,
+                        message="The requested operation failed.",
+                        detail_code="operation_failed",
+                        daemon_available=False,
+                    )
+                )
+                return ActionOutcome(
+                    accepted=True,
+                    succeeded=False,
+                    code="operation_failed",
+                    message=state.message,
+                    state=state,
+                )
             if client is None:
                 state = self._set_state(
-                    self._error_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.NEEDS_AUTHENTICATION,
                         message="Enter the daemon API token in Authentication.",
                         detail_code="token_missing",
                         daemon_available=False,
@@ -305,7 +371,8 @@ class TrayControlController:
                     response = call()
             except AuthenticationError:
                 state = self._set_state(
-                    self._error_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.NEEDS_AUTHENTICATION,
                         message="Authentication was rejected.",
                         detail_code="authentication_rejected",
                         daemon_available=True,
@@ -320,7 +387,8 @@ class TrayControlController:
                 )
             except DaemonTokenMissingError:
                 state = self._set_state(
-                    self._error_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.NEEDS_AUTHENTICATION,
                         message="The daemon has no configured API token.",
                         detail_code="daemon_token_missing",
                         daemon_available=True,
@@ -335,7 +403,8 @@ class TrayControlController:
                 )
             except ConnectionFailure:
                 state = self._set_state(
-                    self._error_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.DAEMON_UNAVAILABLE,
                         message="The local daemon is unavailable.",
                         detail_code="daemon_unavailable",
                         daemon_available=False,
@@ -350,7 +419,8 @@ class TrayControlController:
                 )
             except Exception:
                 state = self._set_state(
-                    self._error_state(
+                    self._classified_failure_state(
+                        status=TrayStatus.ERROR,
                         message="The requested operation failed.",
                         detail_code="operation_failed",
                         daemon_available=True,
