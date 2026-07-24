@@ -36,6 +36,15 @@ from vr_hotspotd.lifecycle import (
 )
 from vr_hotspotd.engine.supervisor import get_tails
 from vr_hotspotd.diagnostics.clients import get_clients_snapshot
+from vr_hotspotd.diagnostics.devbridge import (
+    COMMAND_KIND_ALL,
+    COMMAND_KINDS,
+    collect_adb_command_report,
+    collect_devbridge_devices,
+    collect_devbridge_readiness,
+    collect_devbridge_status,
+    is_valid_ipv4,
+)
 from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator, validate_curl_url, validate_network_host
 from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
@@ -1079,6 +1088,26 @@ class APIHandler(BaseHTTPRequestHandler):
         try:
             files.append(
                 self._support_bundle_json_file(
+                    "vr-hotspot/devbridge.json",
+                    "vr hotspot dev bridge",
+                    collect_devbridge_status(),
+                )
+            )
+        except Exception as exc:
+            warnings.append("devbridge_unavailable")
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/devbridge.json",
+                    "vr hotspot dev bridge",
+                    {},
+                    status=CollectorStatus.FAILED,
+                    error_summary=f"dev bridge status unavailable: {exc}",
+                )
+            )
+
+        try:
+            files.append(
+                self._support_bundle_json_file(
                     "vr-hotspot/vendor_provenance.json",
                     "vendor provenance",
                     collect_vendor_provenance(generated_at=generated_at),
@@ -1328,6 +1357,63 @@ class APIHandler(BaseHTTPRequestHandler):
         if path == "/v1/diagnostics/preflight":
             report = collect_preflight_report(config=load_config_snapshot())
             self._respond(200, self._envelope(correlation_id=cid, data=report))
+            return
+
+        if path == "/v1/devbridge/status":
+            self._respond(
+                200,
+                self._envelope(correlation_id=cid, data=collect_devbridge_status()),
+            )
+            return
+
+        if path == "/v1/devbridge/devices":
+            probe = self._qbool(qs, "probe", True)
+            self._respond(
+                200,
+                self._envelope(
+                    correlation_id=cid,
+                    data=collect_devbridge_devices(probe_adb=probe),
+                ),
+            )
+            return
+
+        if path == "/v1/devbridge/adb":
+            ip_param = (qs.get("ip") or "").strip()
+            kind = (qs.get("kind") or COMMAND_KIND_ALL).strip().lower()
+            if kind not in COMMAND_KINDS:
+                self._respond(
+                    400,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code="invalid_request",
+                        warnings=["invalid_kind_parameter"],
+                        data={"allowed_kinds": list(COMMAND_KINDS)},
+                    ),
+                )
+                return
+            if ip_param and not is_valid_ipv4(ip_param):
+                self._respond(
+                    400,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code="invalid_request",
+                        warnings=["invalid_ip_parameter"],
+                    ),
+                )
+                return
+            report = collect_adb_command_report(ip=ip_param or None, kind=kind)
+            self._respond(200, self._envelope(correlation_id=cid, data=report))
+            return
+
+        if path == "/v1/devbridge/readiness":
+            probe = self._qbool(qs, "probe", True)
+            self._respond(
+                200,
+                self._envelope(
+                    correlation_id=cid,
+                    data=collect_devbridge_readiness(probe_adb=probe),
+                ),
+            )
             return
 
         if path == "/v1/diagnostics/support_bundle":
