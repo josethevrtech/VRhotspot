@@ -27,6 +27,7 @@ from flatpak_client import (
 
 APP_ID = "io.github.josethevrtech.VRhotspot"
 APP_NAME = "VR Hotspot"
+WINDOW_ICON_NAME = APP_ID
 WEB_PORTAL_ORIGIN = "http://127.0.0.1:8732"
 WEB_PORTAL_URL = f"{WEB_PORTAL_ORIGIN}/ui"
 WEBKIT_GI_NAMESPACE = "WebKit"
@@ -819,6 +820,13 @@ def _populate_new_portal_window(Gtk, window, *, auth_bridge=None) -> bool:
     )
 
 
+def _set_window_icon(Gtk, window) -> None:
+    """Keep the window/taskbar identity on the stable base application icon."""
+
+    Gtk.Window.set_default_icon_name(WINDOW_ICON_NAME)
+    window.set_icon_name(WINDOW_ICON_NAME)
+
+
 def run_web_portal_shell() -> int:
     """Run the only Flatpak graphical UI inside a locked WebKit view."""
 
@@ -835,6 +843,7 @@ def run_web_portal_shell() -> int:
             return
 
         window = Gtk.ApplicationWindow(application=app)
+        _set_window_icon(Gtk, window)
         _populate_new_portal_window(
             Gtk,
             window,
@@ -875,6 +884,7 @@ def run_tray() -> int:
             return
 
         window = Gtk.ApplicationWindow(application=app)
+        _set_window_icon(Gtk, window)
         authentication = AuthenticationController()
         auth_bridge = WebPortalAuthBridge(authentication)
         _populate_new_portal_window(

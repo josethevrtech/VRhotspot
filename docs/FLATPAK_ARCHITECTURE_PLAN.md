@@ -751,11 +751,16 @@ Flatpak never searches `/etc/vr-hotspot/env`, `/var/lib/vr-hotspot`, command
 arguments, URLs, query strings, or plaintext files for a token, and clearing
 removes only the matching VR Hotspot wallet item.
 
-The installed scalable application icon now uses a cyan VR mark on a near-black
-rounded tile. Stopped, running, working, and error variants retain the same VR
-base identity at panel sizes and represent state through a small red/off,
-green/on, amber/working, or red/error-style indicator. Packaging installs all
-variants through deterministic application-ID icon paths.
+The installed scalable base application icon uses a cyan VR mark on a
+near-black rounded tile. The desktop file, Flatpak app ID, GTK application ID,
+GTK default/window icon name, and hicolor base-icon path all use
+`io.github.josethevrtech.VRhotspot`, so Plasma can associate the Wayland window
+with its desktop entry. The WebKit host window and task manager always use that
+stable base icon and never follow hotspot state. Stopped, running, working, and
+error variants are tray-only; they retain the same VR base identity at panel
+sizes and represent state through a small red/off, green/on, amber/working, or
+red/error-style indicator. Packaging installs the base and tray variants
+through deterministic application-ID icon paths.
 
 The only new session-bus grants are:
 
