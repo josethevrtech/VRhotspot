@@ -35,7 +35,7 @@ curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install
 sudo bash /tmp/vrhotspot-install.sh --non-interactive
 ```
 
-### Optional prototype Flatpak companion
+### Optional Flatpak desktop companion
 
 The guided installer asks `Install the Flatpak companion app?` and defaults to
 No while the companion and its local packaging mature. Choosing No leaves the
@@ -56,12 +56,25 @@ runtime/SDK to already be available. It does not add Flathub or another Flatpak
 remote. Missing prerequisites or a failed build are reported clearly, temporary
 build files are removed, and the daemon install continues.
 
-After installation, launch the companion and enter the existing daemon API
-token manually in its hidden token field. The installer does not read, pass,
-copy, or store the daemon token for the Flatpak. Token persistence/keyring
-storage, lifecycle/configuration controls, support-bundle portal export,
-Flathub polish, Steam Frame, VR Direct Link, and adapter-registry work remain
-future work.
+The desktop launcher starts the companion in tray mode. It opens a native
+dashboard initially, stays available through a cyan-and-black system-tray icon,
+and hides the window to the tray when the window is closed. The tray provides
+live status, lifecycle controls, Share Internet Connection, Privacy Mode, and
+the existing Start Hotspot Automatically setting. Explicit Quit exits only the
+desktop companion and does not stop an already-running hotspot.
+
+Use **Authentication…** to enter the existing daemon API token. Saving it is an
+explicit choice and uses the desktop Secret Service provider (including a
+compatible KDE Wallet setup); otherwise it remains in memory only. The
+installer and Flatpak never discover the token from daemon host files. The Web
+Portal shell remains a separate opt-in launch mode:
+
+```bash
+flatpak run io.github.josethevrtech.VRhotspot --web-portal-shell
+```
+
+Launching the tray companion at desktop login is not implemented and remains
+distinct from starting the hotspot automatically with the computer.
 
 **Other Linux distributions**
 
@@ -169,9 +182,13 @@ Enter the **API token** shown during installation to access the interface.
 **Lifecycle Controls:**
 - Start / Stop / Repair / Restart
 - `POST /v1/start`, `POST /v1/stop`, `POST /v1/repair`, `POST /v1/restart`
+- `POST /v1/autostart` - Coordinate the existing hotspot boot-autostart unit
+  and canonical `autostart` setting
 
 **Status & Monitoring:**
 - `GET /v1/status` - Current hotspot status
+- `GET /v1/config` - Current canonical configuration, including
+  `enable_internet` and `autostart`
 - `GET /v1/status?include_logs=1` - Status with logs
 - `GET /v1/adapters` - List available Wi-Fi adapters
 - `GET /v1/adapters/readiness` - Adapter Intelligence v2 readiness model
@@ -299,16 +316,24 @@ sudo ufw allow 8732/tcp
 
 ### Autostart on Boot
 
-Enable autostart (if not done during installation):
+This means **Start Hotspot Automatically** with the computer. It is separate
+from launching the desktop tray companion at login. The setting coordinates
+the canonical `autostart` config value with the existing
+`vr-hotspot-autostart.service`.
+
+After installing the Flatpak companion, use the tray toggle. During daemon
+installation or repair, use the existing installer options:
 
 ```bash
-sudo systemctl enable --now vr-hotspot-autostart.service
+cd /var/lib/vr-hotspot/app/backend/scripts
+sudo ./install.sh --enable-autostart
 ```
 
 Disable autostart:
 
 ```bash
-sudo systemctl disable --now vr-hotspot-autostart.service
+cd /var/lib/vr-hotspot/app/backend/scripts
+sudo ./install.sh --disable-autostart
 ```
 
 ---

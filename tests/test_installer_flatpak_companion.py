@@ -346,14 +346,23 @@ def test_flatpak_manifest_permissions_remain_minimal_and_unchanged():
         "--share=ipc",
         "--socket=wayland",
         "--socket=fallback-x11",
+        "--talk-name=org.kde.StatusNotifierWatcher",
+        "--talk-name=org.freedesktop.secrets",
     ]
     assert not any(
         argument.startswith("--filesystem=")
         or "system-bus" in argument
-        or "talk-name" in argument
         or argument.startswith("--device=")
         for argument in manifest["finish-args"]
     )
+    assert {
+        argument
+        for argument in manifest["finish-args"]
+        if argument.startswith("--talk-name=")
+    } == {
+        "--talk-name=org.kde.StatusNotifierWatcher",
+        "--talk-name=org.freedesktop.secrets",
+    }
 
 
 def test_daemon_uninstallers_do_not_remove_user_flatpaks_or_remotes():

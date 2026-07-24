@@ -1,25 +1,25 @@
 # Flatpak control app architecture plan
 
-Status: PR #90 Flatpak Web Portal shell display scaling/density polish; PRs #77-#89 retained
+Status: PR #91 Flatpak system-tray control surface and desktop identity; PRs #77-#90 retained
 
-Date: 2026-07-23
+Date: 2026-07-24
 
 This document defines the boundary for the VRhotspot Flatpak control
-application. PR #90 applies a fixed, bounded WebKit display zoom only to PR
-#88's explicit locked Web Portal shell, building on PR #89's shared
-daemon-served Portal layout and dark form-control theme. The browser `/ui` route
-continues to use those shared assets at normal browser scale. The Web Portal
-remains the visual source of truth for the Flatpak instead of being cloned in
-native GTK. PR #85/#87's native dashboard remains available as the default and
-fallback; switching the default is separately reviewed future work.
+application. PR #91 adds a functional Plasma-compatible system-tray control
+surface, close-to-tray lifecycle, current hotspot status, narrowly scoped
+daemon controls, explicit authentication UI, optional Secret Service storage,
+and cyan/black desktop identity. PR #90's fixed, bounded WebKit display zoom
+and PR #88's origin-locked Web Portal shell remain unchanged. The browser
+`/ui` route continues to use the shared assets at normal browser scale. The
+native GTK dashboard remains the default window and fallback; switching the
+default to the Web Portal shell is separately reviewed future work.
 
 The shell retains PR #86's installed GTK `PasswordEntry` compatibility fix,
 PR #82's native in-memory first-run token entry, PR #83's explicit terminal-only
-live daemon pairing smoke path, and PR #84's optional installer prompt. PR #90
-adds no daemon API/runtime behavior, privileged Flatpak action, permission
-expansion, token injection or discovery, persistent credential storage,
-installer change, shared CSS change, or Web UI JavaScript/control behavior
-change.
+live daemon pairing smoke path, and PR #84's optional installer prompt. PR #91
+does not inject a token into WebKit, change the shared Web Portal assets, add
+direct host command execution, add host filesystem access, or move privileged
+network ownership out of the daemon.
 
 ## Architectural decision
 
@@ -676,6 +676,90 @@ native GTK default/fallback remain unchanged. Switching the default UI and the
 additional WebKit hardening and prerequisite review for such a switch remain
 separately approved future work.
 
+## PR #91 system-tray control surface and desktop identity
+
+PR #91 makes the optional Flatpak companion a persistent desktop utility while
+keeping `vr-hotspotd` as the sole privileged host-mutation boundary. An explicit
+`--tray` launch mode owns a StatusNotifierItem and DBusMenu, shows the native GTK
+dashboard initially, restores it on primary tray activation, and hides it when
+the user closes the window. `Quit VR Hotspot` exits only the companion; it does
+not issue a hotspot stop request. If the tray backend cannot register, the
+normal native application still opens and closes normally instead of crashing
+or becoming hidden without a reachable tray icon.
+
+The GNOME 50 runtime provides Gio/GDBus and libsecret but does not provide an
+AppIndicator/Ayatana binding. The tray therefore implements the standard
+StatusNotifierItem and `com.canonical.dbusmenu` interfaces with lazy Gio
+imports. KDE Plasma consumes those interfaces directly. Menu construction and
+state sensitivity live in a toolkit-independent model, separate from the
+authenticated API controller and desktop backend. Mutation requests are
+serialized, repeat activation is rejected while work is pending, and a
+successful operation refreshes status and configuration before the controls
+are re-enabled.
+
+The tray uses only these fixed daemon operations:
+
+- `GET /v1/status` for live phase and running state
+- `GET /v1/config` for `enable_internet` and `autostart`
+- existing authenticated `POST /v1/start`, `/v1/stop`, `/v1/restart`, and
+  `/v1/repair` lifecycle operations
+- existing authenticated `POST /v1/config` with the strict
+  `enable_internet` field for the tray label `Share Internet Connection`
+- new authenticated `POST /v1/autostart` with exactly one Boolean `enabled`
+  field for `Start Hotspot Automatically`
+
+Hotspot boot autostart remains the existing coordinated
+`config["autostart"]` plus `vr-hotspot-autostart.service` behavior. The narrow
+autostart endpoint invokes a fixed enable or disable operation for that
+existing unit and updates the same canonical config value; it is not a second
+startup system or a generic service/config mutation endpoint.
+
+`Launch VR Hotspot at login` is a distinct desktop-session concern. PR #91
+does not implement that toggle: the Background portal can request background
+or autostart behavior but does not provide a dependable current-state query
+that could keep a tray checkbox honest across Plasma and other desktops.
+Creating a competing home-file mechanism would also broaden the current
+Flatpak lifecycle. A future implementation must control only this app's entry
+and must not be labeled as hotspot boot autostart.
+
+Privacy Mode remains a companion-local display choice matching the Portal's
+existing local preference. It controls whether a tray status refresh requests
+bounded daemon logs; it is not presented as daemon configuration. The tray
+currently defaults to privacy enabled and does not persist that preference.
+
+The Authentication dialog accepts only explicit user entry. It can test the
+credential, explicitly reveal or copy it, replace it, clear it, or save it
+through a stable libsecret schema:
+`io.github.josethevrtech.VRhotspot.ApiToken`, with app-specific
+`application` and `credential` attributes. Normal retrieval is silent only
+after the user opted to save. Secret Service can be backed by KDE Wallet or
+another desktop provider. When no provider is available, the token remains
+memory-only and the UI reports that secure persistence is unavailable. The
+Flatpak never searches `/etc/vr-hotspot/env`, `/var/lib/vr-hotspot`, command
+arguments, URLs, query strings, or plaintext files for a token, and clearing
+removes only the matching VR Hotspot wallet item.
+
+The installed scalable application icon now uses a cyan VR mark on a near-black
+rounded tile, with running, working, and error variants that retain the same
+base identity at panel sizes. Packaging installs all variants through the
+existing application-ID icon path.
+
+The only new session-bus grants are:
+
+- `--talk-name=org.kde.StatusNotifierWatcher` to register the standard tray item
+- `--talk-name=org.freedesktop.secrets` for explicit Secret Service storage
+
+PR #91 adds no system-bus, device, host/home filesystem, broad D-Bus, or host
+command permission. The app retains ordinary `--share=network` only for its
+fixed authenticated loopback API origin. Notifications contain fixed bounded
+operation summaries and never include credentials or raw daemon errors.
+
+`--smoke-json`, `--live-pairing-smoke-json`, and the opt-in
+`--web-portal-shell` remain compatible. The Web Portal shell retains its 1.75x
+zoom, ephemeral session, exact loopback origin, CSP, and navigation lock.
+Native GTK remains the default/fallback outside explicit tray mode. A future
+default Web Portal switch remains a separate review.
+
 ## Sandbox and portal expectations
 
 The future Flatpak should begin from a minimal permission set and justify every
@@ -771,7 +855,8 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | PR #87 | Native dashboard Web Portal parity pass. Use the Portal as a design/product reference to improve the native GTK header, connection/pairing hierarchy, readiness summary, recommended-adapter emphasis, preflight facts/issues/actions, severity badges, and honest unavailable sections. Do not embed the Portal, add a WebView or frontend runtime, retain tokens, add actions/export, change Web UI or daemon behavior, or expand permissions. | Deterministic model/view tests prove parity labels, all five severity badges, paired and recommended emphasis, disabled support export, empty controls, absent lifecycle/configuration buttons, hidden/cleared token entry, placeholder compatibility, lazy GTK, token-free smoke contracts, redaction, and unchanged manifest permissions. |
 | PR #88 | Locked Web Portal shell spike. Add an explicit WebKitGTK 6.0 mode that loads only the daemon-served `http://127.0.0.1:8732/ui` Portal in an ephemeral, origin-locked WebView. Keep the native dashboard as default and fallback. Add no copied frontend, arbitrary URL, token injection/discovery/persistence, Web UI or daemon behavior, installer behavior, or permission. | Deterministic tests pin the route and exact origin, deny external and new-window navigation, prove ephemeral/no-injection construction and bounded load failure, exercise WebKit-unavailable and construction fallback, preserve both smoke contracts and native token-entry compatibility, and verify unchanged manifest permissions. Real packaging and manual shell validation remain required. |
 | PR #89 | Web Portal shell layout and theme polish. Improve the shared Portal CSS so Basic mode uses wide, medium, and narrow windows effectively and WebKitGTK renders select/input controls with readable dark, focused, and disabled states. Preserve Pro behavior, WebView security, opt-in launch, native fallback, tokens, APIs, runtime, installer, vendor files, and permissions. | Deterministic asset tests prove flexible Basic card/container rules, wide and narrow breakpoints, dark native-form overrides, focus/disabled contrast, retained Basic/Pro selectors and USB adapter control; the #88 shell/security/token/manifest tests remain green; browser `/ui` and the Flatpak shell consume the same daemon-served assets. |
-| PR #90 | Flatpak Web Portal shell display scaling/density polish (current phase). Apply a fixed, bounded 1.75x WebKit zoom only to the opt-in locked shell. Preserve the normal-scale browser Portal, shared assets, exact origin and navigation lock, ephemeral session, token boundaries, native default/fallback, daemon/runtime/installer behavior, vendor files, and permissions. | Deterministic shell tests prove the fixed zoom and clamp, absence of user-controlled zoom inputs, unchanged shared-CSS scaling, retained opt-in/default/fallback behavior, and the existing navigation, token, smoke, and manifest boundaries. Real packaging and manual shell/browser validation remain required. |
+| PR #90 | Flatpak Web Portal shell display scaling/density polish. Apply a fixed, bounded 1.75x WebKit zoom only to the opt-in locked shell. Preserve the normal-scale browser Portal, shared assets, exact origin and navigation lock, ephemeral session, token boundaries, native default/fallback, daemon/runtime/installer behavior, vendor files, and permissions. | Deterministic shell tests prove the fixed zoom and clamp, absence of user-controlled zoom inputs, unchanged shared-CSS scaling, retained opt-in/default/fallback behavior, and the existing navigation, token, smoke, and manifest boundaries. Real packaging and manual shell/browser validation remain required. |
+| PR #91 | Flatpak system-tray control surface and desktop identity (current phase). Add a Plasma-compatible StatusNotifierItem/DBusMenu backend, close-to-tray lifecycle, typed live-state model, fixed lifecycle/config controls, existing hotspot boot-autostart control, explicit Secret Service authentication UI, and cyan/black icon variants. | Deterministic tests prove complete menu/state mapping, serialized authenticated mutations, refresh-after-success, canonical `enable_internet` and hotspot-autostart behavior, companion-only quit, safe wallet fallback and token handling, optional desktop imports, retained shell/native/smoke contracts, narrow D-Bus grants, and installed icon identity. Real packaging and manual tray validation remain required. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
 Each phase is independently reviewable. A later phase is not authorized merely
@@ -785,17 +870,17 @@ a production Flatpak release:
 | Question | Required decision |
 |---|---|
 | Application ID | PR #81 uses `io.github.josethevrtech.VRhotspot`; confirm naming and publication ownership before a store submission. |
-| Permissions | PR #81 documents its prototype finish-args; reassess network breadth, display compatibility, and any future portal before production. |
+| Permissions | PR #91 adds only exact session-bus talk grants for `org.kde.StatusNotifierWatcher` and `org.freedesktop.secrets`; reassess network breadth, display compatibility, and any future portal before production. |
 | Runtime and SDK | PR #81 selects GNOME 50 for the prototype; define update cadence, end-of-life policy, architecture targets, and reproducible/offline release expectations. |
-| Desktop file | PR #81 provides a minimal launcher entry with no desktop actions or URL scheme; review production naming and startup behavior. |
-| Icons and metainfo | PR #81 provides simple prototype SVG and AppStream metadata; production artwork, screenshots, releases, privacy copy, and store polish remain unresolved. Existing Web UI assets are not automatically release-ready desktop metadata. |
+| Desktop file | PR #91 launches explicit tray mode with no URL scheme; desktop-login autostart is not implemented. Review production startup policy separately. |
+| Icons and metainfo | PR #91 installs cyan/black scalable base and state icons plus updated AppStream tray copy; screenshots, release process, privacy copy, and store polish remain unresolved. |
 | Local daemon discovery | Decide how to detect an installed/compatible daemon without broad filesystem access, service-manager control, or token leakage. |
 | Offline/local-first behavior | Confirm that installed control functions need no cloud service; define behavior when the internet is unavailable and distinguish that from daemon unavailability. |
 | Versioning and compatibility | Define client, API, and daemon compatibility ranges, upgrade ordering, unsupported-version messaging, and rollback expectations. |
 | Release process | Define source provenance, dependency review, reproducible build inputs, signing, store submission, release notes, and coordination with host-daemon releases. |
 | Installation/update ownership | Keep daemon installation and privileged updates separate from Flatpak updates; document how users avoid incompatible independent versions. |
 
-PR #88-#90's shell and presentation choices are not blanket approval for
+PR #88-#91's shell, tray, and presentation choices are not blanket approval for
 production packaging or additional permissions.
 
 ## Future test and validation expectations
@@ -852,54 +937,33 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #90
+## Explicit non-goals for PR #91
 
-- No default UI switch or native-dashboard removal. The Web Portal is intended
-  to become the visual source of truth, but the locked WebView remains an
-  explicit opt-in mode and native GTK remains the default and fallback.
-- No Web UI JavaScript/behavior change, copied Web Portal JavaScript/style/image
-  asset, Flatpak-only frontend, or second frontend implementation. PR #90
-  changes only the locked WebView's fixed display zoom.
-- No arbitrary URL argument, address bar, external navigation, popup/new-window
-  navigation, remote-site load, or general browser.
-- No Flathub submission, release artifact, production metadata polish,
-  screenshots, signing, or distribution automation.
-- No shell-added start, stop, restart, repair, lifecycle, configuration,
-  passphrase, adapter-selection, support-bundle, or other control. Controls
-  already present in the daemon-served Portal are unchanged.
-- No shell token injection into URLs, headers, JavaScript, WebKit user scripts,
-  Web Storage, or cookies; no token discovery, persistent storage,
-  keyring/portal integration, issuance, rotation, or daemon-side pairing
-  endpoint. The Portal retains its existing manual entry behavior inside the
-  ephemeral WebKit session, and the native/terminal manual entry paths remain
-  unchanged.
-- No daemon endpoint, API response, authentication, pairing, lifecycle,
-  diagnostics, support-bundle, or runtime behavior change.
-- No top-level or backend installer, uninstaller, systemd-unit, platform matrix,
-  or CI-script behavior change. PR #84's optional companion prompt remains
-  unchanged.
-- No privileged networking in the Flatpak.
-- No direct Flatpak control of firewall rules, NetworkManager, iwd, hostapd,
-  dnsmasq, systemd units, kernel or network namespaces, interfaces, routes,
-  NAT, or other privileged host mutation.
-- No broad host filesystem access and no direct reading of daemon secrets,
-  configuration, logs, or state.
-- No vendor file or vendor manifest change.
-- No bundled or automatically downloaded proprietary Steam/Valve drivers,
-  firmware, utilities, or depot content.
-- No Steam Frame implementation or support claim.
-- No VR Direct Link implementation or support claim.
-- No known-adapter registry or adapter-policy implementation.
-- No HostFactsSnapshot work or consumer change.
+- No default Web Portal UI switch or native-dashboard removal. The locked
+  WebView remains explicit and opt-in; native GTK remains the default/fallback.
+- No Web UI JavaScript, CSS, route, CSP, origin, navigation, token, or session
+  behavior change.
+- No arbitrary URL argument, address bar, external/new-window navigation,
+  remote-site load, or general browser.
+- No token CLI argument, discovery endpoint, direct `/etc` or `/var/lib`
+  secret read, plaintext credential file, automatic copy/reveal, or WebKit
+  token injection.
+- No desktop-login companion autostart. It remains distinct from existing
+  hotspot boot autostart and requires a separately reviewed reliable mechanism.
+- No generic daemon configuration or systemd-control API. The new endpoint is
+  limited to the existing hotspot-autostart unit and Boolean config setting.
+- No Flatpak command execution for daemon controls and no direct access to
+  systemctl, NetworkManager, iwd, hostapd, dnsmasq, firewall, routing,
+  interfaces, devices, namespaces, or other privileged host mutation.
+- No broad host/home filesystem, system-bus, device, or wildcard D-Bus access.
+- No installer redesign, uninstaller behavior change, vendor file/manifest
+  change, support-bundle export, Flathub release automation, screenshots, or
+  signing.
+- No Steam Frame, VR Direct Link, known-adapter registry, or
+  HostFactsSnapshot work.
 
-PR #90 authorizes only fixed, bounded Flatpak Web Portal shell display scaling,
-its deterministic shell and retained-boundary tests, and documentation updates.
-PR #83's recorded manual live-pairing validation remains historical evidence;
-PR #90 does not claim a new real-daemon pairing result unless the installed
-command is run against an available daemon. PR #90 does not claim token
-persistence, keyring integration, lifecycle/configuration controls,
-support-bundle portal export, a Flathub-polished release, Steam Frame support,
-VR Direct Link support, or a known-adapter registry. Lifecycle/configuration
-controls, support-bundle portal export, token persistence/keyring integration,
-production packaging polish, Steam Frame, VR Direct Link, adapter registry
-work, and all later phases remain separately approved work.
+PR #91 authorizes only the tray lifecycle/control/authentication surface, its
+fixed autostart API, narrowly scoped session-bus grants, cyan/black desktop
+identity, deterministic tests, and documentation above. A real daemon pairing
+or live lifecycle result is claimed only when exercised with an explicitly
+entered credential; no credential is printed or exported in validation.

@@ -42,6 +42,23 @@ from .ui import (
     SummaryFact,
     SupportBundleAffordance,
 )
+from .wallet import (
+    SECRET_ATTRIBUTES,
+    SECRET_LABEL,
+    SECRET_SCHEMA_NAME,
+    AuthenticationController,
+    AuthenticationResult,
+    SecretServiceWalletBackend,
+    WalletBackend,
+    WalletUnavailableError,
+)
+from .control import (
+    ActionOutcome,
+    TokenProvider,
+    TrayControlController,
+    TrayState,
+    TrayStatus,
+)
 
 __all__ = [
     "DEFAULT_BASE_URL",
@@ -80,4 +97,17 @@ __all__ = [
     "StatusSeverity",
     "SummaryFact",
     "SupportBundleAffordance",
+    "SECRET_ATTRIBUTES",
+    "SECRET_LABEL",
+    "SECRET_SCHEMA_NAME",
+    "AuthenticationController",
+    "AuthenticationResult",
+    "SecretServiceWalletBackend",
+    "WalletBackend",
+    "WalletUnavailableError",
+    "ActionOutcome",
+    "TokenProvider",
+    "TrayControlController",
+    "TrayState",
+    "TrayStatus",
 ]

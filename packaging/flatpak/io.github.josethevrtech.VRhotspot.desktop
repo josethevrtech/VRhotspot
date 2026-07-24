@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=VR Hotspot
-Comment=Launch the VR Hotspot Flatpak shell prototype
-Exec=vrhotspot-flatpak
+Comment=Control VR Hotspot from the desktop and system tray
+Exec=vrhotspot-flatpak --tray
 Icon=io.github.josethevrtech.VRhotspot
 Terminal=false
 Categories=Network;
