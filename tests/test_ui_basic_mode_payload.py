@@ -86,3 +86,94 @@ class TestUiBasicModePayload(unittest.TestCase):
         self.assertIn("function renderAdapterReadinessFallback", src)
         self.assertIn("Adapter readiness is not available from this service version.", src)
         self.assertIn("refreshVisibleUi", src)
+
+    def test_basic_mode_layout_scales_across_wide_medium_and_narrow_windows(self):
+        css = Path("assets/ui.css").read_text(encoding="utf-8")
+
+        container = re.search(r"\.basic-container\s*\{(?P<body>[^}]*)\}", css)
+        self.assertIsNotNone(container)
+        container_rule = container.group("body")
+        self.assertIn("flex: 1 1 auto", container_rule)
+        self.assertIn("min-height: 0", container_rule)
+        self.assertIn("width: 100%", container_rule)
+        self.assertIn("max-width: 1720px", container_rule)
+        self.assertIn("padding: clamp(", container_rule)
+        self.assertNotIn("max-width: 1000px", container_rule)
+
+        grid = re.search(r"\.basic-grid\s*\{(?P<body>[^}]*)\}", css)
+        self.assertIsNotNone(grid)
+        grid_rule = grid.group("body")
+        self.assertIn(
+            "grid-template-columns: repeat(2, minmax(0, 1fr))",
+            grid_rule,
+        )
+        self.assertIn("gap: clamp(", grid_rule)
+        self.assertIn("width: 100%", grid_rule)
+        self.assertNotIn("minmax(300px", grid_rule)
+
+        self.assertRegex(
+            css,
+            r"@media\s*\(min-width:\s*1400px\)[\s\S]*?"
+            r"\.basic-grid\s*\{[^}]*"
+            r"grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)",
+        )
+        self.assertRegex(
+            css,
+            r"@media\s*\(max-width:\s*760px\)[\s\S]*?"
+            r"\.basic-grid\s*\{[^}]*"
+            r"grid-template-columns:\s*minmax\(0,\s*1fr\)",
+        )
+        self.assertRegex(
+            css,
+            r"\.adapter-readiness-card\s*\{[^}]*grid-column:\s*1\s*/\s*-1",
+        )
+
+    def test_shared_portal_form_controls_have_readable_dark_theme_states(self):
+        html = Path("assets/index.html").read_text(encoding="utf-8")
+        css = Path("assets/ui.css").read_text(encoding="utf-8")
+        src = Path("assets/ui.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="uiModeToggle"', html)
+        self.assertIn('<span class="mode-label small">Basic</span>', html)
+        self.assertIn('<span class="mode-label small">Pro</span>', html)
+        self.assertIn('<select id="ap_adapter"></select>', html)
+        self.assertIn(
+            "(mode === 'basic') ? 'USB Wi-Fi adapter' : 'AP adapter'",
+            src,
+        )
+
+        self.assertRegex(
+            css,
+            r":root\s*\{[^}]*color-scheme:\s*dark",
+        )
+        self.assertRegex(
+            css,
+            r"input,\s*select,\s*textarea\s*\{[^}]*"
+            r"background-color:\s*var\(--bg-input\)[^}]*"
+            r"color:\s*var\(--text-main\)[^}]*"
+            r"color-scheme:\s*dark[^}]*"
+            r"-webkit-text-fill-color:\s*var\(--text-main\)",
+        )
+        self.assertRegex(
+            css,
+            r"select\s*\{[^}]*appearance:\s*none[^}]*"
+            r"-webkit-appearance:\s*none[^}]*background-image:",
+        )
+        self.assertRegex(
+            css,
+            r"select option,\s*select optgroup\s*\{[^}]*"
+            r"background-color:\s*var\(--bg-panel\)[^}]*"
+            r"color:\s*var\(--text-main\)",
+        )
+        self.assertRegex(
+            css,
+            r"input:disabled,\s*select:disabled,\s*textarea:disabled\s*\{"
+            r"[^}]*background-color:\s*#10101d[^}]*"
+            r"color:\s*#9898b3[^}]*opacity:\s*1",
+        )
+        self.assertRegex(
+            css,
+            r"input:focus-visible,\s*select:focus-visible,\s*"
+            r"textarea:focus-visible,\s*button:focus-visible\s*\{[^}]*"
+            r"outline:\s*2px solid var\(--accent-primary\)",
+        )

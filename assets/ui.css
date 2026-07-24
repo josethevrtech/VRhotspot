@@ -1,5 +1,7 @@
 /* Cyberpunk Theme for VR Hotspot */
 :root {
+  color-scheme: dark;
+
   --bg-app: #000;
   --bg-panel: #0a0a16;
   --bg-subtle: #131326;
@@ -222,8 +224,10 @@ input:checked + .slider:before {
 
 /* Basic View */
 .basic-container {
-  padding: 24px;
-  max-width: 1000px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: clamp(16px, 2vw, 32px);
+  max-width: 1720px;
   margin: 0 auto;
   width: 100%;
   overflow-y: auto;
@@ -232,19 +236,42 @@ input:checked + .slider:before {
 
 .basic-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(16px, 2vw, 28px);
   align-items: start;
+  width: 100%;
 }
 
 .basic-card {
   overflow: visible;
   height: auto;
+  min-width: 0;
   align-self: start;
 }
 
 .adapter-readiness-card {
+  grid-column: 1 / -1;
   align-self: start;
+}
+
+@media (min-width: 1400px) {
+  .basic-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .basic-grid > .adapter-readiness-card {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .basic-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .basic-grid > .adapter-readiness-card {
+    grid-column: auto;
+  }
 }
 
 .adapter-readiness-grid {
@@ -938,28 +965,81 @@ body[data-ui-mode="advanced"] .qos-advanced {
   outline-offset: 2px;
 }
 
+/*
+ * WebKitGTK can otherwise retain a light native select face even in this dark
+ * page. Keep the compatibility properties bounded to form controls so both the
+ * browser Portal and the locked Flatpak WebView use the same readable theme.
+ */
 input,
-select {
+select,
+textarea {
   width: 100%;
   padding: 8px 12px;
-  background: var(--bg-input);
+  background-color: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-main);
+  color-scheme: dark;
   font-size: 14px;
   font-family: inherit;
+  caret-color: var(--accent-primary);
+  -webkit-text-fill-color: var(--text-main);
   transition: .15s;
 }
 
+button {
+  color-scheme: dark;
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--accent-primary) 50%),
+    linear-gradient(135deg, var(--accent-primary) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% - 1px),
+    calc(100% - 11px) calc(50% - 1px);
+  background-repeat: no-repeat;
+  background-size: 5px 5px;
+}
+
+select[multiple],
+select[size] {
+  padding-right: 12px;
+  background-image: none;
+}
+
+select option,
+select optgroup {
+  background-color: var(--bg-panel);
+  color: var(--text-main);
+  -webkit-text-fill-color: var(--text-main);
+}
+
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px var(--accent-subtle);
 }
 
-input::placeholder {
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+input::placeholder,
+textarea::placeholder {
   color: rgba(133, 133, 163, 0.3);
+  -webkit-text-fill-color: rgba(133, 133, 163, 0.3);
 }
 
 /* Buttons */
@@ -1021,6 +1101,31 @@ body[data-ui-mode="basic"] [data-ui-section="basic"] .btn {
   color: #000;
   border-color: var(--danger);
   box-shadow: 0 0 15px var(--danger);
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background-color: #10101d;
+  border-color: #303049;
+  color: #9898b3;
+  -webkit-text-fill-color: #9898b3;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+select option:disabled {
+  color: #85859e;
+  -webkit-text-fill-color: #85859e;
+}
+
+button:disabled,
+.btn:disabled {
+  background: #10101d;
+  border-color: #303049;
+  color: #9898b3;
+  cursor: not-allowed;
+  opacity: 1;
 }
 
 .btn.lg {
