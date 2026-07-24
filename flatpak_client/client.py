@@ -33,11 +33,27 @@ _RESTART_PATH = "/v1/restart"
 _REPAIR_PATH = "/v1/repair"
 _AUTOSTART_PATH = "/v1/autostart"
 _DEFAULT_TIMEOUT_SECONDS = 10.0
+_MAX_REQUEST_BODY_BYTES = 262_144
 _MAX_RESPONSE_BYTES = 1_000_000
 _MAX_ERROR_BODY_BYTES = 4_096
 _MAX_ERROR_SNIPPET_CHARS = 256
 _REDACTED = "[redacted]"
 _AUTH_HEADER_NAMES = frozenset({"authorization", "x-api-token"})
+_PORTAL_REQUEST_METHODS = {
+    "/v1/adapters": frozenset({"GET"}),
+    "/v1/adapters/readiness": frozenset({"GET"}),
+    "/v1/config": frozenset({"GET", "POST"}),
+    "/v1/config/reveal_passphrase": frozenset({"POST"}),
+    "/v1/diagnostics/preflight": frozenset({"GET"}),
+    "/v1/diagnostics/support_bundle": frozenset({"GET"}),
+    "/v1/info": frozenset({"GET"}),
+    "/v1/repair": frozenset({"POST"}),
+    "/v1/restart": frozenset({"POST"}),
+    "/v1/start": frozenset({"POST"}),
+    "/v1/status": frozenset({"GET"}),
+    "/v1/status?include_logs=1": frozenset({"GET"}),
+    "/v1/stop": frozenset({"POST"}),
+}
 
 
 class LocalApiClientError(RuntimeError):
@@ -478,6 +494,50 @@ class LocalApiClient:
             },
         )
 
+    def portal_request(
+        self,
+        path: str,
+        *,
+        method: str,
+        body: Mapping[str, Any] | None = None,
+    ) -> HttpResponse:
+        """Run one exact Web Portal route without exposing the token to WebKit."""
+
+        if not isinstance(path, str) or path not in _PORTAL_REQUEST_METHODS:
+            raise LocalApiClientError("The local Web Portal route is not allowed.")
+        if not isinstance(method, str):
+            raise LocalApiClientError("The local Web Portal method is not allowed.")
+        normalized_method = method.upper()
+        if normalized_method not in _PORTAL_REQUEST_METHODS[path]:
+            raise LocalApiClientError("The local Web Portal method is not allowed.")
+        if normalized_method == "GET" and body is not None:
+            raise LocalApiClientError("GET requests cannot include a request body.")
+        if body is not None and not isinstance(body, Mapping):
+            raise LocalApiClientError("The local Web Portal request body is invalid.")
+
+        response = self._request(
+            path,
+            method=normalized_method,
+            authenticated=True,
+            body=body,
+        )
+        if 300 <= response.status < 400:
+            raise RedirectRejectedError(response.status)
+        if response.body_truncated:
+            raise ResponseTooLargeError(
+                "The local daemon API response exceeded the client size limit."
+            )
+        token_bytes = self._token.encode("ascii") if self._token else b""
+        if self._token and (
+            token_bytes in response.body
+            or _contains_secret(response.headers, self._token)
+        ):
+            raise InvalidResponseError(
+                "The local daemon API reflected the authentication token; "
+                "the response was discarded."
+            )
+        return response
+
     def _get_api_response(self, path: str) -> ApiResponse:
         return self._request_api_response(path, method="GET")
 
@@ -530,6 +590,10 @@ class LocalApiClient:
                 separators=(",", ":"),
                 sort_keys=True,
             ).encode("utf-8")
+            if len(request_body) > _MAX_REQUEST_BODY_BYTES:
+                raise LocalApiClientError(
+                    "The local daemon API request exceeded the client size limit."
+                )
             headers["Content-Type"] = "application/json"
         request = HttpRequest(
             url=self._base_url + path,

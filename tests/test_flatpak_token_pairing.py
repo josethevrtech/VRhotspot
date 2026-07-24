@@ -257,6 +257,7 @@ def test_pairing_flow_wires_only_health_and_adapter_readiness():
         "adapter_readiness",
         "config",
         "health",
+        "portal_request",
         "preflight_report",
         "repair_network",
         "restart_service",

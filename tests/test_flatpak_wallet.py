@@ -1,13 +1,12 @@
 import inspect
-import json
 from pathlib import Path
 import sys
 
 
 from flatpak_app import build_smoke_payload, render_smoke_json
-from flatpak_app.app import WebPortalAuthBridge
 from flatpak_client import (
     ApiResponse,
+    AuthenticationError,
     AuthenticationController,
     FirstRunState,
     SECRET_ATTRIBUTES,
@@ -75,49 +74,6 @@ def client_factory(*, token):
 
         raise LocalApiClientError("invalid token")
     return AuthClient(token)
-
-
-class FixedOriginView:
-    def get_uri(self):
-        return "http://127.0.0.1:8732/ui"
-
-
-class MessageValue:
-    def __init__(self, message):
-        self.value = json.dumps(message)
-
-    @classmethod
-    def new_string(cls, _context, value):
-        instance = cls.__new__(cls)
-        instance.value = value
-        return instance
-
-    def get_context(self):
-        return object()
-
-    def is_string(self):
-        return True
-
-    def to_string(self):
-        return self.value
-
-
-class MessageReply:
-    def __init__(self):
-        self.value = None
-
-    def return_value(self, value):
-        self.value = value.value
-
-
-def _accepted_portal_message(token):
-    return MessageValue(
-        {
-            "version": 1,
-            "type": "auth_accepted",
-            "token": token,
-        }
-    )
 
 
 def test_manual_token_is_retained_only_in_memory_when_not_saved():
@@ -195,52 +151,117 @@ def test_wallet_unavailable_falls_back_to_memory_only_with_fixed_message():
     assert controller.token_for_operation() == secret
 
 
-def test_accepted_portal_token_is_saved_to_available_app_wallet():
-    secret = "accepted-portal-wallet-value"
+def test_window_auth_save_is_loaded_and_validated_by_tray_controller():
+    secret = "window-saved-wallet-value"
     wallet = FakeWallet()
-    controller = AuthenticationController(
+    window = AuthenticationController(
         wallet=wallet,
         client_factory=client_factory,
     )
-    bridge = WebPortalAuthBridge(controller)
-    reply = MessageReply()
+    tray = AuthenticationController(
+        wallet=wallet,
+        client_factory=client_factory,
+    )
 
-    assert bridge.handle_message(
-        FixedOriginView(),
-        _accepted_portal_message(secret),
-        reply,
-    ) is True
+    saved = window.authenticate_and_save(secret, save_securely=True)
+    tray_state = tray.refresh_saved_auth()
 
-    assert reply.value == "accepted"
+    assert saved.code == "saved_securely"
     assert wallet.stored == [secret]
-    assert controller.token_for_operation() == secret
-    assert controller.securely_saved is True
-    assert secret not in repr(bridge)
-    assert secret not in repr(controller)
+    assert tray_state.state is FirstRunState.TOKEN_ACCEPTED
+    assert tray.securely_saved is True
+    assert secret not in repr(saved)
+    assert secret not in repr(tray_state)
 
 
-def test_accepted_portal_token_falls_back_to_current_process_memory():
-    secret = "accepted-portal-memory-value"
-    wallet = FakeWallet(available=False)
-    controller = AuthenticationController(
+def test_tray_auth_save_is_loaded_and_validated_by_window_controller():
+    secret = "tray-saved-wallet-value"
+    wallet = FakeWallet()
+    tray = AuthenticationController(
         wallet=wallet,
         client_factory=client_factory,
     )
-    bridge = WebPortalAuthBridge(controller)
-    reply = MessageReply()
+    window = AuthenticationController(
+        wallet=wallet,
+        client_factory=client_factory,
+    )
 
-    assert bridge.handle_message(
-        FixedOriginView(),
-        _accepted_portal_message(secret),
-        reply,
-    ) is True
+    saved = tray.authenticate_and_save(secret, save_securely=True)
+    window_state = window.refresh_saved_auth()
 
-    assert reply.value == "accepted"
-    assert wallet.stored == []
-    assert controller.token_for_operation() == secret
-    assert controller.securely_saved is False
-    assert secret not in repr(bridge)
+    assert saved.code == "saved_securely"
+    assert wallet.stored == [secret]
+    assert window_state.state is FirstRunState.TOKEN_ACCEPTED
+    assert window.securely_saved is True
+    assert secret not in repr(saved)
+    assert secret not in repr(window_state)
+
+
+def test_cross_process_clear_and_replace_are_detected_from_same_wallet():
+    wallet = FakeWallet(token="first-shared-value")
+    window = AuthenticationController(
+        wallet=wallet,
+        client_factory=client_factory,
+    )
+    tray = AuthenticationController(
+        wallet=wallet,
+        client_factory=client_factory,
+    )
+
+    assert window.refresh_saved_auth().state is FirstRunState.TOKEN_ACCEPTED
+    assert tray.clear().code == "cleared"
+    assert (
+        window.refresh_saved_auth().state
+        is FirstRunState.DAEMON_REACHABLE_UNPAIRED
+    )
+
+    saved = tray.authenticate_and_save(
+        "replacement-shared-value",
+        save_securely=True,
+    )
+
+    assert saved.code == "saved_securely"
+    assert window.refresh_saved_auth().state is FirstRunState.TOKEN_ACCEPTED
+
+
+def test_invalid_saved_token_is_cleared_once_and_validation_does_not_loop():
+    secret = "stale-wallet-value"
+    wallet = FakeWallet(token=secret)
+
+    class RejectingFactory:
+        def __init__(self):
+            self.adapter_calls = 0
+
+        def __call__(self, *, token):
+            factory = self
+
+            class Client:
+                def health(self):
+                    return True
+
+                def adapter_readiness(self):
+                    factory.adapter_calls += 1
+                    raise AuthenticationError(401)
+
+            return Client()
+
+    factory = RejectingFactory()
+    controller = AuthenticationController(
+        wallet=wallet,
+        client_factory=factory,
+    )
+
+    first = controller.refresh_saved_auth()
+    second = controller.refresh_saved_auth()
+
+    assert first.state is FirstRunState.TOKEN_REJECTED
+    assert second.state is FirstRunState.DAEMON_REACHABLE_UNPAIRED
+    assert factory.adapter_calls == 1
+    assert wallet.clear_calls == 1
+    assert wallet.token is None
+    assert controller.token_for_operation() is None
     assert secret not in repr(controller)
+    assert secret not in repr(first)
 
 
 def test_memory_only_replace_reports_when_old_wallet_entry_cannot_be_removed():
@@ -373,9 +394,14 @@ def test_authentication_controller_has_no_implicit_print_or_export_method():
     }
 
     assert {
+        "authenticate_and_save",
+        "authentication_state",
         "clear",
         "copy_token",
+        "discard_rejected_auth",
+        "refresh_saved_auth",
         "reveal_token",
+        "request_local_api",
         "save_or_replace",
         "test_authentication",
         "token_for_operation",

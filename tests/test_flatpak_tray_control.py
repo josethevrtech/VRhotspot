@@ -1126,8 +1126,8 @@ def test_saving_and_testing_authentication_refreshes_status_without_leakage():
         def __init__(self):
             self.supplied = []
 
-        def save_or_replace(self, token, *, save_securely):
-            self.supplied.append(("save", bool(token), save_securely))
+        def authenticate_and_save(self, token, *, save_securely):
+            self.supplied.append(("authenticate", bool(token), save_securely))
             return type(
                 "Result",
                 (),
@@ -1142,6 +1142,7 @@ def test_saving_and_testing_authentication_refreshes_status_without_leakage():
             return FirstRunResult(FirstRunState.TOKEN_ACCEPTED)
 
     authentication = Authentication()
+    portal_refreshes = []
     runtime = TrayRuntime(
         application=FakeApplication(),
         lifecycle=WindowLifecycleController(
@@ -1156,6 +1157,7 @@ def test_saving_and_testing_authentication_refreshes_status_without_leakage():
         Gio=object(),
         GLib=object(),
         open_diagnostics=lambda: None,
+        on_auth_changed=lambda: portal_refreshes.append("refresh"),
     )
     refreshes = []
     runtime.refresh_after_auth_change = lambda: refreshes.append("refresh")
@@ -1167,15 +1169,17 @@ def test_saving_and_testing_authentication_refreshes_status_without_leakage():
     runtime._auth_save(entry, save_securely, status)
     assert entry.text == ""
     assert refreshes == ["refresh"]
+    assert portal_refreshes == ["refresh"]
     assert secret not in status.text
 
     entry.text = secret
     runtime._auth_test(entry, status)
     assert entry.text == ""
     assert refreshes == ["refresh", "refresh"]
+    assert portal_refreshes == ["refresh", "refresh"]
     assert status.text == "Authentication succeeded."
     assert authentication.supplied == [
-        ("save", True, True),
+        ("authenticate", True, True),
         ("test", True),
     ]
     assert secret not in repr(authentication.supplied)

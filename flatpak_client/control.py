@@ -59,6 +59,9 @@ class TokenProvider(Protocol):
     def token_for_operation(self) -> str | None:
         """Return an explicitly entered or previously saved token."""
 
+    def discard_rejected_auth(self) -> None:
+        """Forget a credential rejected by the daemon."""
+
 
 class TrayControlController:
     """Serialize tray actions and project daemon responses into safe state."""
@@ -126,6 +129,15 @@ class TrayControlController:
             return None
         return self._client_factory(token=token)
 
+    def _discard_rejected_auth(self) -> None:
+        discard = getattr(self._token_provider, "discard_rejected_auth", None)
+        if not callable(discard):
+            return
+        try:
+            discard()
+        except Exception:
+            pass
+
     def _state_from_responses(
         self,
         status_response: ApiResponse,
@@ -189,6 +201,7 @@ class TrayControlController:
                 raise TypeError
             return self._state_from_responses(status_response, config_response)
         except AuthenticationError:
+            self._discard_rejected_auth()
             return self._classified_failure_state(
                 status=TrayStatus.NEEDS_AUTHENTICATION,
                 message="Authentication was rejected.",
@@ -370,6 +383,7 @@ class TrayControlController:
                         raise LocalApiClientError("Unsupported tray action.")
                     response = call()
             except AuthenticationError:
+                self._discard_rejected_auth()
                 state = self._set_state(
                     self._classified_failure_state(
                         status=TrayStatus.NEEDS_AUTHENTICATION,

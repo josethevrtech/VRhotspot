@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+import hashlib
+import threading
+from typing import Any, Mapping, Protocol
 
-from .client import LocalApiClient, LocalApiClientError
+from .client import AuthenticationError, HttpResponse, LocalApiClient, LocalApiClientError
 from .pairing import FirstRunResult, FirstRunState, TokenPairingController
 
 
@@ -149,6 +151,9 @@ class AuthenticationController:
         self._client_factory = client_factory
         self._memory_token = ""
         self._securely_saved = False
+        self._validation_state: FirstRunState | None = None
+        self._rejected_wallet_digest = ""
+        self._state_lock = threading.RLock()
 
     def __repr__(self) -> str:
         return (
@@ -159,7 +164,8 @@ class AuthenticationController:
 
     @property
     def securely_saved(self) -> bool:
-        return self._securely_saved
+        with self._state_lock:
+            return self._securely_saved
 
     def wallet_available(self) -> bool:
         try:
@@ -197,82 +203,200 @@ class AuthenticationController:
                 securely_saved=self._securely_saved,
             )
 
-        self._memory_token = token
-        if not save_securely:
+        with self._state_lock:
+            self._memory_token = token
+            self._validation_state = None
+            self._rejected_wallet_digest = ""
+            if not save_securely:
+                try:
+                    self._wallet.clear()
+                except Exception:
+                    self._securely_saved = False
+                    return AuthenticationResult(
+                        code="saved_in_memory_wallet_unavailable",
+                        message=(
+                            "The API token is retained in memory for this session. "
+                            "Secure wallet storage was unavailable, so an older "
+                            "VR Hotspot wallet entry could not be checked or removed."
+                        ),
+                        token_available=True,
+                        securely_saved=False,
+                    )
+                self._securely_saved = False
+                return AuthenticationResult(
+                    code="saved_in_memory",
+                    message="API token retained in memory for this session only.",
+                    token_available=True,
+                    securely_saved=False,
+                )
+
             try:
-                self._wallet.clear()
+                self._wallet.store(token)
             except Exception:
                 self._securely_saved = False
                 return AuthenticationResult(
-                    code="saved_in_memory_wallet_unavailable",
+                    code="wallet_unavailable",
                     message=(
-                        "The API token is retained in memory for this session. "
-                        "Secure wallet storage was unavailable, so an older "
-                        "VR Hotspot wallet entry could not be checked or removed."
+                        "Secure wallet persistence is unavailable; the API token "
+                        "is retained in memory for this session only."
                     ),
                     token_available=True,
                     securely_saved=False,
                 )
-            self._securely_saved = False
+
+            self._securely_saved = True
             return AuthenticationResult(
-                code="saved_in_memory",
-                message="API token retained in memory for this session only.",
+                code="saved_securely",
+                message="Authentication saved for this Flatpak desktop app.",
                 token_available=True,
-                securely_saved=False,
+                securely_saved=True,
             )
 
-        try:
-            self._wallet.store(token)
-        except Exception:
-            self._securely_saved = False
-            return AuthenticationResult(
-                code="wallet_unavailable",
-                message=(
-                    "Secure wallet persistence is unavailable; the API token "
-                    "is retained in memory for this session only."
-                ),
-                token_available=True,
-                securely_saved=False,
-            )
+    @staticmethod
+    def _token_digest(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-        self._securely_saved = True
-        return AuthenticationResult(
-            code="saved_securely",
-            message="API token saved securely in the system wallet.",
-            token_available=True,
-            securely_saved=True,
-        )
-
-    def token_for_operation(self) -> str | None:
-        if self._memory_token:
+    def _token_for_operation_locked(self) -> str | None:
+        if self._memory_token and not self._securely_saved:
             return self._memory_token
+
         try:
             token = self._wallet.load()
         except Exception:
-            self._securely_saved = False
+            if self._securely_saved:
+                self._memory_token = ""
+                self._securely_saved = False
+                self._validation_state = None
             return None
         if not token:
+            if self._securely_saved:
+                self._memory_token = ""
+                self._securely_saved = False
+                self._validation_state = None
+            self._rejected_wallet_digest = ""
+            return None
+
+        digest = self._token_digest(token)
+        if digest == self._rejected_wallet_digest:
+            self._memory_token = ""
             self._securely_saved = False
             return None
-        try:
-            self._client_factory(token=token)
-        except Exception:
-            return None
-        self._memory_token = token
-        self._securely_saved = True
-        return token
+        if token != self._memory_token or not self._securely_saved:
+            self._memory_token = token
+            self._securely_saved = True
+            self._validation_state = None
+        return self._memory_token
+
+    def token_for_operation(self) -> str | None:
+        with self._state_lock:
+            token = self._token_for_operation_locked()
+            if not token:
+                return None
+            try:
+                self._client_factory(token=token)
+            except Exception:
+                self.discard_rejected_auth()
+                return None
+            return token
+
+    def discard_rejected_auth(self) -> None:
+        """Forget one rejected token and suppress repeat validation if clear fails."""
+
+        with self._state_lock:
+            token = self._memory_token
+            was_securely_saved = self._securely_saved
+            self._memory_token = ""
+            self._securely_saved = False
+            self._validation_state = FirstRunState.TOKEN_REJECTED
+            self._rejected_wallet_digest = (
+                self._token_digest(token) if token and was_securely_saved else ""
+            )
+            if was_securely_saved:
+                try:
+                    self._wallet.clear()
+                except Exception:
+                    pass
+            token = ""
+
+    def refresh_saved_auth(self) -> FirstRunResult:
+        """Reload and validate app-wallet auth without disclosing the credential."""
+
+        with self._state_lock:
+            token = self._token_for_operation_locked()
+            if not token:
+                return FirstRunResult(FirstRunState.DAEMON_REACHABLE_UNPAIRED)
+            if self._validation_state is FirstRunState.TOKEN_ACCEPTED:
+                return FirstRunResult(FirstRunState.TOKEN_ACCEPTED)
+
+        result = TokenPairingController(self._client_factory).evaluate(token=token)
+        with self._state_lock:
+            if token != self._memory_token:
+                return FirstRunResult(FirstRunState.DAEMON_REACHABLE_UNPAIRED)
+            if result.state is FirstRunState.TOKEN_REJECTED:
+                self.discard_rejected_auth()
+            elif result.state is FirstRunState.TOKEN_ACCEPTED:
+                self._validation_state = FirstRunState.TOKEN_ACCEPTED
+            token = ""
+            return result
+
+    def authenticate_and_save(
+        self,
+        token: str,
+        *,
+        save_securely: bool,
+    ) -> AuthenticationResult:
+        """Validate explicit native input before retaining or persisting it."""
+
+        result = TokenPairingController(self._client_factory).evaluate(token=token)
+        if result.state is not FirstRunState.TOKEN_ACCEPTED:
+            messages = {
+                FirstRunState.DAEMON_UNREACHABLE: (
+                    "The local daemon is unavailable. Authentication was not saved."
+                ),
+                FirstRunState.TOKEN_REJECTED: (
+                    "Authentication was rejected. Nothing was saved."
+                ),
+                FirstRunState.DAEMON_TOKEN_MISSING: (
+                    "The daemon has no configured API token. Nothing was saved."
+                ),
+                FirstRunState.INVALID_RESPONSE: (
+                    "Authentication could not be verified safely. Nothing was saved."
+                ),
+                FirstRunState.DAEMON_REACHABLE_UNPAIRED: (
+                    "Enter the daemon API token."
+                ),
+            }
+            return AuthenticationResult(
+                code=result.state.value,
+                message=messages.get(
+                    result.state,
+                    "Authentication could not be verified safely. Nothing was saved.",
+                ),
+                token_available=bool(self._memory_token),
+                securely_saved=self._securely_saved,
+            )
+
+        saved = self.save_or_replace(token, save_securely=save_securely)
+        with self._state_lock:
+            if saved.code in {
+                "saved_in_memory",
+                "saved_in_memory_wallet_unavailable",
+                "saved_securely",
+                "wallet_unavailable",
+            }:
+                self._validation_state = FirstRunState.TOKEN_ACCEPTED
+        return saved
 
     def test_authentication(
         self,
         *,
         explicit_token: str | None = None,
     ) -> FirstRunResult:
-        token = (
-            explicit_token
-            if isinstance(explicit_token, str) and explicit_token
-            else self.token_for_operation()
-        )
-        return TokenPairingController(self._client_factory).evaluate(token=token)
+        if isinstance(explicit_token, str) and explicit_token:
+            return TokenPairingController(self._client_factory).evaluate(
+                token=explicit_token
+            )
+        return self.refresh_saved_auth()
 
     def reveal_token(self) -> str | None:
         """Return the current token only for an explicit reveal action."""
@@ -285,32 +409,56 @@ class AuthenticationController:
         return self.token_for_operation()
 
     def clear(self) -> AuthenticationResult:
-        self._memory_token = ""
-        removed = False
-        try:
-            removed = self._wallet.clear()
-        except Exception:
+        with self._state_lock:
+            self._memory_token = ""
+            self._validation_state = None
+            self._rejected_wallet_digest = ""
+            removed = False
+            try:
+                removed = self._wallet.clear()
+            except Exception:
+                self._securely_saved = False
+                return AuthenticationResult(
+                    code="cleared_memory_wallet_unavailable",
+                    message=(
+                        "The in-memory authentication was cleared. Secure wallet "
+                        "storage was unavailable."
+                    ),
+                    token_available=False,
+                    securely_saved=False,
+                )
             self._securely_saved = False
             return AuthenticationResult(
-                code="cleared_memory_wallet_unavailable",
+                code="cleared",
                 message=(
-                    "The in-memory token was cleared. Secure wallet storage "
-                    "was unavailable."
+                    "Saved authentication for this desktop was cleared."
+                    if removed
+                    else "No saved authentication for this desktop was present."
                 ),
                 token_available=False,
                 securely_saved=False,
             )
-        self._securely_saved = False
-        return AuthenticationResult(
-            code="cleared",
-            message=(
-                "VR Hotspot's saved API token was cleared."
-                if removed
-                else "No saved VR Hotspot API token was present."
-            ),
-            token_available=False,
-            securely_saved=False,
-        )
+
+    def request_local_api(
+        self,
+        path: str,
+        *,
+        method: str,
+        body: Mapping[str, Any] | None = None,
+    ) -> HttpResponse:
+        """Broker one allowlisted daemon request without returning the token."""
+
+        token = self.token_for_operation()
+        if not token:
+            raise AuthenticationError(401)
+        try:
+            client = self._client_factory(token=token)
+            response = client.portal_request(path, method=method, body=body)
+        finally:
+            token = ""
+        if response.status in {401, 403}:
+            self.discard_rejected_auth()
+        return response
 
     def authentication_state(self) -> FirstRunState:
-        return self.test_authentication().state
+        return self.refresh_saved_auth().state

@@ -10,16 +10,17 @@ class TestUiLoginSplashContract(unittest.TestCase):
         self.assertRegex(src, r"function\s+renderLoginSplash\s*\(")
 
         startup_guard = re.compile(
-            r"const\s+companionBridge\s*=\s*companionAuthBridgeAvailable\(\)\s*;"
-            r".*?if\s*\(\s*companionBridge\s*\).*?"
-            r"requestCompanionAuthToken\(\).*?"
-            r"else\s*\{\s*tok\s*=\s*migrateLegacyToken\(\)\s*\|\|\s*getStoredToken\(\)\s*;"
+            r"if\s*\(\s*companionAuthBridgeAvailable\(\)\s*\)\s*\{"
+            r".*?startCompanionAuthRefresh\(\)\s*;"
+            r".*?syncCompanionAuthState\(\)\s*;"
+            r".*?return\s*;"
+            r".*?const\s+tok\s*=\s*getToken\(\)\s*;"
             r".*?if\s*\(\s*!tok\s*\)\s*\{\s*renderLoginSplash\(\)\s*;\s*return\s*;",
             re.S,
         )
         self.assertIsNotNone(startup_guard.search(src))
 
-    def test_companion_auth_bridge_uses_fixed_origin_memory_only_contract(self):
+    def test_companion_auth_bridge_uses_fixed_origin_native_broker_contract(self):
         src = Path("assets/ui.js").read_text(encoding="utf-8")
 
         self.assertIn(
@@ -31,14 +32,30 @@ class TestUiLoginSplashContract(unittest.TestCase):
             src,
         )
         self.assertIn("path !== '/ui'", src)
-        self.assertIn("!path.startsWith('/assets/')", src)
-        self.assertIn("type: 'token_request'", src)
-        self.assertIn("type: 'auth_accepted'", src)
+        self.assertIn("path !== '/ui/'", src)
+        self.assertNotIn("path.startsWith('/assets/')", src)
+        self.assertIn("type: 'auth_status'", src)
+        self.assertIn("type: 'auth_prompt'", src)
+        self.assertIn("type: 'api_request'", src)
         self.assertIn("type: 'auth_cleared'", src)
-        self.assertIn("companionSessionToken = token;", src)
-        self.assertIn(
-            "clearStoredTokenEverywhere({ notifyCompanion: false });",
-            src,
-        )
+        self.assertNotIn("type: 'token_request'", src)
+        self.assertNotIn("type: 'auth_accepted'", src)
+        self.assertNotIn("companionSessionToken", src)
         self.assertNotIn("COMPANION_AUTH_ORIGIN + '?'", src)
         self.assertNotIn("COMPANION_AUTH_ORIGIN + '#'", src)
+
+    def test_tokens_are_never_persisted_in_browser_storage(self):
+        src = Path("assets/ui.js").read_text(encoding="utf-8")
+
+        self.assertNotRegex(
+            src,
+            r"(?:localStorage|sessionStorage|STORE)\.setItem\([^)]*(?:token|TOKEN)",
+        )
+        self.assertNotRegex(
+            src,
+            r"(?:localStorage|sessionStorage|STORE)\.getItem\([^)]*(?:token|TOKEN)",
+        )
+        self.assertNotIn("indexedDB", src)
+        self.assertNotIn("IndexedDB", src)
+        self.assertIn("let browserSessionToken = '';", src)
+        self.assertIn("browserSessionToken = (v || '').trim();", src)

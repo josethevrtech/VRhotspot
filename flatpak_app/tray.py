@@ -779,6 +779,195 @@ class StatusNotifierBackend:
         )
 
 
+class NativeAuthenticationDialog:
+    """Native token entry shared by tray and locked Web Portal window modes."""
+
+    def __init__(
+        self,
+        *,
+        application,
+        parent_window,
+        authentication: AuthenticationController,
+        Gtk,
+        Gdk,
+        on_auth_changed: Callable[[], None],
+        on_auth_cleared: Callable[[], None] | None = None,
+    ):
+        self._application = application
+        self._parent_window = parent_window
+        self._authentication = authentication
+        self._Gtk = Gtk
+        self._Gdk = Gdk
+        self._on_auth_changed = on_auth_changed
+        self._on_auth_cleared = (
+            on_auth_cleared if callable(on_auth_cleared) else lambda: None
+        )
+        self._window = None
+
+    def __repr__(self) -> str:
+        return f"NativeAuthenticationDialog(open={self._window is not None!r})"
+
+    def open(self) -> None:
+        if self._window is not None:
+            self._window.present()
+            return
+
+        Gtk = self._Gtk
+        window = Gtk.Window(application=self._application)
+        window.set_title("VR Hotspot Authentication")
+        window.set_default_size(560, 330)
+        window.set_transient_for(self._parent_window)
+        window.set_modal(True)
+        set_icon_name = getattr(window, "set_icon_name", None)
+        if callable(set_icon_name):
+            set_icon_name(APP_ID)
+
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        content.set_margin_top(20)
+        content.set_margin_bottom(20)
+        content.set_margin_start(20)
+        content.set_margin_end(20)
+
+        heading = Gtk.Label(label="Authenticate this device")
+        heading.set_xalign(0.0)
+        heading.add_css_class("title-2")
+        content.append(heading)
+        description = Gtk.Label(
+            label=(
+                "Enter the existing daemon API token. Save for this desktop to "
+                "share authentication between this Flatpak's tray and Web Portal "
+                "window. Remote browsers still sign in separately."
+            )
+        )
+        description.set_wrap(True)
+        description.set_xalign(0.0)
+        content.append(description)
+
+        entry = Gtk.PasswordEntry()
+        entry.set_show_peek_icon(True)
+        entry.set_hexpand(True)
+        content.append(entry)
+
+        save_securely = Gtk.CheckButton(label="Save for this desktop")
+        save_securely.set_active(self._authentication.securely_saved)
+        content.append(save_securely)
+
+        status = Gtk.Label(label="")
+        status.set_wrap(True)
+        status.set_xalign(0.0)
+        content.append(status)
+
+        buttons = Gtk.FlowBox()
+        buttons.set_selection_mode(Gtk.SelectionMode.NONE)
+        for label, handler in (
+            (
+                "Authenticate this device",
+                lambda *_args: self.save(entry, save_securely, status),
+            ),
+            ("Test authentication", lambda *_args: self.test(entry, status)),
+            ("Copy saved token", lambda *_args: self.copy(status)),
+            ("Reveal saved token", lambda *_args: self.reveal(entry, status)),
+            (
+                "Clear saved authentication",
+                lambda *_args: self.clear(entry, status),
+            ),
+            ("Close", lambda *_args: window.close()),
+        ):
+            button = Gtk.Button(label=label)
+            button.connect("clicked", handler)
+            buttons.insert(button, -1)
+        content.append(buttons)
+        window.set_child(content)
+
+        def closed(*_args):
+            entry.set_text("")
+            self._window = None
+            return False
+
+        window.connect("close-request", closed)
+        self._window = window
+        window.present()
+
+    def save(self, entry, save_securely, status) -> None:
+        token = entry.get_text()
+        entry.set_text("")
+        try:
+            result = self._authentication.authenticate_and_save(
+                token,
+                save_securely=save_securely.get_active() is True,
+            )
+        except Exception:
+            status.set_text("Authentication could not be saved safely.")
+            return
+        finally:
+            token = ""
+        status.set_text(result.message)
+        save_securely.set_active(result.securely_saved)
+        self._on_auth_changed()
+
+    def test(self, entry, status) -> None:
+        token = entry.get_text()
+        entry.set_text("")
+        try:
+            result = self._authentication.test_authentication(
+                explicit_token=token or None
+            )
+        except Exception:
+            status.set_text("Authentication could not be tested safely.")
+            return
+        finally:
+            token = ""
+        messages = {
+            FirstRunState.TOKEN_ACCEPTED: "Authentication succeeded.",
+            FirstRunState.TOKEN_REJECTED: "Authentication was rejected.",
+            FirstRunState.DAEMON_UNREACHABLE: "The local daemon is unavailable.",
+            FirstRunState.DAEMON_TOKEN_MISSING: (
+                "The daemon has no configured API token."
+            ),
+            FirstRunState.DAEMON_REACHABLE_UNPAIRED: "Enter an API token first.",
+            FirstRunState.INVALID_RESPONSE: (
+                "The daemon returned an unsupported response."
+            ),
+        }
+        status.set_text(messages[result.state])
+        self._on_auth_changed()
+
+    def copy(self, status) -> None:
+        token = self._authentication.copy_token()
+        if not token:
+            status.set_text("No saved API token is available.")
+            return
+        try:
+            display = self._Gdk.Display.get_default()
+            if display is None:
+                raise RuntimeError
+            display.get_clipboard().set(token)
+            status.set_text("API token copied to the clipboard.")
+        except Exception:
+            status.set_text("The API token could not be copied.")
+        finally:
+            token = ""
+
+    def reveal(self, entry, status) -> None:
+        token = self._authentication.reveal_token()
+        if not token:
+            status.set_text("No saved API token is available.")
+            return
+        entry.set_text(token)
+        status.set_text("API token revealed by explicit request.")
+        token = ""
+
+    def clear(self, entry, status) -> None:
+        entry.set_text("")
+        result = self._authentication.clear()
+        status.set_text(result.message)
+        try:
+            self._on_auth_cleared()
+        except Exception:
+            pass
+        self._on_auth_changed()
+
+
 class TrayRuntime:
     """Connect the testable model/controller to GTK and StatusNotifierItem."""
 
@@ -795,6 +984,7 @@ class TrayRuntime:
         Gio,
         GLib,
         open_diagnostics: Callable[[], None],
+        on_auth_changed: Callable[[], None] | None = None,
         on_auth_cleared: Callable[[], None] | None = None,
     ):
         self._application = application
@@ -807,6 +997,9 @@ class TrayRuntime:
         self._Gio = Gio
         self._GLib = GLib
         self._open_diagnostics = open_diagnostics
+        self._on_auth_changed = (
+            on_auth_changed if callable(on_auth_changed) else lambda: None
+        )
         self._on_auth_cleared = (
             on_auth_cleared
             if callable(on_auth_cleared)
@@ -816,7 +1009,15 @@ class TrayRuntime:
         self._auth_refresh_pending = False
         self._notification_counter = 0
         self._last_detail_code = ""
-        self._auth_window = None
+        self._authentication_dialog = NativeAuthenticationDialog(
+            application=application,
+            parent_window=lifecycle.window,
+            authentication=authentication,
+            Gtk=Gtk,
+            Gdk=Gdk,
+            on_auth_changed=self._handle_auth_changed,
+            on_auth_cleared=self._on_auth_cleared,
+        )
 
     def __repr__(self) -> str:
         return (
@@ -970,176 +1171,35 @@ class TrayRuntime:
         else:
             self._auth_refresh_pending = True
 
-    def _open_authentication(self) -> None:
-        if self._auth_window is not None:
-            self._auth_window.present()
-            return
-
-        Gtk = self._Gtk
-        window = Gtk.Window(application=self._application)
-        window.set_title("VR Hotspot Authentication")
-        window.set_default_size(560, 330)
-        window.set_transient_for(self._lifecycle.window)
-        window.set_modal(True)
-
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        content.set_margin_top(20)
-        content.set_margin_bottom(20)
-        content.set_margin_start(20)
-        content.set_margin_end(20)
-
-        heading = Gtk.Label(label="Authentication")
-        heading.set_xalign(0.0)
-        heading.add_css_class("title-2")
-        content.append(heading)
-        description = Gtk.Label(
-            label=(
-                "Enter the existing daemon API token. It remains in memory "
-                "unless secure wallet storage is explicitly selected."
-            )
-        )
-        description.set_wrap(True)
-        description.set_xalign(0.0)
-        content.append(description)
-
-        entry = Gtk.PasswordEntry()
-        entry.set_show_peek_icon(True)
-        entry.set_hexpand(True)
-        content.append(entry)
-
-        save_securely = Gtk.CheckButton(
-            label="Save API token securely in system wallet"
-        )
-        save_securely.set_active(self._authentication.securely_saved)
-        content.append(save_securely)
-
-        status = Gtk.Label(label="")
-        status.set_wrap(True)
-        status.set_xalign(0.0)
-        content.append(status)
-
-        buttons = Gtk.FlowBox()
-        buttons.set_selection_mode(Gtk.SelectionMode.NONE)
-        for label, handler in (
-            (
-                "Save or replace token",
-                lambda *_args: self._auth_save(
-                    entry,
-                    save_securely,
-                    status,
-                ),
-            ),
-            (
-                "Test authentication",
-                lambda *_args: self._auth_test(entry, status),
-            ),
-            (
-                "Copy saved token",
-                lambda *_args: self._auth_copy(status),
-            ),
-            (
-                "Reveal saved token",
-                lambda *_args: self._auth_reveal(entry, status),
-            ),
-            (
-                "Clear saved token",
-                lambda *_args: self._auth_clear(entry, status),
-            ),
-            ("Close", lambda *_args: window.close()),
-        ):
-            button = Gtk.Button(label=label)
-            button.connect("clicked", handler)
-            buttons.insert(button, -1)
-        content.append(buttons)
-        window.set_child(content)
-
-        def closed(*_args):
-            entry.set_text("")
-            self._auth_window = None
-            return False
-
-        window.connect("close-request", closed)
-        self._auth_window = window
-        window.present()
-
-    def _auth_save(self, entry, save_securely, status) -> None:
-        token = entry.get_text()
-        entry.set_text("")
-        try:
-            result = self._authentication.save_or_replace(
-                token,
-                save_securely=save_securely.get_active() is True,
-            )
-        except Exception:
-            status.set_text("The API token could not be saved.")
-            return
-        finally:
-            token = ""
-        status.set_text(result.message)
-        save_securely.set_active(result.securely_saved)
+    def _handle_auth_changed(self) -> None:
         self.refresh_after_auth_change()
-
-    def _auth_test(self, entry, status) -> None:
-        token = entry.get_text()
-        entry.set_text("")
         try:
-            result = self._authentication.test_authentication(
-                explicit_token=token or None
-            )
-        except Exception:
-            status.set_text("Authentication could not be tested safely.")
-            return
-        finally:
-            token = ""
-        messages = {
-            FirstRunState.TOKEN_ACCEPTED: "Authentication succeeded.",
-            FirstRunState.TOKEN_REJECTED: "Authentication was rejected.",
-            FirstRunState.DAEMON_UNREACHABLE: "The local daemon is unavailable.",
-            FirstRunState.DAEMON_TOKEN_MISSING: (
-                "The daemon has no configured API token."
-            ),
-            FirstRunState.DAEMON_REACHABLE_UNPAIRED: "Enter an API token first.",
-            FirstRunState.INVALID_RESPONSE: (
-                "The daemon returned an unsupported response."
-            ),
-        }
-        status.set_text(messages[result.state])
-        self.refresh_async()
-
-    def _auth_copy(self, status) -> None:
-        token = self._authentication.copy_token()
-        if not token:
-            status.set_text("No saved API token is available.")
-            return
-        try:
-            display = self._Gdk.Display.get_default()
-            if display is None:
-                raise RuntimeError
-            display.get_clipboard().set(token)
-            status.set_text("API token copied to the clipboard.")
-        except Exception:
-            status.set_text("The API token could not be copied.")
-        finally:
-            token = ""
-
-    def _auth_reveal(self, entry, status) -> None:
-        token = self._authentication.reveal_token()
-        if not token:
-            status.set_text("No saved API token is available.")
-            return
-        entry.set_text(token)
-        status.set_text("API token revealed by explicit request.")
-        token = ""
-
-    def _auth_clear(self, entry, status) -> None:
-        entry.set_text("")
-        result = self._authentication.clear()
-        status.set_text(result.message)
-        try:
-            self._on_auth_cleared()
+            self._on_auth_changed()
         except Exception:
             pass
-        self.refresh_after_auth_change()
+
+    def _open_authentication(self) -> None:
+        self._authentication_dialog.open()
+
+    def open_authentication(self) -> None:
+        """Open the shared native authentication dialog."""
+
+        self._open_authentication()
+
+    def _auth_save(self, entry, save_securely, status) -> None:
+        self._authentication_dialog.save(entry, save_securely, status)
+
+    def _auth_test(self, entry, status) -> None:
+        self._authentication_dialog.test(entry, status)
+
+    def _auth_copy(self, status) -> None:
+        self._authentication_dialog.copy(status)
+
+    def _auth_reveal(self, entry, status) -> None:
+        self._authentication_dialog.reveal(entry, status)
+
+    def _auth_clear(self, entry, status) -> None:
+        self._authentication_dialog.clear(entry, status)
 
     def dispatch_action(self, action: str) -> None:
         state = self._controls.state
