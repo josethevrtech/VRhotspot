@@ -4,6 +4,7 @@ import importlib
 import inspect
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import warnings
@@ -327,10 +328,14 @@ class FakeWebKitWebView(FakeGtkWidget):
         super().__init__()
         self.properties = properties
         self.loaded_uris = []
+        self.zoom_levels = []
         type(self).last_created = self
 
     def load_uri(self, uri):
         self.loaded_uris.append(uri)
+
+    def set_zoom_level(self, zoom_level):
+        self.zoom_levels.append(zoom_level)
 
 
 class FakeWebKit:
@@ -509,6 +514,13 @@ def test_locked_web_portal_view_is_ephemeral_and_has_no_injection_surface():
     assert session.cookie_manager.accept_policy == "never"
     assert web_view.properties["network_session"] is session
     assert web_view.properties["settings"] is settings
+    assert web_view.zoom_levels == [app.WEB_PORTAL_SHELL_ZOOM]
+    assert app.WEB_PORTAL_SHELL_ZOOM == 1.75
+    assert (
+        app._WEB_PORTAL_SHELL_ZOOM_MIN
+        <= app.WEB_PORTAL_SHELL_ZOOM
+        <= app._WEB_PORTAL_SHELL_ZOOM_MAX
+    )
     assert (
         web_view.properties["default_content_security_policy"]
         == app._WEB_PORTAL_CSP
@@ -539,6 +551,26 @@ def test_locked_web_portal_view_is_ephemeral_and_has_no_injection_surface():
         "set_uri(",
     ):
         assert forbidden not in source
+
+
+@pytest.mark.parametrize(
+    ("configured_zoom", "expected_zoom"),
+    (
+        (-100.0, 1.0),
+        (100.0, 2.0),
+    ),
+)
+def test_web_portal_shell_zoom_is_bounded_and_has_no_runtime_input(
+    monkeypatch,
+    configured_zoom,
+    expected_zoom,
+):
+    from flatpak_app import app
+
+    monkeypatch.setattr(app, "WEB_PORTAL_SHELL_ZOOM", configured_zoom)
+
+    assert inspect.signature(app._bounded_web_portal_shell_zoom).parameters == {}
+    assert app._bounded_web_portal_shell_zoom() == expected_zoom
 
 
 def test_web_portal_shell_loads_only_the_fixed_daemon_served_route(monkeypatch):
@@ -703,6 +735,34 @@ def test_web_portal_flag_accepts_no_url_or_other_value():
     assert portal_action.nargs == 0
     with pytest.raises(SystemExit):
         parser.parse_args(["--web-portal-shell", "https://example.com/"])
+
+
+def test_web_portal_shell_has_no_arbitrary_zoom_or_scale_option():
+    from flatpak_app import app
+
+    parser = app._argument_parser()
+    option_strings = {
+        option
+        for action in parser._actions
+        for option in action.option_strings
+    }
+
+    assert all(
+        "zoom" not in option.casefold() and "scale" not in option.casefold()
+        for option in option_strings
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--web-portal-shell", "--zoom", "2"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--web-portal-shell", "--scale", "2"])
+
+
+def test_shared_browser_portal_css_has_no_flatpak_shell_scaling():
+    css = Path("assets/ui.css").read_text(encoding="utf-8")
+
+    assert re.search(r"(?m)^\s*zoom\s*:", css) is None
+    assert "set_zoom_level" not in css
+    assert "web-portal-shell" not in css
 
 
 def test_gui_activation_does_not_require_password_entry_placeholder_setter(

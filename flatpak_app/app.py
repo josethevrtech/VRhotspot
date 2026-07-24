@@ -34,8 +34,11 @@ WEB_PORTAL_ORIGIN = "http://127.0.0.1:8732"
 WEB_PORTAL_URL = f"{WEB_PORTAL_ORIGIN}/ui"
 WEBKIT_GI_NAMESPACE = "WebKit"
 WEBKIT_GI_VERSION = "6.0"
+WEB_PORTAL_SHELL_ZOOM = 1.75
 MAX_SMOKE_JSON_BYTES = 8_192
 MAX_LIVE_SMOKE_JSON_BYTES = 65_536
+_WEB_PORTAL_SHELL_ZOOM_MIN = 1.0
+_WEB_PORTAL_SHELL_ZOOM_MAX = 2.0
 _WEB_PORTAL_CSP = (
     f"default-src {WEB_PORTAL_ORIGIN}; "
     f"connect-src {WEB_PORTAL_ORIGIN}; "
@@ -481,6 +484,15 @@ def _handle_web_portal_policy(_web_view, decision, decision_type, WebKit) -> boo
     return True
 
 
+def _bounded_web_portal_shell_zoom() -> float:
+    """Return the fixed app-shell zoom clamped to its reviewed safe range."""
+
+    return max(
+        _WEB_PORTAL_SHELL_ZOOM_MIN,
+        min(WEB_PORTAL_SHELL_ZOOM, _WEB_PORTAL_SHELL_ZOOM_MAX),
+    )
+
+
 def _build_locked_web_portal_view(WebKit):
     """Create an ephemeral WebView without credential or script injection."""
 
@@ -509,6 +521,7 @@ def _build_locked_web_portal_view(WebKit):
         settings=settings,
         default_content_security_policy=_WEB_PORTAL_CSP,
     )
+    web_view.set_zoom_level(_bounded_web_portal_shell_zoom())
     web_view.connect(
         "decide-policy",
         lambda view, decision, decision_type: _handle_web_portal_policy(
