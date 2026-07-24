@@ -71,7 +71,7 @@ def build_tray_menu_model(
         state.daemon_available
         and state.authenticated
         and state.busy_action is None
-        and state.status is not TrayStatus.TRANSITIONING
+        and state.status in {TrayStatus.RUNNING, TrayStatus.STOPPED}
     )
     hotspot_commands = TrayMenuItem(
         21,
@@ -94,7 +94,7 @@ def build_tray_menu_model(
                 9,
                 "restart",
                 "Restart Service",
-                enabled=ready and state.status is TrayStatus.RUNNING,
+                enabled=ready,
             ),
             TrayMenuItem(10, "repair", "Repair Network", enabled=ready),
         ),
@@ -119,6 +119,12 @@ def build_tray_menu_model(
         "Advanced",
         children=(
             TrayMenuItem(16, "authentication", "Authentication…"),
+            TrayMenuItem(
+                5,
+                "refresh",
+                "Refresh Status",
+                enabled=state.busy_action is None,
+            ),
             TrayMenuItem(18, "diagnostics", "Open Diagnostics"),
             TrayMenuItem(
                 13,
@@ -136,19 +142,11 @@ def build_tray_menu_model(
         ),
     )
     items = (
-        TrayMenuItem(1, "show", "Show VR Hotspot", not window_visible),
-        TrayMenuItem(2, "hide", "Hide VR Hotspot", window_visible),
         TrayMenuItem(
             4,
             "status",
             f"Current status: {state.status_label}",
             enabled=False,
-        ),
-        TrayMenuItem(
-            5,
-            "refresh",
-            "Refresh Status",
-            enabled=state.busy_action is None,
         ),
         hotspot_commands,
         network,
@@ -408,6 +406,37 @@ class StatusNotifierBackend:
         self._connection = None
 
     def update(self, model: TrayMenuModel) -> None:
+        previous_items = {
+            item.item_id: item for item in self._model.all_items()
+        }
+        property_updates = []
+        removed_properties = []
+        for item in model.all_items():
+            previous = previous_items.get(item.item_id)
+            if previous is None:
+                continue
+            changed = {}
+            if item.label != previous.label:
+                changed["label"] = self._GLib.Variant("s", item.label)
+            if item.enabled != previous.enabled:
+                changed["enabled"] = self._GLib.Variant("b", item.enabled)
+            if item.checked != previous.checked:
+                if item.checked is None:
+                    removed_properties.append(
+                        (item.item_id, ["toggle-type", "toggle-state"])
+                    )
+                else:
+                    changed["toggle-type"] = self._GLib.Variant(
+                        "s",
+                        "checkmark",
+                    )
+                    changed["toggle-state"] = self._GLib.Variant(
+                        "i",
+                        1 if item.checked else 0,
+                    )
+            if changed:
+                property_updates.append((item.item_id, changed))
+
         icon_changed = model.icon_name != self._model.icon_name
         status_changed = model.notifier_status != self._model.notifier_status
         attention_changed = icon_changed or status_changed
@@ -425,6 +454,17 @@ class StatusNotifierBackend:
                 "LayoutUpdated",
                 self._GLib.Variant("(ui)", (self._revision, 0)),
             )
+            if property_updates or removed_properties:
+                connection.emit_signal(
+                    None,
+                    self.MENU_PATH,
+                    self.MENU_INTERFACE,
+                    "ItemsPropertiesUpdated",
+                    self._GLib.Variant(
+                        "(a(ia{sv})a(ias))",
+                        (property_updates, removed_properties),
+                    ),
+                )
             if icon_changed:
                 connection.emit_signal(
                     None,
@@ -786,13 +826,16 @@ class TrayRuntime:
         )
 
     def start(self) -> bool:
+        # Resolve an existing wallet/session token and daemon state before the
+        # StatusNotifierItem is registered so Plasma never caches the default
+        # menu and icon as the tray's initial authoritative state.
+        self._controls.refresh()
+        self._update_menu()
         active = self._backend.start()
         self._lifecycle.set_tray_active(active)
         if active:
             self._application.hold()
             self._GLib.timeout_add_seconds(5, self._periodic_refresh)
-        self._update_menu()
-        self.refresh_async()
         return active
 
     def _periodic_refresh(self) -> bool:
@@ -1100,11 +1143,7 @@ class TrayRuntime:
 
     def dispatch_action(self, action: str) -> None:
         state = self._controls.state
-        if action == "show":
-            self.show()
-        elif action == "hide":
-            self.hide()
-        elif action == "start":
+        if action == "start":
             self._run_worker(
                 lambda: self._controls.perform("start"),
                 pending_action="start",

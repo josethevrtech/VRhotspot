@@ -58,18 +58,18 @@ build files are removed, and the daemon install continues.
 
 The desktop launcher starts the companion in tray mode. Its only graphical UI
 is the daemon-served Web Portal in a locked WebKitGTK window. Primary tray
-activation and **Show VR Hotspot** open or restore that same window;
-**Hide VR Hotspot** and the window close action hide it to the tray without
-creating another window. If WebKit cannot be constructed, the companion shows
-a bounded GTK error surface and does not open another interface. The tray
-keeps live status and refresh near the top. **Hotspot Commands** groups Start,
+activation opens or restores that same window, and the window close action
+hides it to the tray without creating another window. Redundant Show and Hide
+menu commands are not exported. If WebKit cannot be constructed, the companion
+shows a bounded GTK error surface and does not open another interface. The tray
+keeps **Current status** visible at the top. **Hotspot Commands** groups Start,
 Stop, Restart, and Repair; **Network** contains Share Internet Connection; and
-**Advanced** contains Authentication, Open Diagnostics, Privacy Mode, and the
-existing Start Hotspot Automatically setting. That setting controls daemon
-hotspot autostart, not desktop-companion login autostart. Launching VR Hotspot
-at desktop login remains deferred and is not shown as a tray item. Explicit
-Quit exits only the desktop companion and does not stop an already-running
-hotspot.
+**Advanced** contains Authentication, Refresh Status, Open Diagnostics,
+Privacy Mode, and the existing Start Hotspot Automatically setting. That
+setting controls daemon hotspot autostart, not desktop-companion login
+autostart. Launching VR Hotspot at desktop login remains deferred and is not
+shown as a tray item. Explicit Quit exits only the desktop companion and does
+not stop an already-running hotspot.
 
 The Web Portal shell and tray are one companion and share authentication state.
 An API token accepted after explicit entry in the Portal is adopted immediately

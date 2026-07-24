@@ -150,20 +150,14 @@ def test_tray_menu_contains_every_required_action_in_grouped_submenus():
     )
 
     assert tuple(item.label for item in model.items) == (
-        "Show VR Hotspot",
-        "Hide VR Hotspot",
         "Current status: Running",
-        "Refresh Status",
         "Hotspot Commands",
         "Network",
         "Advanced",
         "Quit VR Hotspot",
     )
     assert model.action_labels() == (
-        "Show VR Hotspot",
-        "Hide VR Hotspot",
         "Current status: Running",
-        "Refresh Status",
         "Hotspot Commands",
         "Start Hotspot",
         "Stop Hotspot",
@@ -173,6 +167,7 @@ def test_tray_menu_contains_every_required_action_in_grouped_submenus():
         "Share Internet Connection",
         "Advanced",
         "Authentication…",
+        "Refresh Status",
         "Open Diagnostics",
         "Privacy Mode",
         "Start Hotspot Automatically",
@@ -192,6 +187,7 @@ def test_tray_menu_contains_every_required_action_in_grouped_submenus():
     )
     assert tuple(item.action for item in advanced.children) == (
         "authentication",
+        "refresh",
         "diagnostics",
         "privacy",
         "hotspot_autostart",
@@ -202,6 +198,7 @@ def test_tray_menu_contains_every_required_action_in_grouped_submenus():
         "restart",
         "repair",
         "share_internet",
+        "refresh",
         "authentication",
         "diagnostics",
         "privacy",
@@ -210,6 +207,17 @@ def test_tray_menu_contains_every_required_action_in_grouped_submenus():
     assert not nested_actions.intersection(
         item.action for item in model.items
     )
+    assert all(
+        item.action not in {"show", "hide"}
+        for item in model.all_items()
+    )
+    assert all(
+        item.label not in {"Show VR Hotspot", "Hide VR Hotspot"}
+        for item in model.all_items()
+    )
+    assert _menu_item(model, "refresh") in advanced.children
+    assert all(item.action != "refresh" for item in model.items)
+    assert model.items[0].action == "status"
     assert all(not item.separator for item in model.all_items())
     assert all(item.action != "web_portal" for item in model.all_items())
     assert not any(
@@ -251,10 +259,7 @@ def test_dbus_menu_layout_exports_nested_submenus_without_kde():
     assert root_id == 0
     assert root_properties["children-display"].value == "submenu"
     assert tuple(exported) == (
-        "Show VR Hotspot",
-        "Hide VR Hotspot",
         "Current status: Running",
-        "Refresh Status",
         "Hotspot Commands",
         "Network",
         "Advanced",
@@ -278,6 +283,7 @@ def test_dbus_menu_layout_exports_nested_submenus_without_kde():
         for child in exported["Advanced"][2]
     ) == (
         "Authentication…",
+        "Refresh Status",
         "Open Diagnostics",
         "Privacy Mode",
         "Start Hotspot Automatically",
@@ -289,10 +295,70 @@ def test_dbus_menu_layout_exports_nested_submenus_without_kde():
     assert parent_id == 23
     assert tuple(child.value[1]["label"].value for child in children) == (
         "Authentication…",
+        "Refresh Status",
         "Open Diagnostics",
         "Privacy Mode",
         "Start Hotspot Automatically",
     )
+
+
+def test_dbus_update_exports_refreshed_command_sensitivity_to_kde():
+    class Variant:
+        def __init__(self, signature, value):
+            self.signature = signature
+            self.value = value
+
+    class Connection:
+        def __init__(self):
+            self.signals = []
+
+        def emit_signal(self, *_args):
+            self.signals.append(_args)
+
+    stopped = build_tray_menu_model(
+        TrayState(
+            status=TrayStatus.STOPPED,
+            status_label="Stopped",
+            daemon_available=True,
+            authenticated=True,
+        ),
+        window_visible=True,
+    )
+    running = build_tray_menu_model(
+        TrayState(
+            status=TrayStatus.RUNNING,
+            status_label="Running",
+            running=True,
+            daemon_available=True,
+            authenticated=True,
+        ),
+        window_visible=True,
+    )
+    backend = StatusNotifierBackend(
+        Gio=object(),
+        GLib=type("GLib", (), {"Variant": Variant}),
+        model=stopped,
+        on_action=lambda _action: None,
+        on_activate=lambda: None,
+    )
+    connection = Connection()
+    backend._connection = connection
+
+    backend.update(running)
+
+    update_signal = next(
+        signal
+        for signal in connection.signals
+        if signal[3] == "ItemsPropertiesUpdated"
+    )
+    changes, removed = update_signal[4].value
+    changes_by_id = {item_id: values for item_id, values in changes}
+    assert changes_by_id[7]["enabled"].value is False
+    assert changes_by_id[8]["enabled"].value is True
+    assert removed == []
+    assert _menu_enabled(backend._model, "start") is False
+    assert _menu_enabled(backend._model, "stop") is True
+    assert _menu_enabled(backend._model, "restart") is True
 
 
 @pytest.mark.parametrize(
@@ -586,8 +652,68 @@ def test_authenticated_stopped_state_enables_only_valid_hotspot_commands():
     assert state.status is TrayStatus.STOPPED
     assert _menu_enabled(menu, "start") is True
     assert _menu_enabled(menu, "stop") is False
-    assert _menu_enabled(menu, "restart") is False
+    assert _menu_enabled(menu, "restart") is True
     assert _menu_enabled(menu, "repair") is True
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    (
+        (
+            TrayState(),
+            (False, False, False, False, True),
+        ),
+        (
+            TrayState(
+                status=TrayStatus.DAEMON_UNAVAILABLE,
+                status_label="Daemon Unavailable",
+            ),
+            (False, False, False, False, True),
+        ),
+        (
+            TrayState(
+                status=TrayStatus.STOPPED,
+                status_label="Stopped",
+                daemon_available=True,
+                authenticated=True,
+            ),
+            (True, False, True, True, True),
+        ),
+        (
+            TrayState(
+                status=TrayStatus.RUNNING,
+                status_label="Running",
+                running=True,
+                daemon_available=True,
+                authenticated=True,
+            ),
+            (False, True, True, True, True),
+        ),
+        (
+            TrayState(
+                status=TrayStatus.TRANSITIONING,
+                status_label="Transitioning",
+                daemon_available=True,
+                authenticated=True,
+                busy_action="start",
+            ),
+            (False, False, False, False, True),
+        ),
+    ),
+)
+def test_tray_command_sensitivity_matrix_is_deterministic(state, expected):
+    model = build_tray_menu_model(state, window_visible=True)
+
+    assert tuple(
+        _menu_enabled(model, action)
+        for action in (
+            "start",
+            "stop",
+            "restart",
+            "repair",
+            "authentication",
+        )
+    ) == expected
 
 
 def test_unexpected_client_construction_failure_maps_to_error():
@@ -713,6 +839,13 @@ class FakeBackend:
     def __init__(self):
         self.stop_calls = 0
         self.models = []
+        self.start_calls = 0
+        self.model_at_start = None
+
+    def start(self):
+        self.start_calls += 1
+        self.model_at_start = self.models[-1]
+        return True
 
     def stop(self):
         self.stop_calls += 1
@@ -729,6 +862,86 @@ class FakeControls:
 
     def perform(self, *_args, **_kwargs):
         raise AssertionError("Quit must not perform a hotspot action")
+
+
+@pytest.mark.parametrize(
+    ("status", "label", "start_enabled", "stop_enabled"),
+    (
+        (TrayStatus.RUNNING, "Running", False, True),
+        (TrayStatus.STOPPED, "Stopped", True, False),
+    ),
+)
+def test_startup_refresh_registers_authenticated_daemon_state_as_initial_model(
+    status,
+    label,
+    start_enabled,
+    stop_enabled,
+):
+    class Application(FakeApplication):
+        def __init__(self):
+            super().__init__()
+            self.hold_calls = 0
+
+        def hold(self):
+            self.hold_calls += 1
+
+    class Controls:
+        def __init__(self):
+            self.refresh_calls = 0
+            self.state = TrayState()
+
+        def refresh(self):
+            self.refresh_calls += 1
+            self.state = TrayState(
+                status=status,
+                status_label=label,
+                phase=status.value,
+                running=status is TrayStatus.RUNNING,
+                daemon_available=True,
+                authenticated=True,
+            )
+            return self.state
+
+    class GLib:
+        timers = []
+
+        @classmethod
+        def timeout_add_seconds(cls, seconds, callback):
+            cls.timers.append((seconds, callback))
+            return 1
+
+    application = Application()
+    controls = Controls()
+    backend = FakeBackend()
+    runtime = TrayRuntime(
+        application=application,
+        lifecycle=WindowLifecycleController(
+            application=application,
+            window=FakeWindow(),
+        ),
+        controls=controls,
+        authentication=object(),
+        backend=backend,
+        Gtk=object(),
+        Gdk=object(),
+        Gio=object(),
+        GLib=GLib,
+        open_diagnostics=lambda: None,
+    )
+
+    assert runtime.start() is True
+
+    initial = backend.model_at_start
+    assert controls.refresh_calls == 1
+    assert backend.start_calls == 1
+    assert initial.icon_name == ICON_NAMES[status]
+    assert initial.tooltip == f"VR Hotspot — {label}"
+    assert _menu_enabled(initial, "start") is start_enabled
+    assert _menu_enabled(initial, "stop") is stop_enabled
+    assert _menu_enabled(initial, "restart") is True
+    assert application.hold_calls == 1
+    assert len(GLib.timers) == 1
+    assert GLib.timers[0][0] == 5
 
 
 def test_auth_change_refresh_is_deferred_until_active_worker_finishes():
@@ -962,7 +1175,7 @@ def test_clearing_authentication_refreshes_needs_authentication_menu():
     assert noncredential not in repr(refreshed_menu)
 
 
-def test_close_to_tray_immediately_refreshes_exported_show_hide_state():
+def test_close_to_tray_keeps_redundant_show_hide_commands_absent():
     application = FakeApplication()
     lifecycle = WindowLifecycleController(
         application=application,
@@ -984,21 +1197,18 @@ def test_close_to_tray_immediately_refreshes_exported_show_hide_state():
     )
 
     runtime.show()
-    assert _menu_enabled(backend.models[-1], "show") is False
-    assert _menu_enabled(backend.models[-1], "hide") is True
-
-    runtime.dispatch_action("hide")
-    assert _menu_enabled(backend.models[-1], "show") is True
-    assert _menu_enabled(backend.models[-1], "hide") is False
-
-    runtime.dispatch_action("show")
-    assert _menu_enabled(backend.models[-1], "show") is False
-    assert _menu_enabled(backend.models[-1], "hide") is True
+    assert lifecycle.visible is True
+    assert all(
+        item.action not in {"show", "hide"}
+        for item in backend.models[-1].all_items()
+    )
 
     assert runtime.close_request(lifecycle.window) is True
     assert lifecycle.visible is False
-    assert _menu_enabled(backend.models[-1], "show") is True
-    assert _menu_enabled(backend.models[-1], "hide") is False
+    assert all(
+        item.label not in {"Show VR Hotspot", "Hide VR Hotspot"}
+        for item in backend.models[-1].all_items()
+    )
 
 
 def test_tray_window_close_event_uses_runtime_state_refresh_path():
@@ -1168,7 +1378,7 @@ def test_dbus_menu_get_property_preserves_false_boolean_values():
     class Parameters:
         @staticmethod
         def unpack():
-            return 2, "enabled"
+            return 7, "enabled"
 
     class Invocation:
         returned = None

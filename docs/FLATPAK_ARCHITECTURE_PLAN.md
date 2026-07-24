@@ -6,12 +6,12 @@ Date: 2026-07-24
 
 This document defines the boundary for the VRhotspot Flatpak control
 application. PR #92 makes the origin-locked, daemon-served Web Portal the only
-Flatpak graphical UI. Normal launch, tray primary activation, and
-**Show VR Hotspot** all open or restore one locked WebKitGTK window;
-**Hide VR Hotspot** and close-to-tray hide that same window. The pre-PR #92 GTK
-content implementation, its token-entry flow, and every launch or failure path
-that could reach it have been removed from active code. GTK remains only for
-the WebKit host window, tray integration, the explicit authentication dialog,
+Flatpak graphical UI. Normal launch and tray primary activation open or restore
+one locked WebKitGTK window; close-to-tray hides that same window. Redundant
+Show and Hide menu commands are not exported. The pre-PR #92 GTK content
+implementation, its token-entry flow, and every launch or failure path that
+could reach it have been removed from active code. GTK remains only for the
+WebKit host window, tray integration, the explicit authentication dialog,
 bounded error surfaces, and small desktop utility dialogs.
 
 PR #90's fixed 1.75x WebKit display zoom and PR #88's exact loopback origin,
@@ -692,12 +692,12 @@ PR #91 makes the optional Flatpak companion a persistent desktop utility while
 keeping `vr-hotspotd` as the sole privileged host-mutation boundary. An explicit
 `--tray` launch mode owns a StatusNotifierItem and DBusMenu. PR #92 changes its
 lifecycle-owned window to the locked Web Portal shell: it is shown initially,
-restored on primary tray activation or **Show VR Hotspot**, and hidden by
-**Hide VR Hotspot** or close-to-tray. Repeated activation reuses the same
-window. `Quit VR Hotspot` exits only the companion; it does not issue a hotspot
-stop request. If the tray backend cannot register, the Web Portal window still
-opens and closes normally instead of crashing or becoming hidden without a
-reachable tray icon.
+restored on primary tray activation, and hidden by close-to-tray. Repeated
+activation reuses the same window, so redundant Show and Hide menu commands are
+not exported. `Quit VR Hotspot` exits only the companion; it does not issue a
+hotspot stop request. If the tray backend cannot register, the Web Portal
+window still opens and closes normally instead of crashing or becoming hidden
+without a reachable tray icon.
 
 The GNOME 50 runtime provides Gio/GDBus and libsecret but does not provide an
 AppIndicator/Ayatana binding. The tray therefore implements the standard
@@ -775,20 +775,25 @@ Tray status distinguishes `Running`, `Stopped`, `Transitioning`,
 `Needs Authentication`, `Daemon Unavailable`, and `Error`. Missing, rejected,
 or daemon-missing credentials map to `Needs Authentication`; connection
 failure maps to `Daemon Unavailable`; only unexpected or malformed failures
-map to `Error`. Authentication remains enabled while credentials are needed.
-Start, Stop, Restart, and Repair require an authenticated state, and saving or
-testing an explicitly entered token triggers a status refresh.
+map to `Error`. The saved wallet/session state and daemon status are resolved
+before the tray item is registered, so the initial icon, tooltip, and command
+sensitivity use the authenticated live state. Authentication remains enabled
+while credentials are needed. Authenticated `Stopped` enables Start, Restart,
+and Repair; authenticated `Running` enables Stop, Restart, and Repair.
+Transitioning disables conflicting mutations and alone requests the working
+attention state. Needs Authentication and Stopped remain static. Saving or
+testing an explicitly entered token triggers a serialized status refresh.
 
 The exported menu is deterministic and grouped without duplicating submenu
-actions at the top level. Show, Hide, current status, and refresh remain near
-the top. **Hotspot Commands** contains Start, Stop, Restart, and Repair;
-**Network** contains Share Internet Connection; and **Advanced** contains
-Authentication, Open Diagnostics, Privacy Mode, and Start Hotspot
-Automatically. Quit remains top-level and exits only the companion. Start
-Hotspot Automatically controls daemon/hotspot boot autostart, not
-desktop-companion login autostart. Launch at Logon remains deferred and no tray
-item is exported for it. There is no second menu action for opening the
-already-default graphical shell.
+actions at the top level. Current status remains at the top. **Hotspot
+Commands** contains Start, Stop, Restart, and Repair; **Network** contains Share
+Internet Connection; and **Advanced** contains Authentication, Refresh Status,
+Open Diagnostics, Privacy Mode, and Start Hotspot Automatically. Quit remains
+top-level and exits only the companion. Start Hotspot Automatically controls
+daemon/hotspot boot autostart, not desktop-companion login autostart. Launch at
+Logon remains deferred and no tray item is exported for it. Primary activation
+is the only tray action that opens or restores the already-default graphical
+shell.
 
 ## PR #93 shared Portal and tray authentication state
 
@@ -927,7 +932,7 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | PR #89 | Web Portal shell layout and theme polish. Improve shared Portal CSS across viewport sizes and WebKitGTK form controls. | Asset tests prove responsive layout, dark control states, retained Basic/Pro behavior, and one daemon-served asset source for browser and Flatpak. |
 | PR #90 | Flatpak Web Portal shell scaling/density polish. Apply fixed bounded 1.75x WebKit zoom to the locked shell. | Tests prove fixed zoom/clamping, no user-controlled scale, normal browser scale, and unchanged origin/session/token boundaries. |
 | PR #91 | Flatpak system-tray control surface and desktop identity. Add StatusNotifierItem/DBusMenu, close-to-tray, typed live state, fixed controls, explicit Secret Service authentication, and cyan/black icons. | Tests prove complete menu/state mapping, serialized mutations, refresh-after-success, companion-only quit, safe wallet behavior, narrow D-Bus grants, and installed icon identity. |
-| PR #92 | Web Portal-only Flatpak graphical UI. Delete the retired GTK content surface and all routes/tests supporting it; make default and tray window behavior use one locked Web Portal shell; classify authentication and daemon availability separately; organize the tray menu. | Tests prove default/alias/tray activation, show/hide/close and single-window behavior, bounded WebKit errors with no alternate surface, retained origin/CSP/session/zoom locks, six status classes, explicit-auth refresh, deterministic menu sections, no credential leakage, unchanged permissions, and zero forbidden active references. |
+| PR #92 | Web Portal-only Flatpak graphical UI. Delete the retired GTK content surface and all routes/tests supporting it; make default and tray window behavior use one locked Web Portal shell; classify authentication and daemon availability separately; organize the tray menu. | Tests prove default/alias/tray activation, close-to-tray and single-window behavior, bounded WebKit errors with no alternate surface, retained origin/CSP/session/zoom locks, six status classes, explicit-auth refresh, deterministic menu sections, no credential leakage, unchanged permissions, and zero forbidden active references. |
 | PR #93 | Shared Web Portal/tray companion authentication. Connect accepted Portal entry and logout to the existing wallet/in-memory session controller, supply an existing wallet token only through a bounded fixed-origin WebKit reply, refresh tray state immediately, and reserve working attention for transitions. | Tests prove bidirectional sync, wallet and current-process fallback behavior, strict message/origin bounds, clear synchronization, token secrecy, correct auth/running/unavailable state and menu mapping, static auth-needed indication, retained WebKit locks, unchanged permissions, and no native dashboard. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
