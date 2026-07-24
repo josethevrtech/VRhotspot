@@ -779,11 +779,16 @@ map to `Error`. Authentication remains enabled while credentials are needed.
 Start, Stop, Restart, and Repair require an authenticated state, and saving or
 testing an explicitly entered token triggers a status refresh.
 
-The exported menu uses deterministic separator-delimited sections in this
-order: Window (Show, Hide), Status (current status, refresh), Hotspot Controls
-(Start, Stop, Restart, Repair), Settings (internet sharing, privacy, hotspot
-autostart), Authentication, Tools (Diagnostics), and Quit. There is no second
-menu action for opening the already-default graphical shell.
+The exported menu is deterministic and grouped without duplicating submenu
+actions at the top level. Show, Hide, current status, and refresh remain near
+the top. **Hotspot Commands** contains Start, Stop, Restart, and Repair;
+**Network** contains Share Internet Connection; and **Advanced** contains
+Authentication, Open Diagnostics, Privacy Mode, and Start Hotspot
+Automatically. Quit remains top-level and exits only the companion. Start
+Hotspot Automatically controls daemon/hotspot boot autostart, not
+desktop-companion login autostart. Launch at Logon remains deferred and no tray
+item is exported for it. There is no second menu action for opening the
+already-default graphical shell.
 
 ## PR #93 shared Portal and tray authentication state
 

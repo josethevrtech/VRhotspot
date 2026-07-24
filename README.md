@@ -62,9 +62,14 @@ activation and **Show VR Hotspot** open or restore that same window;
 **Hide VR Hotspot** and the window close action hide it to the tray without
 creating another window. If WebKit cannot be constructed, the companion shows
 a bounded GTK error surface and does not open another interface. The tray
-provides live status, lifecycle controls, Share Internet Connection, Privacy
-Mode, and the existing Start Hotspot Automatically setting. Explicit Quit exits
-only the desktop companion and does not stop an already-running hotspot.
+keeps live status and refresh near the top. **Hotspot Commands** groups Start,
+Stop, Restart, and Repair; **Network** contains Share Internet Connection; and
+**Advanced** contains Authentication, Open Diagnostics, Privacy Mode, and the
+existing Start Hotspot Automatically setting. That setting controls daemon
+hotspot autostart, not desktop-companion login autostart. Launching VR Hotspot
+at desktop login remains deferred and is not shown as a tray item. Explicit
+Quit exits only the desktop companion and does not stop an already-running
+hotspot.
 
 The Web Portal shell and tray are one companion and share authentication state.
 An API token accepted after explicit entry in the Portal is adopted immediately

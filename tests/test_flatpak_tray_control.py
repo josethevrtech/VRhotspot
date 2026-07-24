@@ -126,7 +126,15 @@ def _controller(client, *, token="explicit-token"):
     )
 
 
-def test_tray_menu_contains_every_required_action():
+def _menu_item(model, action):
+    return next(item for item in model.all_items() if item.action == action)
+
+
+def _submenu(model, label):
+    return next(item for item in model.items if item.label == label)
+
+
+def test_tray_menu_contains_every_required_action_in_grouped_submenus():
     model = build_tray_menu_model(
         TrayState(
             status=TrayStatus.RUNNING,
@@ -141,41 +149,150 @@ def test_tray_menu_contains_every_required_action():
         window_visible=True,
     )
 
+    assert tuple(item.label for item in model.items) == (
+        "Show VR Hotspot",
+        "Hide VR Hotspot",
+        "Current status: Running",
+        "Refresh Status",
+        "Hotspot Commands",
+        "Network",
+        "Advanced",
+        "Quit VR Hotspot",
+    )
     assert model.action_labels() == (
         "Show VR Hotspot",
         "Hide VR Hotspot",
         "Current status: Running",
         "Refresh Status",
+        "Hotspot Commands",
         "Start Hotspot",
         "Stop Hotspot",
         "Restart Service",
         "Repair Network",
+        "Network",
         "Share Internet Connection",
-        "Privacy Mode",
-        "Start Hotspot Automatically",
+        "Advanced",
         "Authentication…",
         "Open Diagnostics",
+        "Privacy Mode",
+        "Start Hotspot Automatically",
         "Quit VR Hotspot",
     )
-    assert all(item.action != "web_portal" for item in model.items)
-    groups = []
-    current = []
-    for item in model.items:
-        if item.separator:
-            groups.append(tuple(current))
-            current = []
-        else:
-            current.append(item.action)
-    groups.append(tuple(current))
-    assert groups == [
-        ("show", "hide"),
-        ("status", "refresh"),
-        ("start", "stop", "restart", "repair"),
-        ("share_internet", "privacy", "hotspot_autostart"),
-        ("authentication",),
-        ("diagnostics",),
-        ("quit",),
-    ]
+    hotspot_commands = _submenu(model, "Hotspot Commands")
+    network = _submenu(model, "Network")
+    advanced = _submenu(model, "Advanced")
+    assert tuple(item.action for item in hotspot_commands.children) == (
+        "start",
+        "stop",
+        "restart",
+        "repair",
+    )
+    assert tuple(item.action for item in network.children) == (
+        "share_internet",
+    )
+    assert tuple(item.action for item in advanced.children) == (
+        "authentication",
+        "diagnostics",
+        "privacy",
+        "hotspot_autostart",
+    )
+    nested_actions = {
+        "start",
+        "stop",
+        "restart",
+        "repair",
+        "share_internet",
+        "authentication",
+        "diagnostics",
+        "privacy",
+        "hotspot_autostart",
+    }
+    assert not nested_actions.intersection(
+        item.action for item in model.items
+    )
+    assert all(not item.separator for item in model.all_items())
+    assert all(item.action != "web_portal" for item in model.all_items())
+    assert not any(
+        item.label.casefold().startswith("launch vr hotspot at log")
+        for item in model.all_items()
+    )
+
+
+def test_dbus_menu_layout_exports_nested_submenus_without_kde():
+    class Variant:
+        def __init__(self, signature, value):
+            self.signature = signature
+            self.value = value
+
+    backend = StatusNotifierBackend(
+        Gio=object(),
+        GLib=type("GLib", (), {"Variant": Variant}),
+        model=build_tray_menu_model(
+            TrayState(
+                status=TrayStatus.RUNNING,
+                status_label="Running",
+                daemon_available=True,
+                authenticated=True,
+                share_internet=True,
+                hotspot_autostart=False,
+            ),
+            window_visible=True,
+        ),
+        on_action=lambda _action: None,
+        on_activate=lambda: None,
+    )
+
+    root_id, root_properties, root_children = backend._layout()
+    exported = {
+        child.value[1]["label"].value: child.value
+        for child in root_children
+    }
+
+    assert root_id == 0
+    assert root_properties["children-display"].value == "submenu"
+    assert tuple(exported) == (
+        "Show VR Hotspot",
+        "Hide VR Hotspot",
+        "Current status: Running",
+        "Refresh Status",
+        "Hotspot Commands",
+        "Network",
+        "Advanced",
+        "Quit VR Hotspot",
+    )
+    assert tuple(
+        child.value[1]["label"].value
+        for child in exported["Hotspot Commands"][2]
+    ) == (
+        "Start Hotspot",
+        "Stop Hotspot",
+        "Restart Service",
+        "Repair Network",
+    )
+    assert tuple(
+        child.value[1]["label"].value
+        for child in exported["Network"][2]
+    ) == ("Share Internet Connection",)
+    assert tuple(
+        child.value[1]["label"].value
+        for child in exported["Advanced"][2]
+    ) == (
+        "Authentication…",
+        "Open Diagnostics",
+        "Privacy Mode",
+        "Start Hotspot Automatically",
+    )
+    for label in ("Hotspot Commands", "Network", "Advanced"):
+        assert exported[label][1]["children-display"].value == "submenu"
+
+    parent_id, _properties, children = backend._layout(23, 1, ("label",))
+    assert parent_id == 23
+    assert tuple(child.value[1]["label"].value for child in children) == (
+        "Authentication…",
+        "Open Diagnostics",
+        "Privacy Mode",
+        "Start Hotspot Automatically",
+    )
 
 
 @pytest.mark.parametrize(
@@ -214,6 +331,7 @@ def test_tray_status_labels_and_icon_variants_reflect_daemon_state(
     assert f"Current status: {label}" in model.action_labels()
     assert model.icon_name == ICON_NAMES[status]
     assert model.notifier_status == notifier_status
+    assert _menu_enabled(model, "authentication") is True
 
 
 def test_needs_authentication_is_static_and_only_transitioning_requests_attention():
@@ -420,6 +538,19 @@ def test_missing_token_disables_mutations_with_fixed_state():
         not _menu_enabled(menu, action)
         for action in ("start", "stop", "restart", "repair")
     )
+    assert _menu_enabled(menu, "share_internet") is False
+    assert _menu_enabled(menu, "hotspot_autostart") is False
+
+
+def test_explicit_token_never_appears_in_menu_labels():
+    secret = "menu-label-secret-must-not-escape"
+    controller = _controller(FakeControlClient(), token=secret)
+
+    state = controller.refresh()
+    menu = build_tray_menu_model(state, window_visible=True)
+
+    assert secret not in "\n".join(menu.action_labels())
+    assert secret not in repr(menu)
 
 
 def test_authenticated_running_refresh_maps_to_running():
@@ -437,6 +568,25 @@ def test_authenticated_running_refresh_maps_to_running():
     assert _menu_enabled(menu, "start") is False
     assert _menu_enabled(menu, "stop") is True
     assert _menu_enabled(menu, "restart") is True
+    assert _menu_enabled(menu, "repair") is True
+    assert _menu_enabled(menu, "share_internet") is True
+    assert _menu_item(menu, "share_internet").checked is True
+    assert _menu_enabled(menu, "hotspot_autostart") is True
+    assert _menu_item(menu, "hotspot_autostart").checked is False
+
+
+def test_authenticated_stopped_state_enables_only_valid_hotspot_commands():
+    controller = _controller(
+        FakeControlClient(phase="stopped", running=False)
+    )
+
+    state = controller.refresh()
+    menu = build_tray_menu_model(state, window_visible=True)
+
+    assert state.status is TrayStatus.STOPPED
+    assert _menu_enabled(menu, "start") is True
+    assert _menu_enabled(menu, "stop") is False
+    assert _menu_enabled(menu, "restart") is False
     assert _menu_enabled(menu, "repair") is True
 
 
@@ -518,7 +668,7 @@ def test_pending_operation_immediately_disables_mutations_in_menu_model():
     assert controller.state.busy_action == "start"
     assert all(
         not item.enabled
-        for item in model.items
+        for item in model.all_items()
         if item.action in {"start", "stop", "restart", "repair"}
     )
 
@@ -532,11 +682,31 @@ def test_hotspot_autostart_and_desktop_login_autostart_are_not_conflated():
     )
 
     assert "Start Hotspot Automatically" in model.action_labels()
-    assert "Launch VR Hotspot at login" not in model.action_labels()
+    assert not any(
+        label.casefold().startswith("launch vr hotspot at log")
+        for label in model.action_labels()
+    )
     assert not any(
         argument.startswith("--filesystem=")
         for argument in manifest["finish-args"]
     )
+
+
+def test_tray_sources_do_not_restore_retired_graphical_symbols():
+    names = (
+        "run_" + "gui",
+        "_populate_" + "native_" + "dashboard_window",
+        "Native" + "DashboardModel",
+        "Dashboard" + "SectionLabels",
+        "build_" + "dashboard_model",
+    )
+    source = "\n".join(
+        Path(path).read_text(encoding="utf-8")
+        for path in ("flatpak_app/app.py", "flatpak_app/tray.py")
+    )
+
+    for name in names:
+        assert name not in source
 
 
 class FakeBackend:
@@ -599,7 +769,7 @@ def test_auth_change_refresh_is_deferred_until_active_worker_finishes():
 
 
 def _menu_enabled(model, action):
-    return next(item.enabled for item in model.items if item.action == action)
+    return _menu_item(model, action).enabled
 
 
 def test_saving_and_testing_authentication_refreshes_status_without_leakage():
