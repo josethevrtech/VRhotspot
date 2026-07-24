@@ -14,6 +14,11 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.adapters.readiness import build_readiness_model
+from vr_hotspotd.autostart import (
+    AUTOSTART_ROLLBACK_FAILED,
+    AutostartControlError,
+    set_hotspot_autostart,
+)
 from vr_hotspotd.config import (
     ConfigValidationError,
     INVALID_NETWORK_CONFIG,
@@ -1533,6 +1538,50 @@ class APIHandler(BaseHTTPRequestHandler):
                     result_code="restarted:" + res.code,
                     data=self._status_view(include_logs=False),
                     warnings=warnings,
+                ),
+            )
+            return
+
+        if path == "/v1/autostart":
+            if (
+                not isinstance(body, dict)
+                or set(body) != {"enabled"}
+                or type(body.get("enabled")) is not bool
+            ):
+                self._respond(
+                    400,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code="invalid_request",
+                        warnings=body_warnings + ["boolean_enabled_required"],
+                    ),
+                )
+                return
+            try:
+                enabled = set_hotspot_autostart(body["enabled"])
+            except AutostartControlError as exc:
+                self._respond(
+                    500,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code=(
+                            "autostart_state_inconsistent"
+                            if exc.code == AUTOSTART_ROLLBACK_FAILED
+                            else "autostart_update_failed"
+                        ),
+                        warnings=body_warnings + [exc.code],
+                    ),
+                )
+                return
+            self._respond(
+                200,
+                self._envelope(
+                    correlation_id=cid,
+                    result_code=(
+                        "autostart_enabled" if enabled else "autostart_disabled"
+                    ),
+                    data={"autostart": enabled},
+                    warnings=body_warnings,
                 ),
             )
             return

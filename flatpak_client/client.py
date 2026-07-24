@@ -1,4 +1,4 @@
-"""Small, read-only HTTP client for the local VRhotspot daemon API."""
+"""Small, explicit HTTP client for the local VRhotspot daemon API."""
 
 from __future__ import annotations
 
@@ -22,8 +22,16 @@ import uuid
 DEFAULT_BASE_URL = "http://127.0.0.1:8732"
 
 _HEALTH_PATH = "/healthz"
+_STATUS_PATH = "/v1/status"
+_STATUS_WITH_LOGS_PATH = "/v1/status?include_logs=1"
+_CONFIG_PATH = "/v1/config"
 _PREFLIGHT_PATH = "/v1/diagnostics/preflight"
 _ADAPTER_READINESS_PATH = "/v1/adapters/readiness"
+_START_PATH = "/v1/start"
+_STOP_PATH = "/v1/stop"
+_RESTART_PATH = "/v1/restart"
+_REPAIR_PATH = "/v1/repair"
+_AUTOSTART_PATH = "/v1/autostart"
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_RESPONSE_BYTES = 1_000_000
 _MAX_ERROR_BODY_BYTES = 4_096
@@ -105,12 +113,13 @@ class ResponseTooLargeError(LocalApiClientError):
 
 @dataclass(frozen=True, repr=False)
 class HttpRequest:
-    """A GET request passed to the injectable transport."""
+    """A bounded request passed to the injectable transport."""
 
     url: str
     method: str
     headers: Mapping[str, str]
     timeout: float
+    body: bytes = b""
 
     def __repr__(self) -> str:
         safe_headers = {
@@ -120,7 +129,8 @@ class HttpRequest:
         return (
             "HttpRequest("
             f"url={self.url!r}, method={self.method!r}, "
-            f"headers={safe_headers!r}, timeout={self.timeout!r})"
+            f"headers={safe_headers!r}, timeout={self.timeout!r}, "
+            f"body_bytes={len(self.body)!r})"
         )
 
 
@@ -144,7 +154,7 @@ class HttpResponse:
 
 @dataclass(frozen=True, repr=False)
 class ApiResponse:
-    """The validated daemon envelope returned by a read-only JSON method."""
+    """The validated daemon envelope returned by a reviewed JSON method."""
 
     correlation_id: str
     result_code: str
@@ -208,6 +218,7 @@ class UrlLibTransport:
     def send(self, request: HttpRequest) -> HttpResponse:
         urllib_request = Request(
             request.url,
+            data=request.body or None,
             headers=dict(request.headers),
             method=request.method,
         )
@@ -321,7 +332,7 @@ def _contains_secret(value: Any, secret: str) -> bool:
 
 
 class LocalApiClient:
-    """GET-only client for the future unprivileged Flatpak control app."""
+    """Loopback-only client with explicit methods for reviewed daemon routes."""
 
     def __init__(
         self,
@@ -378,25 +389,154 @@ class LocalApiClient:
 
         return self._get_api_response(_ADAPTER_READINESS_PATH)
 
+    def status(self, *, include_logs: bool = False) -> ApiResponse:
+        """Fetch current daemon-owned hotspot state with an explicit log choice."""
+
+        if type(include_logs) is not bool:
+            raise LocalApiClientError("Status log selection requires a boolean.")
+        return self._get_api_response(
+            _STATUS_WITH_LOGS_PATH if include_logs else _STATUS_PATH
+        )
+
+    def config(self) -> ApiResponse:
+        """Fetch the redacted daemon configuration view."""
+
+        return self._get_api_response(_CONFIG_PATH)
+
+    def start_hotspot(self) -> ApiResponse:
+        """Request hotspot start through the authenticated daemon."""
+
+        return self._request_api_response(
+            _START_PATH,
+            method="POST",
+            body={},
+            accepted_result_codes={
+                "already_running",
+                "started",
+                "started_with_fallback",
+            },
+        )
+
+    def stop_hotspot(self) -> ApiResponse:
+        """Request hotspot stop through the authenticated daemon."""
+
+        return self._request_api_response(
+            _STOP_PATH,
+            method="POST",
+            body={},
+            accepted_result_codes={"already_stopped", "stopped"},
+        )
+
+    def restart_service(self) -> ApiResponse:
+        """Request the existing stop/repair/start restart workflow."""
+
+        return self._request_api_response(
+            _RESTART_PATH,
+            method="POST",
+            body={},
+            accepted_result_prefixes=("restarted:",),
+        )
+
+    def repair_network(self) -> ApiResponse:
+        """Request the existing daemon-owned network repair workflow."""
+
+        return self._request_api_response(
+            _REPAIR_PATH,
+            method="POST",
+            body={},
+            accepted_result_codes={"repaired"},
+        )
+
+    def set_share_internet(self, enabled: bool) -> ApiResponse:
+        """Update only the canonical enable_internet setting."""
+
+        if type(enabled) is not bool:
+            raise LocalApiClientError(
+                "Share Internet Connection requires a boolean value."
+            )
+        return self._request_api_response(
+            _CONFIG_PATH,
+            method="POST",
+            body={"config": {"enable_internet": enabled}},
+            accepted_result_codes={"config_saved"},
+        )
+
+    def set_hotspot_autostart(self, enabled: bool) -> ApiResponse:
+        """Synchronize the canonical hotspot-at-boot setting through the daemon."""
+
+        if type(enabled) is not bool:
+            raise LocalApiClientError(
+                "Start Hotspot Automatically requires a boolean value."
+            )
+        return self._request_api_response(
+            _AUTOSTART_PATH,
+            method="POST",
+            body={"enabled": enabled},
+            accepted_result_codes={
+                "autostart_disabled",
+                "autostart_enabled",
+            },
+        )
+
     def _get_api_response(self, path: str) -> ApiResponse:
-        response = self._get(path, authenticated=True)
+        return self._request_api_response(path, method="GET")
+
+    def _request_api_response(
+        self,
+        path: str,
+        *,
+        method: str,
+        body: Mapping[str, Any] | None = None,
+        accepted_result_codes: set[str] | None = None,
+        accepted_result_prefixes: tuple[str, ...] = (),
+    ) -> ApiResponse:
+        response = self._request(
+            path,
+            method=method,
+            authenticated=True,
+            body=body,
+        )
         self._raise_for_status(response)
         self._ensure_success_body_is_bounded(response)
-        return self._parse_envelope(response.body)
+        return self._parse_envelope(
+            response.body,
+            accepted_result_codes=accepted_result_codes or {"ok"},
+            accepted_result_prefixes=accepted_result_prefixes,
+        )
 
     def _get(self, path: str, *, authenticated: bool) -> HttpResponse:
+        return self._request(path, method="GET", authenticated=authenticated)
+
+    def _request(
+        self,
+        path: str,
+        *,
+        method: str,
+        authenticated: bool,
+        body: Mapping[str, Any] | None = None,
+    ) -> HttpResponse:
         headers = {
             "Accept": "application/json",
-            "User-Agent": "vrhotspot-flatpak-client-prototype",
+            "User-Agent": "vrhotspot-flatpak-client",
             "X-Correlation-Id": f"flatpak-client-{uuid.uuid4()}",
         }
         if authenticated and self._token:
             headers["X-Api-Token"] = self._token
+        request_body = b""
+        if body is not None:
+            request_body = json.dumps(
+                dict(body),
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            headers["Content-Type"] = "application/json"
         request = HttpRequest(
             url=self._base_url + path,
-            method="GET",
+            method=method,
             headers=headers,
             timeout=self._timeout,
+            body=request_body,
         )
 
         connection_error: Optional[ConnectionFailure] = None
@@ -455,7 +595,13 @@ class LocalApiClient:
                 "The local daemon API response exceeded the client size limit."
             )
 
-    def _parse_envelope(self, body: bytes) -> ApiResponse:
+    def _parse_envelope(
+        self,
+        body: bytes,
+        *,
+        accepted_result_codes: set[str],
+        accepted_result_prefixes: tuple[str, ...],
+    ) -> ApiResponse:
         try:
             payload = json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -486,7 +632,10 @@ class LocalApiClient:
             raise InvalidResponseError(
                 "The local daemon API returned an invalid response envelope."
             )
-        if result_code != "ok":
+        accepted = result_code in accepted_result_codes or any(
+            result_code.startswith(prefix) for prefix in accepted_result_prefixes
+        )
+        if not accepted:
             safe_result_code = self._safe_text(result_code)
             raise DaemonApiError(
                 f"The local daemon API returned result_code={safe_result_code}.",

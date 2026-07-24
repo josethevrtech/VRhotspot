@@ -20,7 +20,17 @@ from .app import (
     main,
     render_smoke_json,
     run_live_pairing_smoke_json,
+    run_tray,
     run_web_portal_shell,
+)
+from .tray import (
+    ICON_NAMES,
+    StatusNotifierBackend,
+    TrayMenuItem,
+    TrayMenuModel,
+    TrayRuntime,
+    WindowLifecycleController,
+    build_tray_menu_model,
 )
 
 __all__ = [
@@ -43,5 +53,13 @@ __all__ = [
     "main",
     "render_smoke_json",
     "run_live_pairing_smoke_json",
+    "run_tray",
     "run_web_portal_shell",
+    "ICON_NAMES",
+    "StatusNotifierBackend",
+    "TrayMenuItem",
+    "TrayMenuModel",
+    "TrayRuntime",
+    "WindowLifecycleController",
+    "build_tray_menu_model",
 ]

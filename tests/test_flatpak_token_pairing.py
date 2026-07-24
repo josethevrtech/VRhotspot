@@ -254,9 +254,17 @@ def test_pairing_flow_wires_only_health_and_adapter_readiness():
     assert result.state is FirstRunState.TOKEN_ACCEPTED
     assert calls == [("health", False), ("adapter_readiness", True)]
     assert public_client_methods == {
+        "adapter_readiness",
+        "config",
         "health",
         "preflight_report",
-        "adapter_readiness",
+        "repair_network",
+        "restart_service",
+        "set_hotspot_autostart",
+        "set_share_internet",
+        "start_hotspot",
+        "status",
+        "stop_hotspot",
     }
     assert public_client_methods.isdisjoint(
         {

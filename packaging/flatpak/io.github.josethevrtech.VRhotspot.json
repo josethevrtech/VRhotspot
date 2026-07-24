@@ -8,7 +8,9 @@
     "--share=network",
     "--share=ipc",
     "--socket=wayland",
-    "--socket=fallback-x11"
+    "--socket=fallback-x11",
+    "--talk-name=org.kde.StatusNotifierWatcher",
+    "--talk-name=org.freedesktop.secrets"
   ],
   "modules": [
     {
@@ -16,12 +18,15 @@
       "buildsystem": "simple",
       "build-commands": [
         "install -d /app/lib/vrhotspot/flatpak_app /app/lib/vrhotspot/flatpak_client",
-        "install -m 0644 flatpak_app/__init__.py flatpak_app/__main__.py flatpak_app/app.py /app/lib/vrhotspot/flatpak_app/",
-        "install -m 0644 flatpak_client/__init__.py flatpak_client/client.py flatpak_client/pairing.py flatpak_client/ui.py /app/lib/vrhotspot/flatpak_client/",
+        "install -m 0644 flatpak_app/__init__.py flatpak_app/__main__.py flatpak_app/app.py flatpak_app/tray.py /app/lib/vrhotspot/flatpak_app/",
+        "install -m 0644 flatpak_client/__init__.py flatpak_client/client.py flatpak_client/control.py flatpak_client/pairing.py flatpak_client/ui.py flatpak_client/wallet.py /app/lib/vrhotspot/flatpak_client/",
         "install -Dm755 vrhotspot-flatpak /app/bin/vrhotspot-flatpak",
         "install -Dm644 io.github.josethevrtech.VRhotspot.desktop /app/share/applications/io.github.josethevrtech.VRhotspot.desktop",
         "install -Dm644 io.github.josethevrtech.VRhotspot.metainfo.xml /app/share/metainfo/io.github.josethevrtech.VRhotspot.metainfo.xml",
-        "install -Dm644 io.github.josethevrtech.VRhotspot.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot.svg"
+        "install -Dm644 io.github.josethevrtech.VRhotspot.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot.svg",
+        "install -Dm644 io.github.josethevrtech.VRhotspot-running.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot-running.svg",
+        "install -Dm644 io.github.josethevrtech.VRhotspot-working.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot-working.svg",
+        "install -Dm644 io.github.josethevrtech.VRhotspot-error.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot-error.svg"
       ],
       "sources": [
         {
@@ -41,6 +46,11 @@
         },
         {
           "type": "file",
+          "path": "../../flatpak_app/tray.py",
+          "dest": "flatpak_app"
+        },
+        {
+          "type": "file",
           "path": "../../flatpak_client/__init__.py",
           "dest": "flatpak_client"
         },
@@ -51,12 +61,22 @@
         },
         {
           "type": "file",
+          "path": "../../flatpak_client/control.py",
+          "dest": "flatpak_client"
+        },
+        {
+          "type": "file",
           "path": "../../flatpak_client/pairing.py",
           "dest": "flatpak_client"
         },
         {
           "type": "file",
           "path": "../../flatpak_client/ui.py",
+          "dest": "flatpak_client"
+        },
+        {
+          "type": "file",
+          "path": "../../flatpak_client/wallet.py",
           "dest": "flatpak_client"
         },
         {
@@ -74,6 +94,18 @@
         {
           "type": "file",
           "path": "io.github.josethevrtech.VRhotspot.svg"
+        },
+        {
+          "type": "file",
+          "path": "io.github.josethevrtech.VRhotspot-running.svg"
+        },
+        {
+          "type": "file",
+          "path": "io.github.josethevrtech.VRhotspot-working.svg"
+        },
+        {
+          "type": "file",
+          "path": "io.github.josethevrtech.VRhotspot-error.svg"
         }
       ]
     }

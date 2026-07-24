@@ -25,6 +25,8 @@ from flatpak_client import (
     StatusSeverity,
     SupportBundleAffordance,
     TokenPairingController,
+    AuthenticationController,
+    TrayControlController,
 )
 
 
@@ -430,6 +432,21 @@ def _load_webkit():
             "WebKitGTK 6.0 is unavailable for the locked Web Portal shell."
         ) from None
     return WebKit
+
+
+def _load_tray_desktop_modules():
+    """Load only the session desktop modules needed by explicit tray mode."""
+
+    try:
+        import gi
+
+        gi.require_version("Gdk", "4.0")
+        from gi.repository import Gdk, Gio, GLib
+    except (ImportError, ValueError):
+        raise GuiUnavailableError(
+            "GDK, GIO, and GLib are required for tray mode."
+        ) from None
+    return Gdk, Gio, GLib
 
 
 def is_approved_web_portal_uri(uri: object) -> bool:
@@ -1440,6 +1457,102 @@ def run_web_portal_shell() -> int:
     return int(application.run([]))
 
 
+def run_tray() -> int:
+    """Run the native app with an optional persistent StatusNotifierItem."""
+
+    Gtk = _load_gtk()
+    Gdk, Gio, GLib = _load_tray_desktop_modules()
+    from .tray import (
+        StatusNotifierBackend,
+        TrayRuntime,
+        WindowLifecycleController,
+        build_tray_menu_model,
+    )
+
+    application = Gtk.Application(application_id=APP_ID)
+    runtime_holder: dict[str, Any] = {}
+    portal_window_holder: dict[str, Any] = {}
+
+    def on_activate(app) -> None:
+        existing = runtime_holder.get("runtime")
+        if existing is not None:
+            existing.show()
+            return
+
+        window = Gtk.ApplicationWindow(application=app)
+        _populate_native_dashboard_window(Gtk, window)
+        authentication = AuthenticationController()
+        controls = TrayControlController(authentication)
+        lifecycle = WindowLifecycleController(
+            application=app,
+            window=window,
+        )
+
+        def open_diagnostics() -> None:
+            lifecycle.show()
+
+        def open_web_portal() -> None:
+            existing_portal = portal_window_holder.get("window")
+            if existing_portal is not None:
+                existing_portal.present()
+                return
+            try:
+                WebKit = _load_webkit()
+                portal_window = Gtk.ApplicationWindow(application=app)
+                if not _populate_web_portal_window(
+                    Gtk,
+                    WebKit,
+                    portal_window,
+                ):
+                    lifecycle.show()
+                    return
+            except Exception:
+                lifecycle.show()
+                return
+
+            def clear_portal(*_args):
+                portal_window_holder.pop("window", None)
+                return False
+
+            portal_window.connect("close-request", clear_portal)
+            portal_window_holder["window"] = portal_window
+            portal_window.present()
+
+        initial_menu = build_tray_menu_model(
+            controls.state,
+            window_visible=True,
+        )
+        backend = StatusNotifierBackend(
+            Gio=Gio,
+            GLib=GLib,
+            model=initial_menu,
+            on_action=lambda action: runtime_holder["runtime"].dispatch_action(
+                action
+            ),
+            on_activate=lambda: runtime_holder["runtime"].show(),
+        )
+        runtime = TrayRuntime(
+            application=app,
+            lifecycle=lifecycle,
+            controls=controls,
+            authentication=authentication,
+            backend=backend,
+            Gtk=Gtk,
+            Gdk=Gdk,
+            Gio=Gio,
+            GLib=GLib,
+            open_diagnostics=open_diagnostics,
+            open_web_portal=open_web_portal,
+        )
+        runtime_holder["runtime"] = runtime
+        window.connect("close-request", runtime.close_request)
+        lifecycle.show()
+        runtime.start()
+
+    application.connect("activate", on_activate)
+    return int(application.run([]))
+
+
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vrhotspot-flatpak",
@@ -1463,6 +1576,11 @@ def _argument_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="launch the locked local daemon Web Portal shell spike",
     )
+    parser.add_argument(
+        "--tray",
+        action="store_true",
+        help="launch the persistent system-tray control companion",
+    )
     return parser
 
 
@@ -1479,6 +1597,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             return run_web_portal_shell()
         except WebKitUnavailableError:
+            pass
+    if args.tray:
+        try:
+            return run_tray()
+        except GuiUnavailableError:
             pass
 
     try:

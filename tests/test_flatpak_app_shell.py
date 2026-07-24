@@ -1935,11 +1935,20 @@ def test_manifest_has_only_minimal_display_and_loopback_client_permissions():
         "--share=ipc",
         "--socket=wayland",
         "--socket=fallback-x11",
+        "--talk-name=org.kde.StatusNotifierWatcher",
+        "--talk-name=org.freedesktop.secrets",
     }
     assert not any("filesystem=" in argument for argument in finish_args)
     assert not any("system-bus" in argument for argument in finish_args)
     assert not any("session-bus" in argument for argument in finish_args)
-    assert not any("talk-name" in argument for argument in finish_args)
+    assert {
+        argument
+        for argument in finish_args
+        if argument.startswith("--talk-name=")
+    } == {
+        "--talk-name=org.kde.StatusNotifierWatcher",
+        "--talk-name=org.freedesktop.secrets",
+    }
     assert "--filesystem=host" not in finish_args
     assert "--device=all" not in finish_args
     assert "--socket=system-bus" not in finish_args
@@ -1979,7 +1988,7 @@ def test_desktop_file_matches_app_id_name_and_launcher():
     assert DESKTOP_PATH.stem == APP_ID
     assert entry["Type"] == "Application"
     assert entry["Name"] == APP_NAME
-    assert entry["Exec"] == LAUNCHER_PATH.name
+    assert entry["Exec"] == f"{LAUNCHER_PATH.name} --tray"
     assert entry["Icon"] == APP_ID
     assert entry["Terminal"] == "false"
     assert not any(key.startswith("Actions") for key in entry)

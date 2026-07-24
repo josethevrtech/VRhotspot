@@ -97,6 +97,7 @@ def test_public_get_routes_remain_public_without_configured_token(
         ("POST", "/v1/stop"),
         ("POST", "/v1/repair"),
         ("POST", "/v1/restart"),
+        ("POST", "/v1/autostart"),
         ("POST", "/v1/config"),
         ("POST", "/v1/config/reveal_passphrase"),
         ("POST", "/v1/diagnostics/ping"),

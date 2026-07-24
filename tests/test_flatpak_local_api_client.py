@@ -57,6 +57,28 @@ def test_default_origin_is_loopback_only_and_health_is_unauthenticated():
 
 
 @pytest.mark.parametrize(
+    ("include_logs", "path"),
+    (
+        (False, "/v1/status"),
+        (True, "/v1/status?include_logs=1"),
+    ),
+)
+def test_status_uses_only_fixed_privacy_compatible_routes(include_logs, path):
+    transport = FakeTransport(
+        HttpResponse(status=200, body=_envelope({"phase": "stopped"}))
+    )
+    client = LocalApiClient(token="status-token", transport=transport)
+
+    client.status(include_logs=include_logs)
+
+    request = transport.requests[0]
+    assert request.url == f"http://127.0.0.1:8732{path}"
+    assert request.method == "GET"
+    assert request.body == b""
+    assert "status-token" not in request.url
+
+
+@pytest.mark.parametrize(
     "base_url",
     (
         "http://localhost:8732",
@@ -248,7 +270,7 @@ def test_success_response_reflecting_token_is_discarded():
     assert secret not in repr(exc_info.value)
 
 
-def test_client_has_no_mutation_methods_or_generic_public_request_method():
+def test_client_exposes_only_reviewed_routes_and_no_generic_public_request_method():
     public_methods = {
         name
         for name, value in inspect.getmembers(LocalApiClient, inspect.isfunction)
@@ -256,19 +278,127 @@ def test_client_has_no_mutation_methods_or_generic_public_request_method():
     }
 
     assert public_methods == {
+        "adapter_readiness",
+        "config",
         "health",
         "preflight_report",
-        "adapter_readiness",
+        "repair_network",
+        "restart_service",
+        "set_hotspot_autostart",
+        "set_share_internet",
+        "start_hotspot",
+        "status",
+        "stop_hotspot",
     }
     assert public_methods.isdisjoint(
         {
+            "delete",
+            "get",
+            "patch",
+            "post",
+            "put",
+            "request",
+            "save_config",
             "start",
             "stop",
             "restart",
             "repair",
-            "save_config",
             "update_config",
-            "request",
-            "post",
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("method_name", "result_code", "path"),
+    (
+        ("start_hotspot", "started", "/v1/start"),
+        ("stop_hotspot", "stopped", "/v1/stop"),
+        ("restart_service", "restarted:started", "/v1/restart"),
+        ("repair_network", "repaired", "/v1/repair"),
+    ),
+)
+def test_reviewed_lifecycle_methods_use_exact_authenticated_post_routes(
+    method_name,
+    result_code,
+    path,
+):
+    secret = "exact-route-token"
+    transport = FakeTransport(
+        HttpResponse(
+            status=200,
+            body=_envelope({"phase": "running"}, result_code=result_code),
+        )
+    )
+    client = LocalApiClient(token=secret, transport=transport)
+
+    response = getattr(client, method_name)()
+
+    assert response.result_code == result_code
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert request.url == f"http://127.0.0.1:8732{path}"
+    assert request.method == "POST"
+    assert json.loads(request.body) == {}
+    assert request.headers["X-Api-Token"] == secret
+    assert secret not in request.url
+    assert secret not in repr(request)
+    assert secret not in repr(response)
+
+
+@pytest.mark.parametrize(
+    ("method_name", "enabled", "path", "expected_body", "result_code"),
+    (
+        (
+            "set_share_internet",
+            False,
+            "/v1/config",
+            {"config": {"enable_internet": False}},
+            "config_saved",
+        ),
+        (
+            "set_hotspot_autostart",
+            True,
+            "/v1/autostart",
+            {"enabled": True},
+            "autostart_enabled",
+        ),
+    ),
+)
+def test_reviewed_boolean_settings_use_only_their_canonical_api_representation(
+    method_name,
+    enabled,
+    path,
+    expected_body,
+    result_code,
+):
+    transport = FakeTransport(
+        HttpResponse(
+            status=200,
+            body=_envelope(expected_body, result_code=result_code),
+        )
+    )
+    client = LocalApiClient(token="setting-token", transport=transport)
+
+    response = getattr(client, method_name)(enabled)
+
+    request = transport.requests[0]
+    assert response.result_code == result_code
+    assert request.url == f"http://127.0.0.1:8732{path}"
+    assert request.method == "POST"
+    assert json.loads(request.body) == expected_body
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    ("set_share_internet", "set_hotspot_autostart"),
+)
+def test_reviewed_boolean_settings_reject_non_boolean_values(method_name):
+    client = LocalApiClient(
+        token="setting-token",
+        transport=FakeTransport([]),
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        getattr(client, method_name)("true")
+
+    assert "boolean" in str(exc_info.value).casefold()
