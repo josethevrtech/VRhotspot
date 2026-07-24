@@ -1,4 +1,4 @@
-"""Minimal unprivileged native dashboard for the VRhotspot Flatpak."""
+"""Unprivileged native and locked Web Portal shells for the VRhotspot Flatpak."""
 
 from .app import (
     APP_ID,
@@ -9,12 +9,18 @@ from .app import (
     MAX_LIVE_SMOKE_JSON_BYTES,
     MAX_SMOKE_JSON_BYTES,
     NativeDashboardModel,
+    WEBKIT_GI_NAMESPACE,
+    WEBKIT_GI_VERSION,
+    WEB_PORTAL_ORIGIN,
+    WEB_PORTAL_URL,
     build_dashboard_model,
     build_initial_model,
     build_smoke_payload,
+    is_approved_web_portal_uri,
     main,
     render_smoke_json,
     run_live_pairing_smoke_json,
+    run_web_portal_shell,
 )
 
 __all__ = [
@@ -26,10 +32,16 @@ __all__ = [
     "MAX_LIVE_SMOKE_JSON_BYTES",
     "MAX_SMOKE_JSON_BYTES",
     "NativeDashboardModel",
+    "WEBKIT_GI_NAMESPACE",
+    "WEBKIT_GI_VERSION",
+    "WEB_PORTAL_ORIGIN",
+    "WEB_PORTAL_URL",
     "build_dashboard_model",
     "build_initial_model",
     "build_smoke_payload",
+    "is_approved_web_portal_uri",
     "main",
     "render_smoke_json",
     "run_live_pairing_smoke_json",
+    "run_web_portal_shell",
 ]

@@ -1,4 +1,4 @@
-"""Launchable, read-only Flatpak native dashboard foundation."""
+"""Launchable Flatpak shell with native and locked Web Portal modes."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import getpass
 import json
 import sys
 from typing import Any, Sequence
+from urllib.parse import urlsplit
 import warnings
 
 from flatpak_client import (
@@ -29,8 +30,22 @@ from flatpak_client import (
 
 APP_ID = "io.github.josethevrtech.VRhotspot"
 APP_NAME = "VR Hotspot"
+WEB_PORTAL_ORIGIN = "http://127.0.0.1:8732"
+WEB_PORTAL_URL = f"{WEB_PORTAL_ORIGIN}/ui"
+WEBKIT_GI_NAMESPACE = "WebKit"
+WEBKIT_GI_VERSION = "6.0"
 MAX_SMOKE_JSON_BYTES = 8_192
 MAX_LIVE_SMOKE_JSON_BYTES = 65_536
+_WEB_PORTAL_CSP = (
+    f"default-src {WEB_PORTAL_ORIGIN}; "
+    f"connect-src {WEB_PORTAL_ORIGIN}; "
+    f"img-src {WEB_PORTAL_ORIGIN} data:; "
+    f"style-src {WEB_PORTAL_ORIGIN} 'unsafe-inline'; "
+    f"script-src {WEB_PORTAL_ORIGIN} 'unsafe-inline'; "
+    f"font-src {WEB_PORTAL_ORIGIN}; "
+    "object-src 'none'; frame-src 'none'; base-uri 'none'; "
+    f"form-action {WEB_PORTAL_ORIGIN}"
+)
 _DASHBOARD_CSS = """
 .dashboard-card {
   border-radius: 10px;
@@ -58,6 +73,10 @@ _LIVE_SMOKE_INPUT_EXIT = 2
 
 class GuiUnavailableError(RuntimeError):
     """GTK 4 or PyGObject is unavailable for the graphical shell."""
+
+
+class WebKitUnavailableError(RuntimeError):
+    """The pinned WebKitGTK GI API is unavailable for the portal shell."""
 
 
 @dataclass(frozen=True)
@@ -388,6 +407,129 @@ def _load_gtk():
             "GTK 4 and PyGObject are required for the graphical shell."
         ) from None
     return Gtk
+
+
+def _load_webkit():
+    """Import the GNOME 50 WebKitGTK namespace only for the opt-in shell."""
+
+    try:
+        import gi
+
+        gi.require_version(WEBKIT_GI_NAMESPACE, WEBKIT_GI_VERSION)
+        from gi.repository import WebKit
+
+        if not callable(getattr(WebKit.NetworkSession, "new_ephemeral", None)):
+            raise AttributeError
+        if not hasattr(WebKit, "WebView") or not hasattr(WebKit, "Settings"):
+            raise AttributeError
+    except (ImportError, ValueError, AttributeError):
+        raise WebKitUnavailableError(
+            "WebKitGTK 6.0 is unavailable for the locked Web Portal shell."
+        ) from None
+    return WebKit
+
+
+def is_approved_web_portal_uri(uri: object) -> bool:
+    """Accept only HTTP URLs on the one pinned daemon loopback origin."""
+
+    if not isinstance(uri, str) or not uri:
+        return False
+    try:
+        parsed = urlsplit(uri)
+        port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.netloc == "127.0.0.1:8732"
+        and parsed.hostname == "127.0.0.1"
+        and port == 8732
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
+def _policy_decision_uri(decision, decision_type, WebKit) -> str:
+    try:
+        if decision_type in (
+            WebKit.PolicyDecisionType.NAVIGATION_ACTION,
+            WebKit.PolicyDecisionType.NEW_WINDOW_ACTION,
+        ):
+            return decision.get_navigation_action().get_request().get_uri()
+        if decision_type == WebKit.PolicyDecisionType.RESPONSE:
+            return decision.get_response().get_uri()
+    except (AttributeError, TypeError, ValueError):
+        return ""
+    return ""
+
+
+def _handle_web_portal_policy(_web_view, decision, decision_type, WebKit) -> bool:
+    """Resolve every WebKit policy request explicitly and fail closed."""
+
+    uri = _policy_decision_uri(decision, decision_type, WebKit)
+    allowed = (
+        decision_type != WebKit.PolicyDecisionType.NEW_WINDOW_ACTION
+        and is_approved_web_portal_uri(uri)
+    )
+    try:
+        if allowed:
+            decision.use()
+        else:
+            decision.ignore()
+    except (AttributeError, TypeError):
+        return True
+    return True
+
+
+def _build_locked_web_portal_view(WebKit):
+    """Create an ephemeral WebView without credential or script injection."""
+
+    network_session = WebKit.NetworkSession.new_ephemeral()
+    if network_session.is_ephemeral() is not True:
+        raise WebKitUnavailableError(
+            "WebKitGTK did not provide an ephemeral network session."
+        )
+    network_session.set_persistent_credential_storage_enabled(False)
+    network_session.get_cookie_manager().set_accept_policy(
+        WebKit.CookieAcceptPolicy.NEVER
+    )
+
+    settings = WebKit.Settings()
+    settings.set_enable_developer_extras(False)
+    settings.set_enable_dns_prefetching(False)
+    settings.set_enable_offline_web_application_cache(False)
+    settings.set_enable_page_cache(False)
+    settings.set_enable_back_forward_navigation_gestures(False)
+    settings.set_javascript_can_open_windows_automatically(False)
+    settings.set_allow_file_access_from_file_urls(False)
+    settings.set_allow_universal_access_from_file_urls(False)
+
+    web_view = WebKit.WebView(
+        network_session=network_session,
+        settings=settings,
+        default_content_security_policy=_WEB_PORTAL_CSP,
+    )
+    web_view.connect(
+        "decide-policy",
+        lambda view, decision, decision_type: _handle_web_portal_policy(
+            view,
+            decision,
+            decision_type,
+            WebKit,
+        ),
+    )
+    web_view.connect("create", lambda _view, _navigation_action: None)
+    web_view.connect("context-menu", lambda *_args: True)
+
+    def deny_permission(_view, request) -> bool:
+        try:
+            request.deny()
+        except (AttributeError, TypeError):
+            pass
+        return True
+
+    web_view.connect("permission-request", deny_permission)
+    return web_view
 
 
 def _add_text_label(Gtk, container, text: str, *, css_class: str | None = None):
@@ -1074,128 +1216,211 @@ def _connect_from_token_entry(
         connect_button.set_sensitive(True)
 
 
-def run_gui() -> int:
-    """Run the native read-only dashboard against the local API client."""
+def _populate_native_dashboard_window(Gtk, window) -> None:
+    """Populate one application window with the retained native dashboard."""
 
-    Gtk = _load_gtk()
     model = build_initial_model()
     token_entry_controller = FirstRunTokenEntryController()
+    window.set_title(APP_NAME)
+    window.set_default_size(1040, 900)
+    _install_dashboard_styles(Gtk, window)
+
+    scroller = Gtk.ScrolledWindow()
+    scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+    content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+    content.set_margin_top(28)
+    content.set_margin_bottom(28)
+    content.set_margin_start(28)
+    content.set_margin_end(28)
+
+    app_header = Gtk.Box(
+        orientation=Gtk.Orientation.HORIZONTAL,
+        spacing=16,
+    )
+    header_copy = Gtk.Box(
+        orientation=Gtk.Orientation.VERTICAL,
+        spacing=4,
+    )
+    header_copy.set_hexpand(True)
+    _add_text_label(Gtk, header_copy, APP_NAME, css_class="title-1")
+    _add_text_label(
+        Gtk,
+        header_copy,
+        "Native Dashboard",
+        css_class="title-3",
+    )
+    _add_text_label(
+        Gtk,
+        header_copy,
+        "Local VR readiness and diagnostics at a glance.",
+        css_class="dim-label",
+    )
+    app_header.append(header_copy)
+    header_badges = Gtk.Box(
+        orientation=Gtk.Orientation.VERTICAL,
+        spacing=6,
+    )
+    _add_status_badge(
+        Gtk,
+        header_badges,
+        StatusSeverity.UNKNOWN,
+        text="NATIVE GTK",
+    )
+    _add_status_badge(
+        Gtk,
+        header_badges,
+        StatusSeverity.OK,
+        text="READ-ONLY",
+    )
+    app_header.append(header_badges)
+    content.append(app_header)
+
+    connection_frame, connection_body = _new_card(
+        Gtk,
+        title="Connect to Local Daemon",
+        severity=None,
+    )
+    _add_text_label(
+        Gtk,
+        connection_body,
+        "Enter the API token configured for the local VRhotspot daemon. "
+        "The token is used in memory for this validation only and is not saved.",
+    )
+
+    connection_row = Gtk.Box(
+        orientation=Gtk.Orientation.HORIZONTAL,
+        spacing=8,
+    )
+    token_entry = Gtk.PasswordEntry()
+    _set_placeholder_text_compat(token_entry, "API token")
+    token_entry.set_show_peek_icon(True)
+    token_entry.set_hexpand(True)
+    connection_row.append(token_entry)
+
+    connect_button = Gtk.Button(label="Connect / Validate token")
+    connection_row.append(connect_button)
+    connection_body.append(connection_row)
+    _add_text_label(
+        Gtk,
+        connection_body,
+        "The entry is cleared before validation. Pairing does not persist a session.",
+        css_class="dim-label",
+    )
+    content.append(connection_frame)
+
+    display_sections = Gtk.Box(
+        orientation=Gtk.Orientation.VERTICAL,
+        spacing=16,
+    )
+    content.append(display_sections)
+    _render_display_model(Gtk, display_sections, model)
+
+    def on_connect(_widget) -> None:
+        _connect_from_token_entry(
+            token_entry=token_entry,
+            connect_button=connect_button,
+            controller=token_entry_controller,
+            render_model=lambda updated_model: _render_display_model(
+                Gtk,
+                display_sections,
+                updated_model,
+            ),
+        )
+
+    connect_button.connect("clicked", on_connect)
+    token_entry.connect("activate", on_connect)
+
+    scroller.set_child(content)
+    window.set_child(scroller)
+
+
+def run_gui() -> int:
+    """Run the retained native read-only dashboard."""
+
+    Gtk = _load_gtk()
     application = Gtk.Application(application_id=APP_ID)
 
     def on_activate(app) -> None:
         window = Gtk.ApplicationWindow(application=app)
-        window.set_title(APP_NAME)
-        window.set_default_size(1040, 900)
-        _install_dashboard_styles(Gtk, window)
+        _populate_native_dashboard_window(Gtk, window)
+        window.present()
 
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    application.connect("activate", on_activate)
+    return int(application.run([]))
 
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
-        content.set_margin_top(28)
-        content.set_margin_bottom(28)
-        content.set_margin_start(28)
-        content.set_margin_end(28)
 
-        app_header = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=16,
-        )
-        header_copy = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=4,
-        )
-        header_copy.set_hexpand(True)
-        _add_text_label(Gtk, header_copy, APP_NAME, css_class="title-1")
+def _populate_web_portal_window(Gtk, WebKit, window) -> bool:
+    """Populate a locked portal shell, or report that native fallback is needed."""
+
+    window.set_title(APP_NAME)
+    window.set_default_size(1200, 900)
+    root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    try:
+        web_view = _build_locked_web_portal_view(WebKit)
+    except Exception:
+        return False
+
+    web_view.set_hexpand(True)
+    web_view.set_vexpand(True)
+
+    def show_portal() -> None:
+        _clear_box(root)
+        root.append(web_view)
+
+    def show_unreachable() -> None:
+        _clear_box(root)
+        error_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        error_box.set_margin_top(36)
+        error_box.set_margin_bottom(36)
+        error_box.set_margin_start(36)
+        error_box.set_margin_end(36)
         _add_text_label(
             Gtk,
-            header_copy,
-            "Native Dashboard",
-            css_class="title-3",
-        )
-        _add_text_label(
-            Gtk,
-            header_copy,
-            "Local VR readiness and diagnostics at a glance.",
-            css_class="dim-label",
-        )
-        app_header.append(header_copy)
-        header_badges = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=6,
-        )
-        _add_status_badge(
-            Gtk,
-            header_badges,
-            StatusSeverity.UNKNOWN,
-            text="NATIVE GTK",
-        )
-        _add_status_badge(
-            Gtk,
-            header_badges,
-            StatusSeverity.OK,
-            text="READ-ONLY",
-        )
-        app_header.append(header_badges)
-        content.append(app_header)
-
-        connection_frame, connection_body = _new_card(
-            Gtk,
-            title="Connect to Local Daemon",
-            severity=None,
+            error_box,
+            "Local Web Portal unavailable",
+            css_class="title-2",
         )
         _add_text_label(
             Gtk,
-            connection_body,
-            "Enter the API token configured for the local VRhotspot daemon. "
-            "The token is used in memory for this validation only and is not saved.",
+            error_box,
+            "The Flatpak could not load the local daemon Web Portal at "
+            "127.0.0.1:8732. Confirm that vr-hotspotd is installed and running, "
+            "then retry. No external site was opened.",
         )
+        retry_button = Gtk.Button(label="Retry local portal")
 
-        connection_row = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL,
-            spacing=8,
-        )
-        token_entry = Gtk.PasswordEntry()
-        _set_placeholder_text_compat(token_entry, "API token")
-        token_entry.set_show_peek_icon(True)
-        token_entry.set_hexpand(True)
-        connection_row.append(token_entry)
+        def on_retry(_button) -> None:
+            show_portal()
+            web_view.load_uri(WEB_PORTAL_URL)
 
-        connect_button = Gtk.Button(label="Connect / Validate token")
-        connection_row.append(connect_button)
-        connection_body.append(connection_row)
-        _add_text_label(
-            Gtk,
-            connection_body,
-            "The entry is cleared before validation. Pairing does not persist a session.",
-            css_class="dim-label",
-        )
-        content.append(connection_frame)
+        retry_button.connect("clicked", on_retry)
+        error_box.append(retry_button)
+        root.append(error_box)
 
-        display_sections = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL,
-            spacing=16,
-        )
-        content.append(display_sections)
-        _render_display_model(Gtk, display_sections, model)
+    def on_load_failed(_view, _load_event, failing_uri, _error) -> bool:
+        if is_approved_web_portal_uri(failing_uri):
+            show_unreachable()
+        return True
 
-        def on_connect(_widget) -> None:
-            _connect_from_token_entry(
-                token_entry=token_entry,
-                connect_button=connect_button,
-                controller=token_entry_controller,
-                render_model=lambda updated_model: _render_display_model(
-                    Gtk,
-                    display_sections,
-                    updated_model,
-                ),
-            )
+    web_view.connect("load-failed", on_load_failed)
+    show_portal()
+    window.set_child(root)
+    web_view.load_uri(WEB_PORTAL_URL)
+    return True
 
-        connect_button.connect("clicked", on_connect)
-        token_entry.connect("activate", on_connect)
 
-        scroller.set_child(content)
-        window.set_child(scroller)
+def run_web_portal_shell() -> int:
+    """Run the opt-in daemon-served Web Portal inside a locked WebKit view."""
+
+    Gtk = _load_gtk()
+    WebKit = _load_webkit()
+    application = Gtk.Application(application_id=APP_ID)
+
+    def on_activate(app) -> None:
+        window = Gtk.ApplicationWindow(application=app)
+        if not _populate_web_portal_window(Gtk, WebKit, window):
+            _populate_native_dashboard_window(Gtk, window)
         window.present()
 
     application.connect("activate", on_activate)
@@ -1220,6 +1445,11 @@ def _argument_parser() -> argparse.ArgumentParser:
             "authenticated read-only state as JSON, and exit"
         ),
     )
+    parser.add_argument(
+        "--web-portal-shell",
+        action="store_true",
+        help="launch the locked local daemon Web Portal shell spike",
+    )
     return parser
 
 
@@ -1232,6 +1462,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.live_pairing_smoke_json:
         return run_live_pairing_smoke_json()
+    if args.web_portal_shell:
+        try:
+            return run_web_portal_shell()
+        except WebKitUnavailableError:
+            pass
 
     try:
         return run_gui()
