@@ -1,23 +1,23 @@
 # Flatpak control app architecture plan
 
-Status: PR #88 locked Web Portal shell spike; PRs #77-#87 retained
+Status: PR #89 Web Portal shell layout and theme polish; PRs #77-#88 retained
 
 Date: 2026-07-23
 
 This document defines the boundary for the VRhotspot Flatpak control
-application. PR #88 adds an explicit locked WebKitGTK shell spike that renders
-the daemon-served Web Portal. The Web Portal is now intended to become the
-visual source of truth for the Flatpak instead of being cloned in native GTK.
-PR #85/#87's native dashboard remains available as the default and as the
-fallback during this spike; switching the default is separately reviewed future
-work.
+application. PR #89 polishes the shared daemon-served Web Portal layout and dark
+form-control theme used by both the browser `/ui` route and PR #88's explicit
+locked WebKitGTK shell. The Web Portal remains the visual source of truth for
+the Flatpak instead of being cloned in native GTK. PR #85/#87's native dashboard
+remains available as the default and fallback; switching the default is
+separately reviewed future work.
 
-The spike reuses PR #86's installed GTK `PasswordEntry` compatibility fix,
+The shell retains PR #86's installed GTK `PasswordEntry` compatibility fix,
 PR #82's native in-memory first-run token entry, PR #83's explicit terminal-only
-live daemon pairing smoke path, and PR #84's optional installer prompt. It adds
-no daemon API/runtime behavior, privileged Flatpak action, permission expansion,
-token injection or discovery, persistent credential storage, installer change,
-or Web UI behavior change.
+live daemon pairing smoke path, and PR #84's optional installer prompt. PR #89
+adds no daemon API/runtime behavior, privileged Flatpak action, permission
+expansion, token injection or discovery, persistent credential storage,
+installer change, or Web UI JavaScript/control behavior change.
 
 ## Architectural decision
 
@@ -622,6 +622,38 @@ privileged authority and still serves the Portal and owns all API,
 authentication, lifecycle, configuration, networking, and host mutation
 behavior. PR #88 does not switch the default launch mode.
 
+## PR #89 Web Portal shell layout and theme polish
+
+PR #89 changes the shared Web Portal stylesheet rather than adding a Flatpak-only
+frontend. The daemon continues to serve `assets/index.html`, `assets/ui.css`,
+and `assets/ui.js` at `/ui` and `/assets/*`, while the Flatpak WebKit shell
+continues to load that exact daemon-served page. The browser Portal and the
+Flatpak shell therefore receive the same layout, colors, controls, and product
+identity from one source of truth.
+
+Basic mode now uses the available viewport more effectively: its container can
+grow substantially beyond the previous narrow desktop cap, its two primary
+cards share medium-width rows, Adapter Readiness spans the row at those widths,
+and wide desktops use three flexible columns. A narrow breakpoint returns the
+cards to one readable column. These rules are scoped to Basic mode, so Pro
+mode's sidebar, tabs, content layout, controls, and behavior remain unchanged.
+
+The shared form-control theme now opts into the dark color scheme and gives
+inputs, textareas, selects, option rows, focus states, and disabled states
+explicit readable colors. The select arrow uses a local CSS treatment because
+WebKitGTK may otherwise retain a bright native select face despite the page's
+dark palette. This compatibility styling is bounded to form controls and adds
+no JavaScript, downloaded dependency, control-semantic change, or API change.
+In particular, the Basic-mode USB Wi-Fi Adapter select remains the same
+`ap_adapter` control and continues through the existing portal behavior.
+
+PR #89 does not change the Flatpak entry point, WebView construction, exact
+origin/navigation policy, Content Security Policy, token behavior, native GTK
+dashboard or fallback, manifest permissions, daemon behavior, or installer.
+`--web-portal-shell` remains explicit and opt-in. A default UI switch and any
+additional WebKit hardening review and prerequisites for that switch remain
+separately approved future work.
+
 ## Sandbox and portal expectations
 
 The future Flatpak should begin from a minimal permission set and justify every
@@ -715,7 +747,8 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | PR #85 | Native dashboard foundation. Replace the linear GTK placeholder presentation with a two-column read-only dashboard that renders the existing safe daemon, pairing, adapter-readiness, preflight, disabled support-bundle, and empty controls models after pairing. Add no refresh, token retention/storage, mutation control, portal behavior, direct networking, or permission. | Deterministic tests prove all six cards render, token input clears before validation, adapter and preflight detail remains bounded and sanitized, rejected/unreachable/malformed states remain safe, support export stays disabled, mutation actions stay empty, GTK remains optional, both smoke commands remain compatible, and the manifest permissions remain unchanged. |
 | PR #86 | Installed GTK PasswordEntry compatibility hotfix. Preserve the hidden password-style field while supporting both the direct placeholder setter and the GTK property API, and safely omit the optional placeholder when neither is available. Add no token, client, model, permission, or control behavior. | Deterministic activation and helper tests cover the installed binding shape, direct setter, supported fallback property, and unsupported-property no-op without weakening token clearing or lazy GTK loading. |
 | PR #87 | Native dashboard Web Portal parity pass. Use the Portal as a design/product reference to improve the native GTK header, connection/pairing hierarchy, readiness summary, recommended-adapter emphasis, preflight facts/issues/actions, severity badges, and honest unavailable sections. Do not embed the Portal, add a WebView or frontend runtime, retain tokens, add actions/export, change Web UI or daemon behavior, or expand permissions. | Deterministic model/view tests prove parity labels, all five severity badges, paired and recommended emphasis, disabled support export, empty controls, absent lifecycle/configuration buttons, hidden/cleared token entry, placeholder compatibility, lazy GTK, token-free smoke contracts, redaction, and unchanged manifest permissions. |
-| PR #88 | Locked Web Portal shell spike (current phase). Add an explicit WebKitGTK 6.0 mode that loads only the daemon-served `http://127.0.0.1:8732/ui` Portal in an ephemeral, origin-locked WebView. Keep the native dashboard as default and fallback. Add no copied frontend, arbitrary URL, token injection/discovery/persistence, Web UI or daemon behavior, installer behavior, or permission. | Deterministic tests pin the route and exact origin, deny external and new-window navigation, prove ephemeral/no-injection construction and bounded load failure, exercise WebKit-unavailable and construction fallback, preserve both smoke contracts and native token-entry compatibility, and verify unchanged manifest permissions. Real packaging and manual shell validation remain required. |
+| PR #88 | Locked Web Portal shell spike. Add an explicit WebKitGTK 6.0 mode that loads only the daemon-served `http://127.0.0.1:8732/ui` Portal in an ephemeral, origin-locked WebView. Keep the native dashboard as default and fallback. Add no copied frontend, arbitrary URL, token injection/discovery/persistence, Web UI or daemon behavior, installer behavior, or permission. | Deterministic tests pin the route and exact origin, deny external and new-window navigation, prove ephemeral/no-injection construction and bounded load failure, exercise WebKit-unavailable and construction fallback, preserve both smoke contracts and native token-entry compatibility, and verify unchanged manifest permissions. Real packaging and manual shell validation remain required. |
+| PR #89 | Web Portal shell layout and theme polish (current phase). Improve the shared Portal CSS so Basic mode uses wide, medium, and narrow windows effectively and WebKitGTK renders select/input controls with readable dark, focused, and disabled states. Preserve Pro behavior, WebView security, opt-in launch, native fallback, tokens, APIs, runtime, installer, vendor files, and permissions. | Deterministic asset tests prove flexible Basic card/container rules, wide and narrow breakpoints, dark native-form overrides, focus/disabled contrast, retained Basic/Pro selectors and USB adapter control; the #88 shell/security/token/manifest tests remain green; browser `/ui` and the Flatpak shell consume the same daemon-served assets. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
 Each phase is independently reviewable. A later phase is not authorized merely
@@ -739,8 +772,8 @@ a production Flatpak release:
 | Release process | Define source provenance, dependency review, reproducible build inputs, signing, store submission, release notes, and coordination with host-daemon releases. |
 | Installation/update ownership | Keep daemon installation and privileged updates separate from Flatpak updates; document how users avoid incompatible independent versions. |
 
-PR #88's shell choices are not blanket approval for production packaging
-or additional permissions.
+PR #88/#89's shell and presentation choices are not blanket approval for
+production packaging or additional permissions.
 
 ## Future test and validation expectations
 
@@ -796,13 +829,14 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #88
+## Explicit non-goals for PR #89
 
 - No default UI switch or native-dashboard removal. The Web Portal is intended
   to become the visual source of truth, but the locked WebView remains an
   explicit spike mode and native GTK remains the default and fallback.
-- No existing Web UI behavior or asset change, copied Web Portal
-  JavaScript/style/image asset, or second frontend implementation.
+- No Web UI JavaScript/behavior change, copied Web Portal JavaScript/style/image
+  asset, Flatpak-only frontend, or second frontend implementation. PR #89
+  changes only the shared presentation stylesheet.
 - No arbitrary URL argument, address bar, external navigation, popup/new-window
   navigation, remote-site load, or general browser.
 - No Flathub submission, release artifact, production metadata polish,
@@ -835,12 +869,11 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No known-adapter registry or adapter-policy implementation.
 - No HostFactsSnapshot work or consumer change.
 
-PR #88 authorizes only the explicit locked daemon-served Web Portal shell, its
-ephemeral WebKit setup, origin/navigation policy, safe native/error fallback,
-deterministic tests, and documentation updates.
+PR #89 authorizes only shared Web Portal layout/form-control presentation polish,
+its deterministic asset and retained-boundary tests, and documentation updates.
 PR #83's recorded manual live-pairing validation remains historical evidence;
-PR #88 does not claim a new real-daemon pairing result unless the installed
-command is run against an available daemon. PR #88 does not claim token
+PR #89 does not claim a new real-daemon pairing result unless the installed
+command is run against an available daemon. PR #89 does not claim token
 persistence, keyring integration, lifecycle/configuration controls,
 support-bundle portal export, a Flathub-polished release, Steam Frame support,
 VR Direct Link support, or a known-adapter registry. Lifecycle/configuration
