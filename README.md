@@ -85,15 +85,17 @@ never discovers one from `/etc/vr-hotspot/env`, `/var/lib/vr-hotspot`, daemon
 configuration, environment variables, or command arguments. Missing or
 rejected credentials are reported as **Needs Authentication**, separately from
 **Daemon Unavailable** and unexpected **Error** states. Needs Authentication is
-a static icon state; working/pulsing indication is reserved for active
-transitions. Every state uses the VR Hotspot icon family instead of a generic
-system Wi-Fi icon: Stopped has a red/off indicator, Running has a green/on
-indicator, Transitioning has an amber/working indicator, and authentication,
-daemon-unavailable, and error states retain the VR mark with a red error-style
-indicator. Start, Stop, Restart, and Repair remain disabled until the shared
-token authenticates successfully and then become available according to the
-real daemon state. The historical flag remains a compatibility alias for the
-same default graphical behavior:
+a static tray icon state; working/pulsing indication is reserved for active
+transitions. Every tray state uses the VR Hotspot icon family instead of a
+generic system Wi-Fi icon: Stopped has a red/off indicator, Running has a
+green/on indicator, Transitioning has an amber/working indicator, and
+authentication, daemon-unavailable, and error states retain the VR mark with a
+red error-style indicator. The WebKit host window and KDE task manager always
+use the stable base `io.github.josethevrtech.VRhotspot` application icon; that
+window/taskbar icon does not follow hotspot or tray state. Start, Stop, Restart,
+and Repair remain disabled until the shared token authenticates successfully
+and then become available according to the real daemon state. The historical
+flag remains a compatibility alias for the same default graphical behavior:
 
 ```bash
 flatpak run io.github.josethevrtech.VRhotspot --web-portal-shell

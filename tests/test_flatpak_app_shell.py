@@ -211,9 +211,13 @@ class FakeGtkApplicationWindow(FakeGtkWidget):
 
     def __init__(self, **properties):
         super().__init__(**properties)
+        self.icon_names = []
         self.present_calls = 0
         self.hide_calls = 0
         type(self).created.append(self)
+
+    def set_icon_name(self, icon_name):
+        self.icon_names.append(icon_name)
 
     def set_title(self, _title):
         pass
@@ -229,6 +233,14 @@ class FakeGtkApplicationWindow(FakeGtkWidget):
     def hide(self):
         self.visible = False
         self.hide_calls += 1
+
+
+class FakeGtkWindow:
+    default_icon_names = []
+
+    @classmethod
+    def set_default_icon_name(cls, icon_name):
+        cls.default_icon_names.append(icon_name)
 
 
 class FakeGtkLabel(FakeGtkWidget):
@@ -250,6 +262,7 @@ class FakeGtk:
 
     Application = FakeGtkApplication
     ApplicationWindow = FakeGtkApplicationWindow
+    Window = FakeGtkWindow
     Box = FakeGtkWidget
     Label = FakeGtkLabel
     Button = FakeGtkButton
@@ -376,6 +389,7 @@ def _reset_gui_fakes():
     FakeGtkApplication.activations = 1
     FakeGtkApplicationWindow.created = []
     FakeGtkApplicationWindow.last_presented = None
+    FakeGtkWindow.default_icon_names = []
     FakeWebKitWebView.created = []
     FakeWebKitWebView.last_created = None
 
@@ -801,6 +815,7 @@ def test_web_portal_shell_zoom_is_bounded(
 
 def test_default_graphical_launch_uses_one_web_portal_window(monkeypatch):
     from flatpak_app import app
+    from flatpak_app.tray import ICON_NAMES
 
     _reset_gui_fakes()
     monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
@@ -810,6 +825,11 @@ def test_default_graphical_launch_uses_one_web_portal_window(monkeypatch):
     assert len(FakeGtkApplicationWindow.created) == 1
     assert len(FakeWebKitWebView.created) == 1
     assert FakeWebKitWebView.last_created.loaded_uris == [app.WEB_PORTAL_URL]
+    assert FakeGtkApplication.last_created.application_id == APP_ID
+    assert app.WINDOW_ICON_NAME == APP_ID
+    assert FakeGtkWindow.default_icon_names == [APP_ID]
+    assert FakeGtkApplicationWindow.created[0].icon_names == [APP_ID]
+    assert app.WINDOW_ICON_NAME not in ICON_NAMES.values()
 
 
 def test_compatibility_alias_uses_default_web_portal_behavior(monkeypatch):
@@ -901,6 +921,9 @@ def test_tray_primary_activation_restores_single_web_portal_window(monkeypatch):
     assert len(FakeWebKitWebView.created) == 1
     assert FakeWebKitWebView.last_created.loaded_uris == [app.WEB_PORTAL_URL]
     assert FakeGtkApplicationWindow.created[0].present_calls == 3
+    assert FakeGtkApplication.last_created.application_id == APP_ID
+    assert FakeGtkWindow.default_icon_names == [APP_ID]
+    assert FakeGtkApplicationWindow.created[0].icon_names == [APP_ID]
 
 
 def test_webkit_unavailable_shows_bounded_error_without_alternate_ui(monkeypatch):
@@ -1344,8 +1367,10 @@ def test_manifest_has_only_minimal_display_and_loopback_client_permissions():
 
 
 def test_manifest_packages_only_shell_client_and_static_desktop_assets():
+    manifest = _manifest()
     manifest_text = MANIFEST_PATH.read_text(encoding="utf-8")
-    sources = _manifest()["modules"][0]["sources"]
+    module = manifest["modules"][0]
+    sources = module["sources"]
     paths = {source["path"] for source in sources}
 
     assert all(source["type"] == "file" for source in sources)
@@ -1365,6 +1390,12 @@ def test_manifest_packages_only_shell_client_and_static_desktop_assets():
         "systemd",
     ):
         assert forbidden not in manifest_text
+    base_icon_install = (
+        f"install -Dm644 {APP_ID}.svg "
+        f"/app/share/icons/hicolor/scalable/apps/{APP_ID}.svg"
+    )
+    assert base_icon_install in module["build-commands"]
+    assert f"{APP_ID}.svg" in paths
 
 
 def test_desktop_file_matches_app_id_name_and_launcher():
