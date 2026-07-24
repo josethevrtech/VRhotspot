@@ -2,7 +2,6 @@ import inspect
 from pathlib import Path
 import sys
 
-import pytest
 
 from flatpak_app import build_smoke_payload, render_smoke_json
 from flatpak_client import (
