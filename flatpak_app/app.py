@@ -9,13 +9,14 @@ import getpass
 import json
 import sys
 import threading
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 import warnings
 
 from flatpak_client import (
     AuthenticationController,
     AuthenticationError,
+    AuthenticationResult,
     ConnectionFailure,
     DiagnosticsControlUiController,
     DiagnosticsControlUiModel,
@@ -39,6 +40,8 @@ WEBKIT_GI_VERSION = "6.0"
 WEB_PORTAL_SHELL_ZOOM = 1.75
 MAX_SMOKE_JSON_BYTES = 8_192
 MAX_LIVE_SMOKE_JSON_BYTES = 65_536
+MAX_PAIR_TOKEN_STDIN_BYTES = 512
+MAX_PAIR_RESULT_JSON_BYTES = 4_096
 WEB_PORTAL_AUTH_HANDLER = "vrHotspotCompanionAuth"
 WEB_PORTAL_AUTH_PROTOCOL_VERSION = 1
 MAX_WEB_PORTAL_AUTH_MESSAGE_BYTES = 262_144
@@ -62,6 +65,31 @@ _LIVE_SMOKE_TOKEN_INPUT_EMPTY = "token_input_empty"
 _LIVE_SMOKE_TOKEN_INPUT_CANCELLED = "token_input_cancelled"
 _LIVE_SMOKE_FAILURE_EXIT = 1
 _LIVE_SMOKE_INPUT_EXIT = 2
+_PAIR_TOKEN_INPUT_OK = "ok"
+_PAIR_TOKEN_FAILURE_EXIT = 1
+_PAIR_TOKEN_INPUT_EXIT = 2
+_PAIR_TOKEN_INPUT_MESSAGES = {
+    "interactive_input_refused": (
+        "Token pairing reads exactly one line from piped stdin. Use the "
+        "app's native authentication dialog for interactive token entry."
+    ),
+    "token_input_empty": "No API token line was provided on stdin.",
+    "token_input_too_large": (
+        "The stdin token line exceeded the fixed pairing size limit."
+    ),
+    "token_input_invalid": (
+        "The stdin payload was not exactly one readable token line."
+    ),
+    "token_input_unavailable": "The token line could not be read from stdin.",
+}
+_PAIR_TOKEN_FAILURE_MESSAGE = (
+    "Token pairing failed before a safe result could be produced. "
+    "Nothing was saved."
+)
+_PAIR_TOKEN_FALLBACK_JSON = (
+    '{"detail_code":"pairing_failed","message":"Token pairing failed.",'
+    '"ok":false,"paired":false,"saved":false}'
+)
 
 
 class GuiUnavailableError(RuntimeError):
@@ -600,6 +628,201 @@ def run_live_pairing_smoke_json(
     )
 
 
+def read_bounded_token_line(
+    stream,
+    *,
+    max_bytes: int = MAX_PAIR_TOKEN_STDIN_BYTES,
+) -> tuple[str, str]:
+    """Read exactly one bounded token line from non-interactive stdin.
+
+    Returns ``(token, code)`` where ``code`` is ``"ok"`` only when a single
+    bounded line was read. The token is never echoed, logged, or included in
+    any returned failure code.
+    """
+
+    try:
+        if stream.isatty() is not False:
+            return "", "interactive_input_refused"
+    except Exception:
+        return "", "interactive_input_refused"
+
+    buffer = getattr(stream, "buffer", None)
+    reader = stream if buffer is None else buffer
+    try:
+        raw = reader.read(max_bytes + 1)
+    except Exception:
+        return "", "token_input_unavailable"
+
+    if isinstance(raw, bytes):
+        data = raw
+    elif isinstance(raw, str):
+        try:
+            data = raw.encode("utf-8")
+        except UnicodeError:
+            return "", "token_input_invalid"
+    else:
+        return "", "token_input_unavailable"
+
+    if len(data) > max_bytes:
+        return "", "token_input_too_large"
+    try:
+        text = data.decode("utf-8")
+    except UnicodeError:
+        return "", "token_input_invalid"
+
+    line, _newline, remainder = text.partition("\n")
+    if remainder != "":
+        return "", "token_input_invalid"
+    if line.endswith("\r"):
+        line = line[:-1]
+    if line == "":
+        return "", "token_input_empty"
+    return line, _PAIR_TOKEN_INPUT_OK
+
+
+def build_pair_token_result(
+    *,
+    ok: bool,
+    paired: bool,
+    saved: bool,
+    detail_code: str,
+    message: str,
+) -> dict[str, Any]:
+    """Build the fixed, token-free pairing result payload."""
+
+    return {
+        "ok": ok is True,
+        "paired": paired is True,
+        "saved": saved is True,
+        "detail_code": str(detail_code),
+        "message": str(message),
+    }
+
+
+def render_pair_token_result_json(result: Mapping[str, Any]) -> str:
+    """Serialize one pairing result under a fixed output bound."""
+
+    try:
+        rendered = json.dumps(
+            dict(result),
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError):
+        return _PAIR_TOKEN_FALLBACK_JSON
+    if len(rendered.encode("utf-8")) > MAX_PAIR_RESULT_JSON_BYTES:
+        return _PAIR_TOKEN_FALLBACK_JSON
+    return rendered
+
+
+def _emit_pair_token_result(
+    *,
+    ok: bool,
+    paired: bool,
+    saved: bool,
+    detail_code: str,
+    message: str,
+    exit_code: int,
+) -> int:
+    print(
+        render_pair_token_result_json(
+            build_pair_token_result(
+                ok=ok,
+                paired=paired,
+                saved=saved,
+                detail_code=detail_code,
+                message=message,
+            )
+        )
+    )
+    return exit_code
+
+
+def _pair_token_failure(exit_code: int = _PAIR_TOKEN_FAILURE_EXIT) -> int:
+    return _emit_pair_token_result(
+        ok=False,
+        paired=False,
+        saved=False,
+        detail_code="pairing_failed",
+        message=_PAIR_TOKEN_FAILURE_MESSAGE,
+        exit_code=exit_code,
+    )
+
+
+def run_pair_token_stdin(
+    *,
+    save: bool,
+    input_stream=None,
+    controller_factory=None,
+) -> int:
+    """Validate (and with ``save``, persist) one stdin token line.
+
+    The token is accepted only through a bounded, non-interactive stdin read;
+    it never appears in argv, output, exceptions, or any web surface. Output
+    is a single token-free JSON object.
+    """
+
+    stream = sys.stdin if input_stream is None else input_stream
+    token, input_code = read_bounded_token_line(stream)
+    if input_code != _PAIR_TOKEN_INPUT_OK:
+        return _emit_pair_token_result(
+            ok=False,
+            paired=False,
+            saved=False,
+            detail_code=input_code,
+            message=_PAIR_TOKEN_INPUT_MESSAGES.get(
+                input_code,
+                _PAIR_TOKEN_FAILURE_MESSAGE,
+            ),
+            exit_code=_PAIR_TOKEN_INPUT_EXIT,
+        )
+
+    factory = (
+        AuthenticationController if controller_factory is None else controller_factory
+    )
+    try:
+        try:
+            controller = factory()
+            if save:
+                result = controller.authenticate_and_save(
+                    token,
+                    save_securely=True,
+                )
+            else:
+                result = controller.test_authentication(explicit_token=token)
+        except Exception:
+            return _pair_token_failure()
+    finally:
+        token = ""
+
+    if save:
+        if not isinstance(result, AuthenticationResult):
+            return _pair_token_failure()
+        saved_securely = result.securely_saved is True
+        paired = result.code in {"saved_securely", "wallet_unavailable"}
+        ok = result.code == "saved_securely" and saved_securely
+        return _emit_pair_token_result(
+            ok=ok,
+            paired=paired,
+            saved=saved_securely,
+            detail_code=result.code,
+            message=result.message,
+            exit_code=0 if ok else _PAIR_TOKEN_FAILURE_EXIT,
+        )
+
+    if not isinstance(result, FirstRunResult):
+        return _pair_token_failure()
+    return _emit_pair_token_result(
+        ok=result.paired,
+        paired=result.paired,
+        saved=False,
+        detail_code=result.state.value,
+        message=result.message,
+        exit_code=0 if result.paired else _PAIR_TOKEN_FAILURE_EXIT,
+    )
+
+
 def _load_gtk():
     """Import GTK only when a graphical entry point is launched."""
 
@@ -1133,6 +1356,23 @@ def _argument_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--pair-token-stdin",
+        action="store_true",
+        help=(
+            "read one bounded daemon API token line from non-interactive "
+            "piped stdin, validate it against the local daemon, print a "
+            "token-free JSON result, and exit"
+        ),
+    )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help=(
+            "with --pair-token-stdin, store the validated token in the "
+            "desktop Secret Service wallet before exiting"
+        ),
+    )
+    parser.add_argument(
         "--web-portal-shell",
         action="store_true",
         help="compatibility alias for the default graphical shell",
@@ -1146,14 +1386,19 @@ def _argument_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run a smoke path, tray companion, or the default Web Portal shell."""
+    """Run a smoke, pairing, or tray path, or the default Web Portal shell."""
 
-    args = _argument_parser().parse_args(argv)
+    parser = _argument_parser()
+    args = parser.parse_args(argv)
+    if args.save and not args.pair_token_stdin:
+        parser.error("--save requires --pair-token-stdin")
     if args.smoke_json:
         print(render_smoke_json())
         return 0
     if args.live_pairing_smoke_json:
         return run_live_pairing_smoke_json()
+    if args.pair_token_stdin:
+        return run_pair_token_stdin(save=args.save)
     if args.tray:
         try:
             return run_tray()
