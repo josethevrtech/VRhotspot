@@ -1,19 +1,14 @@
-"""Unprivileged native and locked Web Portal shells for the VRhotspot Flatpak."""
+"""Unprivileged locked Web Portal shell for the VRhotspot Flatpak."""
 
 from .app import (
     APP_ID,
     APP_NAME,
-    DashboardControlsBoundary,
-    DashboardSectionLabels,
-    FirstRunTokenEntryController,
     MAX_LIVE_SMOKE_JSON_BYTES,
     MAX_SMOKE_JSON_BYTES,
-    NativeDashboardModel,
     WEBKIT_GI_NAMESPACE,
     WEBKIT_GI_VERSION,
     WEB_PORTAL_ORIGIN,
     WEB_PORTAL_URL,
-    build_dashboard_model,
     build_initial_model,
     build_smoke_payload,
     is_approved_web_portal_uri,
@@ -36,17 +31,12 @@ from .tray import (
 __all__ = [
     "APP_ID",
     "APP_NAME",
-    "DashboardControlsBoundary",
-    "DashboardSectionLabels",
-    "FirstRunTokenEntryController",
     "MAX_LIVE_SMOKE_JSON_BYTES",
     "MAX_SMOKE_JSON_BYTES",
-    "NativeDashboardModel",
     "WEBKIT_GI_NAMESPACE",
     "WEBKIT_GI_VERSION",
     "WEB_PORTAL_ORIGIN",
     "WEB_PORTAL_URL",
-    "build_dashboard_model",
     "build_initial_model",
     "build_smoke_payload",
     "is_approved_web_portal_uri",

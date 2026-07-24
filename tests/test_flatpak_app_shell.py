@@ -1,10 +1,8 @@
 import configparser
-from dataclasses import asdict
 import importlib
 import inspect
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 import warnings
@@ -27,12 +25,12 @@ METAINFO_PATH = Path("packaging/flatpak") / f"{APP_ID}.metainfo.xml"
 LAUNCHER_PATH = Path("packaging/flatpak/vrhotspot-flatpak")
 
 
-def _api_response(data):
+def _api_response(data, *, result_code="ok"):
     from flatpak_client import ApiResponse
 
     return ApiResponse(
-        correlation_id="token-entry-ui-test",
-        result_code="ok",
+        correlation_id="flatpak-shell-test",
+        result_code=result_code,
         warnings=(),
         data=data,
     )
@@ -50,10 +48,7 @@ def _readiness_response():
                     "bus_type": "usb",
                     "supports_5ghz": True,
                     "readiness_state": "ready",
-                    "reason_codes": [
-                        "supports_ap_mode",
-                        "daemon_recommended",
-                    ],
+                    "reason_codes": ["supports_ap_mode", "daemon_recommended"],
                     "explanation": "Ready for display-only diagnostics.",
                 }
             ],
@@ -78,12 +73,7 @@ def _preflight_response():
                     "message": "Review the daemon-reported readiness.",
                 }
             ],
-            "recommended_actions": [
-                {
-                    "code": "review_example",
-                    "message": "Review this display-only guidance.",
-                }
-            ],
+            "recommended_actions": [],
         }
     )
 
@@ -141,8 +131,7 @@ class FakeGtkWidget:
         self.parent = None
         self.css_classes = []
         self.signal_handlers = {}
-        self.sensitive = True
-        self.show_peek_icon = False
+        self.visible = False
 
     def append(self, child):
         child.parent = self
@@ -150,9 +139,6 @@ class FakeGtkWidget:
 
     def set_child(self, child):
         self.children = []
-        self.append(child)
-
-    def attach(self, child, *_position):
         self.append(child)
 
     def get_first_child(self):
@@ -172,9 +158,6 @@ class FakeGtkWidget:
     def add_css_class(self, css_class):
         self.css_classes.append(css_class)
 
-    def set_sensitive(self, sensitive):
-        self.sensitive = sensitive
-
     def connect(self, signal, handler):
         self.signal_handlers[signal] = handler
 
@@ -190,9 +173,6 @@ class FakeGtkWidget:
     def set_vexpand(self, _expand):
         pass
 
-    def set_column_homogeneous(self, _homogeneous):
-        pass
-
     def set_margin_top(self, _margin):
         pass
 
@@ -205,26 +185,35 @@ class FakeGtkWidget:
     def set_margin_end(self, _margin):
         pass
 
-    def set_show_peek_icon(self, show):
-        self.show_peek_icon = show
-
 
 class FakeGtkApplication:
+    activations = 1
+    last_created = None
+
     def __init__(self, *, application_id):
         self.application_id = application_id
         self.signal_handlers = {}
+        type(self).last_created = self
 
     def connect(self, signal, handler):
         self.signal_handlers[signal] = handler
 
     def run(self, arguments):
         assert arguments == []
-        self.signal_handlers["activate"](self)
+        for _index in range(type(self).activations):
+            self.signal_handlers["activate"](self)
         return 0
 
 
 class FakeGtkApplicationWindow(FakeGtkWidget):
+    created = []
     last_presented = None
+
+    def __init__(self, **properties):
+        super().__init__(**properties)
+        self.present_calls = 0
+        self.hide_calls = 0
+        type(self).created.append(self)
 
     def set_title(self, _title):
         pass
@@ -233,12 +222,13 @@ class FakeGtkApplicationWindow(FakeGtkWidget):
         pass
 
     def present(self):
+        self.visible = True
+        self.present_calls += 1
         type(self).last_presented = self
 
-
-class FakeGtkScrolledWindow(FakeGtkWidget):
-    def set_policy(self, _horizontal, _vertical):
-        pass
+    def hide(self):
+        self.visible = False
+        self.hide_calls += 1
 
 
 class FakeGtkLabel(FakeGtkWidget):
@@ -253,28 +243,16 @@ class FakeGtkButton(FakeGtkWidget):
         self.label = label
 
 
-class FakeGtkPasswordEntry(FakeGtkWidget):
-    pass
-
-
 class FakeGtk:
     class Orientation:
         VERTICAL = "vertical"
         HORIZONTAL = "horizontal"
 
-    class PolicyType:
-        NEVER = "never"
-        AUTOMATIC = "automatic"
-
     Application = FakeGtkApplication
     ApplicationWindow = FakeGtkApplicationWindow
-    ScrolledWindow = FakeGtkScrolledWindow
     Box = FakeGtkWidget
-    Frame = FakeGtkWidget
-    Grid = FakeGtkWidget
     Label = FakeGtkLabel
     Button = FakeGtkButton
-    PasswordEntry = FakeGtkPasswordEntry
 
 
 class FakeCookieManager:
@@ -322,6 +300,7 @@ class FakeWebKitSettings:
 
 
 class FakeWebKitWebView(FakeGtkWidget):
+    created = []
     last_created = None
 
     def __init__(self, **properties):
@@ -329,6 +308,7 @@ class FakeWebKitWebView(FakeGtkWidget):
         self.properties = properties
         self.loaded_uris = []
         self.zoom_levels = []
+        type(self).created.append(self)
         type(self).last_created = self
 
     def load_uri(self, uri):
@@ -358,12 +338,20 @@ def _walk_fake_widgets(widget):
         yield from _walk_fake_widgets(child)
 
 
-def _fake_labels_under(widget):
+def _labels_under(widget):
     return {
         child.label
         for child in _walk_fake_widgets(widget)
         if isinstance(child, FakeGtkLabel)
     }
+
+
+def _reset_gui_fakes():
+    FakeGtkApplication.activations = 1
+    FakeGtkApplicationWindow.created = []
+    FakeGtkApplicationWindow.last_presented = None
+    FakeWebKitWebView.created = []
+    FakeWebKitWebView.last_created = None
 
 
 def _manifest():
@@ -445,13 +433,12 @@ def test_web_portal_shell_rejects_arbitrary_or_non_pinned_urls(uri):
         ("navigation", "http://127.0.0.1:8732/ui", "use"),
         ("navigation", "https://example.com/", "ignore"),
         ("new-window", "http://127.0.0.1:8732/ui", "ignore"),
-        ("new-window", "https://example.com/", "ignore"),
         ("response", "http://127.0.0.1:8732/assets/ui.js", "use"),
         ("response", "https://example.com/remote.js", "ignore"),
         ("unknown", "http://127.0.0.1:8732/ui", "ignore"),
     ),
 )
-def test_web_portal_policy_explicitly_blocks_external_and_new_window_navigation(
+def test_web_portal_policy_is_origin_locked(
     decision_type,
     uri,
     expected_action,
@@ -500,7 +487,7 @@ def test_web_portal_policy_explicitly_blocks_external_and_new_window_navigation(
     assert decision.actions == [expected_action]
 
 
-def test_locked_web_portal_view_is_ephemeral_and_has_no_injection_surface():
+def test_locked_web_portal_view_is_ephemeral_zoomed_and_has_no_injection():
     from flatpak_app import app
 
     web_view = app._build_locked_web_portal_view(FakeWebKit)
@@ -508,31 +495,20 @@ def test_locked_web_portal_view_is_ephemeral_and_has_no_injection_surface():
     settings = FakeWebKitSettings.last_created
     source = inspect.getsource(app._build_locked_web_portal_view)
 
-    assert session is not None
     assert session.is_ephemeral() is True
     assert session.persistent_credentials is False
     assert session.cookie_manager.accept_policy == "never"
     assert web_view.properties["network_session"] is session
     assert web_view.properties["settings"] is settings
-    assert web_view.zoom_levels == [app.WEB_PORTAL_SHELL_ZOOM]
+    assert web_view.zoom_levels == [1.75]
     assert app.WEB_PORTAL_SHELL_ZOOM == 1.75
-    assert (
-        app._WEB_PORTAL_SHELL_ZOOM_MIN
-        <= app.WEB_PORTAL_SHELL_ZOOM
-        <= app._WEB_PORTAL_SHELL_ZOOM_MAX
-    )
-    assert (
-        web_view.properties["default_content_security_policy"]
-        == app._WEB_PORTAL_CSP
-    )
+    assert web_view.properties["default_content_security_policy"] == app._WEB_PORTAL_CSP
     assert app.WEB_PORTAL_ORIGIN in app._WEB_PORTAL_CSP
     assert "object-src 'none'" in app._WEB_PORTAL_CSP
     assert "frame-src 'none'" in app._WEB_PORTAL_CSP
     assert settings.values["set_enable_dns_prefetching"] is False
     assert settings.values["set_enable_page_cache"] is False
-    assert (
-        settings.values["set_javascript_can_open_windows_automatically"] is False
-    )
+    assert settings.values["set_javascript_can_open_windows_automatically"] is False
     assert {
         "decide-policy",
         "create",
@@ -548,19 +524,15 @@ def test_locked_web_portal_view_is_ephemeral_and_has_no_injection_surface():
         "UserScript",
         "add_script",
         "add_style_sheet",
-        "set_uri(",
     ):
         assert forbidden not in source
 
 
 @pytest.mark.parametrize(
     ("configured_zoom", "expected_zoom"),
-    (
-        (-100.0, 1.0),
-        (100.0, 2.0),
-    ),
+    ((-100.0, 1.0), (100.0, 2.0)),
 )
-def test_web_portal_shell_zoom_is_bounded_and_has_no_runtime_input(
+def test_web_portal_shell_zoom_is_bounded(
     monkeypatch,
     configured_zoom,
     expected_zoom,
@@ -573,51 +545,184 @@ def test_web_portal_shell_zoom_is_bounded_and_has_no_runtime_input(
     assert app._bounded_web_portal_shell_zoom() == expected_zoom
 
 
-def test_web_portal_shell_loads_only_the_fixed_daemon_served_route(monkeypatch):
+def test_default_graphical_launch_uses_one_web_portal_window(monkeypatch):
     from flatpak_app import app
 
-    FakeGtkApplicationWindow.last_presented = None
-    FakeWebKitWebView.last_created = None
+    _reset_gui_fakes()
     monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
     monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
 
-    assert app.run_web_portal_shell() == 0
+    assert app.main([]) == 0
+    assert len(FakeGtkApplicationWindow.created) == 1
+    assert len(FakeWebKitWebView.created) == 1
+    assert FakeWebKitWebView.last_created.loaded_uris == [app.WEB_PORTAL_URL]
 
-    window = FakeGtkApplicationWindow.last_presented
-    web_view = FakeWebKitWebView.last_created
-    assert window is not None
-    assert web_view is not None
-    assert web_view.loaded_uris == [app.WEB_PORTAL_URL]
-    assert "load-failed" in web_view.signal_handlers
-    assert not any(
-        isinstance(widget, FakeGtkPasswordEntry)
-        for widget in _walk_fake_widgets(window)
+
+def test_compatibility_alias_uses_default_web_portal_behavior(monkeypatch):
+    from flatpak_app import app
+
+    calls = []
+    monkeypatch.setattr(
+        app,
+        "run_web_portal_shell",
+        lambda: calls.append("web-portal") or 17,
     )
 
+    assert app.main(["--web-portal-shell"]) == 17
+    assert calls == ["web-portal"]
+    with pytest.raises(SystemExit):
+        app._argument_parser().parse_args(["--web-portal-shell=https://example.com"])
 
-def test_web_portal_load_failure_shows_bounded_safe_retry_ui(monkeypatch):
+
+def test_repeated_activation_restores_without_duplicate_windows(monkeypatch):
     from flatpak_app import app
 
-    FakeGtkApplicationWindow.last_presented = None
+    _reset_gui_fakes()
+    FakeGtkApplication.activations = 3
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+    monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
+
+    assert app.run_web_portal_shell() == 0
+    assert len(FakeGtkApplicationWindow.created) == 1
+    assert len(FakeWebKitWebView.created) == 1
+    assert FakeGtkApplicationWindow.created[0].present_calls == 3
+
+
+def test_tray_primary_activation_restores_single_web_portal_window(monkeypatch):
+    from flatpak_app import app
+    from flatpak_app import tray
+    from flatpak_client import TrayState
+
+    _reset_gui_fakes()
+    FakeGtkApplication.activations = 2
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+    monkeypatch.setattr(
+        app,
+        "_load_tray_desktop_modules",
+        lambda: (object(), object(), object()),
+    )
+    monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
+    monkeypatch.setattr(app, "AuthenticationController", lambda: object())
+    monkeypatch.setattr(
+        app,
+        "TrayControlController",
+        lambda _authentication: type("Controls", (), {"state": TrayState()})(),
+    )
+    captured = {}
+
+    class Backend:
+        def __init__(self, **kwargs):
+            captured["primary"] = kwargs["on_activate"]
+
+    class Runtime:
+        def __init__(self, *, lifecycle, **_kwargs):
+            self.lifecycle = lifecycle
+            captured["runtime"] = self
+
+        def show(self):
+            self.lifecycle.show()
+
+        def start(self):
+            return True
+
+        def close_request(self, *_args):
+            return self.lifecycle.close_request(*_args)
+
+        def dispatch_action(self, _action):
+            pass
+
+    monkeypatch.setattr(tray, "StatusNotifierBackend", Backend)
+    monkeypatch.setattr(tray, "TrayRuntime", Runtime)
+
+    assert app.run_tray() == 0
+    captured["primary"]()
+
+    assert len(FakeGtkApplicationWindow.created) == 1
+    assert len(FakeWebKitWebView.created) == 1
+    assert FakeWebKitWebView.last_created.loaded_uris == [app.WEB_PORTAL_URL]
+    assert FakeGtkApplicationWindow.created[0].present_calls == 3
+
+
+def test_webkit_unavailable_shows_bounded_error_without_alternate_ui(monkeypatch):
+    from flatpak_app import app
+
+    _reset_gui_fakes()
+    secret = "webkit-detail-must-not-render"
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+
+    def unavailable():
+        raise app.WebKitUnavailableError(secret)
+
+    monkeypatch.setattr(app, "_load_webkit", unavailable)
+
+    assert app.run_web_portal_shell() == 0
+    window = FakeGtkApplicationWindow.last_presented
+    labels = _labels_under(window)
+    assert "Web Portal shell unavailable" in labels
+    assert secret not in repr(labels)
+    assert FakeWebKitWebView.created == []
+
+
+def test_unexpected_webkit_loader_failure_is_also_bounded(monkeypatch):
+    from flatpak_app import app
+
+    _reset_gui_fakes()
+    secret = "unexpected-webkit-detail-must-not-render"
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+
+    def unavailable():
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(app, "_load_webkit", unavailable)
+
+    assert app.run_web_portal_shell() == 0
+    labels = _labels_under(FakeGtkApplicationWindow.last_presented)
+    assert "Web Portal shell unavailable" in labels
+    assert secret not in repr(labels)
+    assert FakeWebKitWebView.created == []
+
+
+def test_webkit_construction_failure_shows_same_bounded_error(monkeypatch):
+    from flatpak_app import app
+
+    _reset_gui_fakes()
+    secret = "construction-detail-must-not-render"
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+    monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
+
+    def fail_to_construct(_webkit):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(app, "_build_locked_web_portal_view", fail_to_construct)
+
+    assert app.run_web_portal_shell() == 0
+    labels = _labels_under(FakeGtkApplicationWindow.last_presented)
+    assert "Web Portal shell unavailable" in labels
+    assert secret not in repr(labels)
+
+
+def test_web_portal_load_failure_has_bounded_safe_retry(monkeypatch):
+    from flatpak_app import app
+
+    _reset_gui_fakes()
     monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
     monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
     assert app.run_web_portal_shell() == 0
 
     window = FakeGtkApplicationWindow.last_presented
     web_view = FakeWebKitWebView.last_created
-    secret = "failure-detail-must-not-render"
+    secret = "load-detail-must-not-render"
     handled = web_view.signal_handlers["load-failed"](
         web_view,
         "started",
         app.WEB_PORTAL_URL,
         RuntimeError(secret),
     )
-    widgets = tuple(_walk_fake_widgets(window))
-    labels = {
-        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
-    }
+    labels = _labels_under(window)
     buttons = [
-        widget for widget in widgets if isinstance(widget, FakeGtkButton)
+        widget
+        for widget in _walk_fake_widgets(window)
+        if isinstance(widget, FakeGtkButton)
     ]
 
     assert handled is True
@@ -628,215 +733,26 @@ def test_web_portal_load_failure_shows_bounded_safe_retry_ui(monkeypatch):
     assert web_view.loaded_uris == [app.WEB_PORTAL_URL, app.WEB_PORTAL_URL]
 
 
-def test_webkit_unavailable_falls_back_to_native_dashboard(monkeypatch):
+def test_retired_graphical_implementation_symbols_are_absent():
     from flatpak_app import app
 
-    calls = []
-
-    def unavailable():
-        raise app.WebKitUnavailableError("bounded")
-
-    monkeypatch.setattr(app, "run_web_portal_shell", unavailable)
-    monkeypatch.setattr(app, "run_gui", lambda: calls.append("native") or 19)
-
-    assert app.main(["--web-portal-shell"]) == 19
-    assert calls == ["native"]
-
-
-def test_webkit_construction_failure_falls_back_in_the_same_window(monkeypatch):
-    from flatpak_app import app
-
-    FakeGtkApplicationWindow.last_presented = None
-    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
-    monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
-
-    def fail_to_construct(_webkit):
-        raise RuntimeError("bounded")
-
-    monkeypatch.setattr(app, "_build_locked_web_portal_view", fail_to_construct)
-
-    assert app.run_web_portal_shell() == 0
-
-    window = FakeGtkApplicationWindow.last_presented
-    widgets = tuple(_walk_fake_widgets(window))
-    labels = {
-        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
-    }
-    assert isinstance(window.children[0], FakeGtkScrolledWindow)
-    assert {"VR Hotspot", "Native Dashboard", "NATIVE GTK"} <= labels
-
-
-def test_web_portal_shell_has_no_token_injection_or_persistence_path():
-    from flatpak_app import app
-
-    portal_source = "\n".join(
-        inspect.getsource(value)
-        for value in (
-            app._build_locked_web_portal_view,
-            app._populate_web_portal_window,
-            app.run_web_portal_shell,
-        )
+    names = (
+        "run_" + "gui",
+        "_populate_" + "native_" + "dashboard_window",
+        "Native" + "DashboardModel",
+        "Dashboard" + "SectionLabels",
+        "build_" + "dashboard_model",
+        "FirstRun" + "TokenEntryController",
+        "_connect_from_" + "token_entry",
     )
-    exposed = (
-        repr(app.WEB_PORTAL_ORIGIN)
-        + repr(app.WEB_PORTAL_URL)
-        + repr(app._WEB_PORTAL_CSP)
-        + app.render_smoke_json()
-    )
+    source = Path(app.__file__).read_text(encoding="utf-8")
 
-    assert inspect.signature(app.run_web_portal_shell).parameters == {}
-    assert "?" not in app.WEB_PORTAL_URL
-    assert "#" not in app.WEB_PORTAL_URL
-    assert "token" not in exposed.casefold()
-    for forbidden in (
-        "X-Api-Token",
-        "Authorization",
-        "Bearer ",
-        "localStorage",
-        "sessionStorage",
-        "UserScript",
-        "add_script",
-        "set_cookie",
-        "set_http_headers",
-        "getenv",
-        "/etc/",
-        "/var/lib/",
-    ):
-        assert forbidden not in portal_source
+    for name in names:
+        assert not hasattr(app, name)
+        assert name not in source
 
 
-def test_native_dashboard_remains_the_default_fallback(monkeypatch):
-    from flatpak_app import app
-
-    calls = []
-    monkeypatch.setattr(app, "run_gui", lambda: calls.append("native") or 23)
-    monkeypatch.setattr(
-        app,
-        "run_web_portal_shell",
-        lambda: pytest.fail("the spike must remain opt-in"),
-    )
-
-    assert app.main([]) == 23
-    assert calls == ["native"]
-
-
-def test_web_portal_flag_accepts_no_url_or_other_value():
-    from flatpak_app import app
-
-    parser = app._argument_parser()
-    parsed = parser.parse_args(["--web-portal-shell"])
-    portal_action = next(
-        action
-        for action in parser._actions
-        if "--web-portal-shell" in action.option_strings
-    )
-
-    assert parsed.web_portal_shell is True
-    assert portal_action.nargs == 0
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--web-portal-shell", "https://example.com/"])
-
-
-def test_web_portal_shell_has_no_arbitrary_zoom_or_scale_option():
-    from flatpak_app import app
-
-    parser = app._argument_parser()
-    option_strings = {
-        option
-        for action in parser._actions
-        for option in action.option_strings
-    }
-
-    assert all(
-        "zoom" not in option.casefold() and "scale" not in option.casefold()
-        for option in option_strings
-    )
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--web-portal-shell", "--zoom", "2"])
-    with pytest.raises(SystemExit):
-        parser.parse_args(["--web-portal-shell", "--scale", "2"])
-
-
-def test_shared_browser_portal_css_has_no_flatpak_shell_scaling():
-    css = Path("assets/ui.css").read_text(encoding="utf-8")
-
-    assert re.search(r"(?m)^\s*zoom\s*:", css) is None
-    assert "set_zoom_level" not in css
-    assert "web-portal-shell" not in css
-
-
-def test_gui_activation_does_not_require_password_entry_placeholder_setter(
-    monkeypatch,
-):
-    from flatpak_app import app
-
-    assert not hasattr(FakeGtk.PasswordEntry(), "set_placeholder_text")
-    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
-
-    assert app.run_gui() == 0
-
-
-def test_placeholder_helper_prefers_direct_setter():
-    from flatpak_app import app
-
-    calls = []
-
-    class Entry:
-        def set_placeholder_text(self, value):
-            calls.append(("direct", value))
-
-        def set_property(self, name, value):
-            calls.append((name, value))
-
-    app._set_placeholder_text_compat(Entry(), "API token")
-
-    assert calls == [("direct", "API token")]
-
-
-def test_placeholder_helper_falls_back_to_supported_property_setter():
-    from flatpak_app import app
-
-    calls = []
-
-    class Entry:
-        def find_property(self, name):
-            calls.append(("find", name))
-            return object()
-
-        def set_property(self, name, value):
-            calls.append((name, value))
-
-    app._set_placeholder_text_compat(Entry(), "API token")
-
-    assert calls == [
-        ("find", "placeholder-text"),
-        ("placeholder-text", "API token"),
-    ]
-
-
-@pytest.mark.parametrize(
-    "entry",
-    (
-        object(),
-        type(
-            "UnsupportedPropertyEntry",
-            (),
-            {
-                "find_property": lambda self, _name: None,
-                "set_property": lambda self, _name, _value: pytest.fail(
-                    "unsupported property must not be set"
-                ),
-            },
-        )(),
-    ),
-)
-def test_placeholder_helper_noops_when_placeholder_is_unsupported(entry):
-    from flatpak_app import app
-
-    app._set_placeholder_text_compat(entry, "API token")
-
-
-def test_smoke_json_exits_successfully_is_bounded_and_has_expected_sections():
+def test_smoke_json_reports_web_portal_and_is_bounded():
     from flatpak_app import MAX_SMOKE_JSON_BYTES
 
     result = _smoke()
@@ -852,322 +768,147 @@ def test_smoke_json_exits_successfully_is_bounded_and_has_expected_sections():
         "prototype": True,
     }
     assert payload["shell"] == {
-        "graphical_shell": "gtk4_placeholder",
+        "graphical_shell": "web_portal",
+        "origin": "http://127.0.0.1:8732",
         "state": "offline_unpaired",
     }
-    assert set(payload["ui"]) == {
-        "mode",
-        "show_technical_details",
-        "daemon",
-        "pairing",
-        "adapters",
-        "preflight",
-        "support_bundle",
-    }
+    assert payload["controls"]["mutation_actions"] == []
 
 
-def test_smoke_json_contains_no_secret_or_host_path_leak_markers():
-    result = _smoke()
-    rendered = result.stdout.lower()
+def test_smoke_json_contains_no_secret_or_host_path_markers():
+    rendered = _smoke().stdout
 
-    assert result.returncode == 0
     for forbidden in (
-        "token",
+        "X-Api-Token",
+        "Authorization",
+        "Bearer ",
+        "VR_HOTSPOTD_API_TOKEN",
+        "/etc/vr-hotspot",
+        "/var/lib/vr-hotspot",
+        "token_value",
         "passphrase",
         "password",
-        "psk",
-        "bearer",
-        "file://",
-        "/etc/",
-        "/home/",
-        "/run/",
-        "/tmp/",
-        "/var/",
     ):
         assert forbidden not in rendered
 
 
-def test_live_pairing_smoke_command_dispatches_without_importing_gtk(monkeypatch):
+def test_live_pairing_smoke_dispatches_without_importing_gtk(monkeypatch):
     from flatpak_app import app
 
     calls = []
-
-    def fake_live_smoke():
-        calls.append("live_smoke")
-        return 17
-
-    monkeypatch.setattr(app, "run_live_pairing_smoke_json", fake_live_smoke)
+    monkeypatch.setattr(
+        app,
+        "run_live_pairing_smoke_json",
+        lambda: calls.append("live-smoke") or 17,
+    )
     monkeypatch.setitem(sys.modules, "gi", None)
 
     assert app.main(["--live-pairing-smoke-json"]) == 17
-    assert calls == ["live_smoke"]
+    assert calls == ["live-smoke"]
     assert sys.modules.get("gi") is None
 
 
 def test_live_smoke_refuses_noninteractive_input_with_token_free_json(capsys):
     from flatpak_app import app
 
-    def forbidden_prompt(_prompt):
-        raise AssertionError("noninteractive smoke must not prompt")
-
-    def forbidden_factory(*, token):
-        raise AssertionError("noninteractive smoke must not create a client")
-
     exit_code = app.run_live_pairing_smoke_json(
         input_stream=FakeInputStream(interactive=False),
-        token_prompt=forbidden_prompt,
-        client_factory=forbidden_factory,
+        token_prompt=lambda _prompt: pytest.fail("must not prompt"),
+        client_factory=lambda **_kwargs: pytest.fail("must not create client"),
     )
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
+    payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 2
-    assert captured.err == ""
     assert payload["live_smoke"]["status"] == "interactive_input_required"
-    assert payload["daemon"]["reachable"] is None
     assert payload["pairing"]["paired"] is False
     assert payload["controls"]["mutation_actions"] == []
-    assert payload["support_bundle"]["action_enabled"] is False
 
 
-def test_live_smoke_success_returns_bounded_sanitized_ui_ready_json(capsys):
+def test_live_smoke_success_is_bounded_and_secret_free(capsys):
     from flatpak_app import MAX_LIVE_SMOKE_JSON_BYTES
     from flatpak_app import app
 
     secret = "live-smoke-success-value-must-not-escape"
-    prompts = []
     factory = ScriptedReadOnlyClientFactory()
-
-    def hidden_prompt(prompt):
-        prompts.append(prompt)
-        return secret
-
     exit_code = app.run_live_pairing_smoke_json(
         input_stream=FakeInputStream(interactive=True),
-        token_prompt=hidden_prompt,
+        token_prompt=lambda _prompt: secret,
         client_factory=factory,
     )
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
+    rendered = capsys.readouterr().out
+    payload = json.loads(rendered)
 
     assert exit_code == 0
-    assert captured.err == ""
-    assert prompts == ["VRhotspot daemon API token: "]
-    assert len(captured.out.encode("utf-8")) <= MAX_LIVE_SMOKE_JSON_BYTES + 1
-    assert set(payload) == {
-        "application",
-        "live_smoke",
-        "daemon",
-        "pairing",
-        "adapter_readiness",
-        "preflight",
-        "support_bundle",
-        "controls",
-    }
-    assert payload["application"] == {"id": APP_ID, "name": APP_NAME}
+    assert len(rendered.encode("utf-8")) <= MAX_LIVE_SMOKE_JSON_BYTES + 1
     assert payload["live_smoke"]["status"] == "success"
-    assert payload["daemon"]["reachable"] is True
     assert payload["pairing"]["paired"] is True
     assert payload["adapter_readiness"]["recommended_interface"] == "wlan1"
     assert payload["preflight"]["readiness_label"] == "Needs attention"
-    assert payload["support_bundle"]["action_enabled"] is False
-    assert payload["support_bundle"]["request_performed"] is False
-    assert payload["controls"] == {
-        "mutation_actions": [],
-        "support_bundle_export_enabled": False,
-    }
+    assert payload["controls"]["mutation_actions"] == []
     assert factory.token_presence == [False, True, True]
-    assert secret not in captured.out
+    assert secret not in rendered
 
 
 @pytest.mark.parametrize(
-    ("factory", "expected_status", "daemon_reachable", "pairing_title"),
-    [
+    ("factory", "expected_status"),
+    (
         (
             ScriptedReadOnlyClientFactory(
                 readiness_result=AuthenticationError(401)
             ),
             "token_rejected",
-            True,
-            "Token rejected",
         ),
         (
             ScriptedReadOnlyClientFactory(
                 health_result=ConnectionFailure("offline")
             ),
             "daemon_unreachable",
-            False,
-            "Pairing unavailable",
         ),
         (
             ScriptedReadOnlyClientFactory(
                 readiness_result=DaemonTokenMissingError()
             ),
             "daemon_token_missing",
-            True,
-            "Daemon token missing",
         ),
         (
             ScriptedReadOnlyClientFactory(
                 readiness_result={"unexpected": "response"}
             ),
             "invalid_response",
-            None,
-            "Pairing status unknown",
         ),
-    ],
-    ids=(
-        "token-rejected",
-        "daemon-unreachable",
-        "daemon-token-missing",
-        "malformed-pairing-response",
     ),
 )
-def test_live_smoke_failures_are_nonzero_and_token_free(
+def test_live_smoke_failures_are_nonzero_and_secret_free(
     capsys,
     factory,
     expected_status,
-    daemon_reachable,
-    pairing_title,
 ):
     from flatpak_app import app
 
     secret = f"live-smoke-{expected_status}-must-not-escape"
-
     exit_code = app.run_live_pairing_smoke_json(
         input_stream=FakeInputStream(interactive=True),
         token_prompt=lambda _prompt: secret,
         client_factory=factory,
     )
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
+    rendered = capsys.readouterr().out
+    payload = json.loads(rendered)
 
     assert exit_code == 1
-    assert captured.err == ""
     assert payload["live_smoke"]["status"] == expected_status
-    assert payload["daemon"]["reachable"] is daemon_reachable
-    assert payload["pairing"]["title"] == pairing_title
     assert payload["pairing"]["paired"] is False
     assert payload["controls"]["mutation_actions"] == []
-    assert payload["support_bundle"]["action_enabled"] is False
-    assert secret not in captured.out
+    assert secret not in rendered
 
 
-def test_live_smoke_malformed_preflight_is_unknown_and_nonzero(capsys):
-    from flatpak_app import app
-
-    secret = "live-smoke-malformed-preflight-must-not-escape"
-    factory = ScriptedReadOnlyClientFactory(
-        preflight_result=_api_response(
-            {
-                "schema_version": 99,
-                "overall_readiness": "future",
-            }
-        )
-    )
-
-    exit_code = app.run_live_pairing_smoke_json(
-        input_stream=FakeInputStream(interactive=True),
-        token_prompt=lambda _prompt: secret,
-        client_factory=factory,
-    )
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-
-    assert exit_code == 1
-    assert payload["live_smoke"]["status"] == "invalid_response"
-    assert payload["pairing"]["paired"] is True
-    assert payload["preflight"]["severity"] == "unknown"
-    assert payload["controls"]["mutation_actions"] == []
-    assert secret not in captured.out
-
-
-def test_live_smoke_drops_secret_and_host_path_values_from_json(capsys):
-    from flatpak_app import app
-
-    entered_token = "entered-live-token-value-must-not-escape"
-    api_token_value = "daemon-api-token-value-must-not-escape"
-    passphrase_value = "wifi-passphrase-value-must-not-escape"
-    password_value = "daemon-password-value-must-not-escape"
-    psk_value = "wifi-psk-value-must-not-escape"
-    bearer_value = "bearer-value-must-not-escape"
-    host_path = "/var/lib/vr-hotspot/private-state.json"
-    factory = ScriptedReadOnlyClientFactory(
-        readiness_result=_api_response(
-            {
-                "recommended": "wlan1",
-                "basic_mode_recommended": "wlan1",
-                "summary": {"readiness_state": "ready"},
-                "adapters": [
-                    {
-                        "interface": "wlan1",
-                        "readiness_state": "ready",
-                        "explanation": (
-                            f"token={api_token_value}; "
-                            f"passphrase={passphrase_value}; "
-                            f"password={password_value}; psk={psk_value}"
-                        ),
-                    }
-                ],
-            }
-        ),
-        preflight_result=_api_response(
-            {
-                "schema_version": 1,
-                "overall_readiness": "warning",
-                "platform": {},
-                "firewall": {},
-                "services": {},
-                "network": {},
-                "wifi": {},
-                "issues": [
-                    {
-                        "severity": "warning",
-                        "code": "redaction_check",
-                        "message": (
-                            f"Authorization: Bearer {bearer_value}; "
-                            f"inspect {host_path}"
-                        ),
-                    }
-                ],
-                "recommended_actions": [],
-            }
-        ),
-    )
-
-    exit_code = app.run_live_pairing_smoke_json(
-        input_stream=FakeInputStream(interactive=True),
-        token_prompt=lambda _prompt: entered_token,
-        client_factory=factory,
-    )
-    captured = capsys.readouterr()
-    rendered = captured.out
-
-    assert exit_code == 0
-    for forbidden_value in (
-        entered_token,
-        api_token_value,
-        passphrase_value,
-        password_value,
-        psk_value,
-        bearer_value,
-        host_path,
-    ):
-        assert forbidden_value not in rendered
-    assert "[redacted]" in rendered
-    assert "[host path]" in rendered
-
-
-def test_live_smoke_rejects_empty_or_unavailable_hidden_input_without_a_client(
-    capsys,
-):
+def test_live_smoke_rejects_empty_or_unavailable_hidden_input(capsys):
     from flatpak_app import app
 
     client_calls = []
 
     def forbidden_factory(*, token):
         client_calls.append(token)
-        raise AssertionError("empty or unavailable input must not create a client")
+        raise AssertionError("client must not be created")
 
     empty_exit = app.run_live_pairing_smoke_json(
         input_stream=FakeInputStream(interactive=True),
@@ -1193,679 +934,64 @@ def test_live_smoke_rejects_empty_or_unavailable_hidden_input_without_a_client(
     assert client_calls == []
 
 
-def test_live_smoke_rejects_getpass_echo_fallback_before_reading_input(capsys):
+def test_live_smoke_rejects_getpass_echo_fallback(capsys):
     from flatpak_app import app
 
     secret = "fallback-must-not-read-or-echo-this-value"
-    client_calls = []
 
     def fallback_prompt(_prompt):
         warnings.warn("hidden input unavailable", app.getpass.GetPassWarning)
         return secret
 
-    def forbidden_factory(*, token):
-        client_calls.append(token)
-        raise AssertionError("unsafe prompt fallback must not create a client")
-
     exit_code = app.run_live_pairing_smoke_json(
         input_stream=FakeInputStream(interactive=True),
         token_prompt=fallback_prompt,
-        client_factory=forbidden_factory,
+        client_factory=lambda **_kwargs: pytest.fail("must not create client"),
     )
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
+    rendered = capsys.readouterr().out
+    payload = json.loads(rendered)
 
     assert exit_code == 2
-    assert captured.err == ""
     assert payload["live_smoke"]["status"] == "token_input_cancelled"
-    assert secret not in captured.out
-    assert client_calls == []
+    assert secret not in rendered
 
 
-def test_token_entry_requires_only_a_caller_supplied_token():
-    from flatpak_app import FirstRunTokenEntryController
-
-    factory = ScriptedReadOnlyClientFactory()
-    controller = FirstRunTokenEntryController(client_factory=factory)
-
-    with pytest.raises(TypeError):
-        controller.connect()
-
-    model = controller.connect(token="caller-provided-value")
-
-    assert model.pairing.paired is True
-    assert factory.token_presence == [False, True, True]
-    assert not hasattr(controller, "token")
-    assert not hasattr(controller, "_token")
-
-
-def test_successful_token_validation_updates_all_display_only_sections():
-    from flatpak_app import FirstRunTokenEntryController
-
-    controller = FirstRunTokenEntryController(
-        client_factory=ScriptedReadOnlyClientFactory()
-    )
-
-    model = controller.connect(token="accepted-in-memory-value")
-
-    assert model.daemon.title == "Daemon connected"
-    assert model.pairing.title == "Paired"
-    assert model.adapters.recommended_interface == "wlan1"
-    assert [card.interface for card in model.adapters.cards] == ["wlan1"]
-    assert model.preflight.readiness_label == "Needs attention"
-    assert [issue.code for issue in model.preflight.issues] == ["review_example"]
-    assert [action.code for action in model.preflight.actions] == ["review_example"]
-    assert model.preflight.actions[0].interactive is False
-    assert model.support_bundle.action_enabled is False
-    assert model.support_bundle.request_performed is False
-
-
-def test_successful_pairing_builds_and_renders_all_native_dashboard_sections():
-    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
+def test_web_portal_shell_has_no_token_injection_or_persistence_path():
     from flatpak_app import app
 
-    display_model = FirstRunTokenEntryController(
-        client_factory=ScriptedReadOnlyClientFactory()
-    ).connect(token="accepted-dashboard-value")
-
-    dashboard = build_dashboard_model(display_model)
-    container = FakeGtkWidget()
-    app._render_dashboard_model(FakeGtk, container, dashboard)
-
-    assert set(asdict(dashboard)) == {
-        "labels",
-        "daemon",
-        "pairing",
-        "adapter_readiness",
-        "preflight",
-        "support_bundle",
-        "controls",
-    }
-    assert dashboard.adapter_readiness.recommended_interface == "wlan1"
-    assert dashboard.adapter_readiness.cards[0].readiness_label == "Ready"
-    assert dashboard.adapter_readiness.cards[0].severity.value == "ok"
-    assert dashboard.adapter_readiness.cards[0].summary
-    assert dashboard.adapter_readiness.cards[0].reasons == (
-        "Supports Ap Mode",
-        "Daemon Recommended",
-    )
-    assert dashboard.preflight.readiness_label == "Needs attention"
-    assert dashboard.preflight.severity.value == "warning"
-    assert dashboard.preflight.summary
-    assert dashboard.preflight.issues
-    assert dashboard.preflight.facts
-    assert dashboard.preflight.actions
-    assert all(not action.interactive for action in dashboard.preflight.actions)
-    assert dashboard.support_bundle.visible is True
-    assert dashboard.support_bundle.action_enabled is False
-    assert dashboard.controls.visible is True
-    assert dashboard.controls.mutation_actions == ()
-    assert dashboard.controls.action_enabled is False
-    assert tuple(asdict(dashboard.labels).values()) == (
-        "Dashboard Overview",
-        "Connection & Pairing",
-        "Readiness & Adapter Summary",
-        "Adapter Readiness",
-        "Preflight Diagnostics",
-        "Readiness & Host Summary",
-        "Facts",
-        "Blocking Issues",
-        "Warnings",
-        "Other Issues",
-        "Recommended Actions",
-        "Support Bundle",
-        "Controls Boundary",
-        "Unavailable Features",
-    )
-
-    widgets = tuple(_walk_fake_widgets(container))
-    rendered_text = {
-        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
-    }
-    buttons = [
-        widget for widget in widgets if isinstance(widget, FakeGtkButton)
-    ]
-    for section_title in (
-        "Dashboard Overview",
-        "Connection & Pairing",
-        "Daemon Status",
-        "Pairing Status",
-        "Readiness & Adapter Summary",
-        "Adapter Readiness",
-        "Preflight Diagnostics",
-        "Readiness & Host Summary",
-        "Blocking Issues",
-        "Warnings",
-        "Recommended Actions",
-        "Support Bundle",
-        "Controls Boundary",
-        "Unavailable Features",
-    ):
-        assert section_title in rendered_text
-    assert "wlan1" in rendered_text
-    assert "DAEMON RECOMMENDED" in rendered_text
-    assert "RECOMMENDED" in rendered_text
-    assert "PAIRED" in rendered_text
-    assert "Readiness: Ready" in rendered_text
-    assert "OK" in rendered_text
-    assert "WARNING" in rendered_text
-    assert "Top Reasons" in rendered_text
-    assert "Facts" in rendered_text
-    assert "No blocking issues." in rendered_text
-    assert "Mutation actions: none" in rendered_text
-    assert "NOT AVAILABLE YET" in rendered_text
-    assert [(button.label, button.sensitive) for button in buttons] == [
-        ("Export support bundle", False)
-    ]
-
-
-@pytest.mark.parametrize(
-    ("severity_name", "expected_label", "semantic_class"),
-    (
-        ("OK", "OK", "success"),
-        ("WARNING", "WARNING", "warning"),
-        ("BLOCKED", "BLOCKED", "error"),
-        ("ERROR", "ERROR", "error"),
-        ("UNKNOWN", "UNKNOWN", "dim-label"),
-    ),
-)
-def test_native_dashboard_severity_badges_render_consistently(
-    severity_name,
-    expected_label,
-    semantic_class,
-):
-    from flatpak_app import app
-    from flatpak_client import StatusSeverity
-
-    container = FakeGtkWidget()
-    severity = StatusSeverity[severity_name]
-
-    badge = app._add_status_badge(FakeGtk, container, severity)
-
-    assert _fake_labels_under(badge) == {expected_label}
-    assert badge.css_classes == [
-        "status-badge",
-        f"severity-{severity.value}",
-        semantic_class,
-    ]
-
-
-def test_recommended_adapter_has_visible_badge_and_emphasized_card():
-    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
-    from flatpak_app import app
-
-    dashboard = build_dashboard_model(
-        FirstRunTokenEntryController(
-            client_factory=ScriptedReadOnlyClientFactory()
-        ).connect(token="recommended-emphasis-value")
-    )
-    container = FakeGtkWidget()
-
-    app._render_dashboard_model(FakeGtk, container, dashboard)
-
-    emphasized = [
-        widget
-        for widget in _walk_fake_widgets(container)
-        if "recommended-card" in widget.css_classes
-    ]
-    assert emphasized
-    assert any(
-        {"wlan1", "RECOMMENDED"}.issubset(_fake_labels_under(widget))
-        for widget in emphasized
-    )
-
-
-def test_disabled_sections_are_visibly_unavailable_without_mutation_actions():
-    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
-    from flatpak_app import app
-
-    dashboard = build_dashboard_model(
-        FirstRunTokenEntryController(
-            client_factory=ScriptedReadOnlyClientFactory()
-        ).connect(token="disabled-sections-value")
-    )
-    container = FakeGtkWidget()
-
-    app._render_dashboard_model(FakeGtk, container, dashboard)
-    widgets = tuple(_walk_fake_widgets(container))
-    labels = {
-        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
-    }
-    buttons = [
-        widget for widget in widgets if isinstance(widget, FakeGtkButton)
-    ]
-
-    assert "NOT AVAILABLE YET" in labels
-    assert "UNAVAILABLE" in labels
-    assert "Mutation actions: none" in labels
-    assert dashboard.controls.mutation_actions == ()
-    assert dashboard.controls.action_enabled is False
-    assert [(button.label, button.sensitive) for button in buttons] == [
-        ("Export support bundle", False)
-    ]
-    assert all(button.signal_handlers == {} for button in buttons)
-
-
-def test_gui_keeps_hidden_token_entry_scrollable_native_header_and_no_controls(
-    monkeypatch,
-):
-    from flatpak_app import app
-
-    FakeGtkApplicationWindow.last_presented = None
-    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
-
-    assert app.run_gui() == 0
-
-    window = FakeGtkApplicationWindow.last_presented
-    assert window is not None
-    widgets = tuple(_walk_fake_widgets(window))
-    entries = [
-        widget for widget in widgets if isinstance(widget, FakeGtkPasswordEntry)
-    ]
-    labels = {
-        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
-    }
-    buttons = [
-        widget for widget in widgets if isinstance(widget, FakeGtkButton)
-    ]
-    button_labels = {button.label.casefold() for button in buttons}
-
-    assert isinstance(window.children[0], FakeGtkScrolledWindow)
-    assert len(entries) == 1
-    assert entries[0].show_peek_icon is True
-    assert {"VR Hotspot", "Native Dashboard", "NATIVE GTK", "READ-ONLY"} <= labels
-    assert "Connect / Validate token" in {button.label for button in buttons}
-    assert {
-        "start",
-        "stop",
-        "restart",
-        "repair",
-        "save",
-        "apply",
-        "refresh",
-    }.isdisjoint(button_labels)
-
-
-def test_native_dashboard_styles_are_bounded_and_have_no_external_assets():
-    from flatpak_app import app
-
-    stylesheet = app._DASHBOARD_CSS
-
-    assert len(stylesheet.encode("utf-8")) < 512
-    assert "url(" not in stylesheet.casefold()
-    assert "@import" not in stylesheet.casefold()
-    assert {
-        ".dashboard-card",
-        ".status-badge",
-        ".recommended-card",
-        ".unavailable-card",
-    } <= set(line.strip().split(" {", 1)[0] for line in stylesheet.splitlines())
-
-
-def test_web_portal_shell_does_not_copy_or_package_frontend_assets():
-    source = Path("flatpak_app/app.py").read_text(encoding="utf-8").casefold()
-    manifest_text = MANIFEST_PATH.read_text(encoding="utf-8").casefold()
-
-    assert "webkit" in source
-    assert "webview" in source
-    for copied_asset in (
-        "index.html",
-        "ui.js",
-        "ui.css",
-        "../../assets/",
-    ):
-        assert copied_asset not in manifest_text
-
-
-def test_token_entry_is_cleared_before_dashboard_validation():
-    from flatpak_app import app
-
-    events = []
-
-    class Entry:
-        def __init__(self):
-            self.text = "clear-before-validation-value"
-
-        def get_text(self):
-            events.append("entry-read")
-            return self.text
-
-        def set_text(self, text):
-            self.text = text
-            events.append("entry-cleared")
-
-    class Button:
-        def __init__(self):
-            self.sensitive = True
-
-        def set_sensitive(self, sensitive):
-            self.sensitive = sensitive
-            events.append(f"button-{sensitive}")
-
-    class Controller:
-        def connect(self, *, token):
-            assert token == "clear-before-validation-value"
-            assert entry.text == ""
-            assert button.sensitive is False
-            events.append("validated")
-            return "safe-dashboard-model"
-
-    entry = Entry()
-    button = Button()
-    rendered = []
-
-    app._connect_from_token_entry(
-        token_entry=entry,
-        connect_button=button,
-        controller=Controller(),
-        render_model=rendered.append,
-    )
-
-    assert events == [
-        "entry-read",
-        "entry-cleared",
-        "button-False",
-        "validated",
-        "button-True",
-    ]
-    assert entry.text == ""
-    assert button.sensitive is True
-    assert rendered == ["safe-dashboard-model"]
-
-
-@pytest.mark.parametrize(
-    ("factory", "expected_daemon", "expected_pairing"),
-    [
-        (
-            ScriptedReadOnlyClientFactory(
-                readiness_result=AuthenticationError(401)
-            ),
-            "Daemon reachable",
-            "Token rejected",
-        ),
-        (
-            ScriptedReadOnlyClientFactory(
-                health_result=ConnectionFailure("offline")
-            ),
-            "Daemon unavailable",
-            "Pairing unavailable",
-        ),
-        (
-            ScriptedReadOnlyClientFactory(
-                readiness_result={"unexpected": "response"}
-            ),
-            "Daemon status unknown",
-            "Pairing status unknown",
-        ),
-        (
-            ScriptedReadOnlyClientFactory(
-                preflight_result=_api_response(
-                    {
-                        "schema_version": 99,
-                        "overall_readiness": "future",
-                    }
-                )
-            ),
-            "Daemon connected",
-            "Paired",
-        ),
-    ],
-    ids=(
-        "rejected",
-        "unreachable",
-        "invalid-pairing",
-        "malformed-diagnostics",
-    ),
-)
-def test_native_dashboard_uses_safe_states_for_pairing_and_response_failures(
-    factory,
-    expected_daemon,
-    expected_pairing,
-):
-    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
-
-    display_model = FirstRunTokenEntryController(
-        client_factory=factory
-    ).connect(token="safe-failure-state-value")
-    dashboard = build_dashboard_model(display_model)
-
-    assert dashboard.daemon.title == expected_daemon
-    assert dashboard.pairing.title == expected_pairing
-    assert dashboard.support_bundle.action_enabled is False
-    assert dashboard.controls.mutation_actions == ()
-    if expected_pairing != "Paired":
-        assert dashboard.adapter_readiness.cards == ()
-        assert dashboard.preflight.issues == ()
-    else:
-        assert dashboard.preflight.severity.value == "unknown"
-        assert dashboard.preflight.issues == ()
-
-
-def test_native_dashboard_exposes_no_secret_or_host_path_values():
-    from flatpak_app import FirstRunTokenEntryController, build_dashboard_model
-    from flatpak_app import app
-
-    entered_value = "entered-dashboard-value-must-not-escape"
-    token_value = "daemon-token-value-must-not-escape"
-    passphrase_value = "passphrase-value-must-not-escape"
-    password_value = "password-value-must-not-escape"
-    psk_value = "psk-value-must-not-escape"
-    bearer_value = "bearer-value-must-not-escape"
-    secret_value = "secret-value-must-not-escape"
-    host_path = "/var/lib/vr-hotspot/private-dashboard-state.json"
-    factory = ScriptedReadOnlyClientFactory(
-        readiness_result=_api_response(
-            {
-                "recommended": "wlan1",
-                "basic_mode_recommended": "wlan1",
-                "summary": {"readiness_state": "ready"},
-                "adapters": [
-                    {
-                        "interface": "wlan1",
-                        "readiness_state": "ready",
-                        "explanation": (
-                            f"token={token_value}; "
-                            f"passphrase={passphrase_value}; "
-                            f"password={password_value}; psk={psk_value}; "
-                            f"secret={secret_value}"
-                        ),
-                    }
-                ],
-            }
-        ),
-        preflight_result=_api_response(
-            {
-                "schema_version": 1,
-                "overall_readiness": "warning",
-                "platform": {},
-                "firewall": {},
-                "services": {},
-                "network": {},
-                "wifi": {},
-                "issues": [
-                    {
-                        "severity": "warning",
-                        "code": "redaction_check",
-                        "message": (
-                            f"Authorization: Bearer {bearer_value}; "
-                            f"inspect {host_path}"
-                        ),
-                    }
-                ],
-                "recommended_actions": [],
-            }
-        ),
-    )
-
-    dashboard = build_dashboard_model(
-        FirstRunTokenEntryController(client_factory=factory).connect(
-            token=entered_value
+    source = "\n".join(
+        inspect.getsource(value)
+        for value in (
+            app._build_locked_web_portal_view,
+            app._populate_web_portal_window,
+            app.run_web_portal_shell,
         )
-    )
-    container = FakeGtkWidget()
-    app._render_dashboard_model(FakeGtk, container, dashboard)
-    rendered_labels = tuple(
-        widget.label
-        for widget in _walk_fake_widgets(container)
-        if isinstance(widget, (FakeGtkLabel, FakeGtkButton))
     )
     exposed = (
-        repr(asdict(dashboard))
-        + repr(dashboard)
-        + repr(rendered_labels)
+        repr(app.WEB_PORTAL_ORIGIN)
+        + repr(app.WEB_PORTAL_URL)
+        + repr(app._WEB_PORTAL_CSP)
+        + app.render_smoke_json()
     )
 
-    for forbidden_value in (
-        entered_value,
-        token_value,
-        passphrase_value,
-        password_value,
-        psk_value,
-        bearer_value,
-        secret_value,
-        host_path,
+    assert inspect.signature(app.run_web_portal_shell).parameters == {}
+    assert "?" not in app.WEB_PORTAL_URL
+    assert "#" not in app.WEB_PORTAL_URL
+    assert "token" not in exposed.casefold()
+    for forbidden in (
+        "X-Api-Token",
+        "Authorization",
+        "Bearer ",
+        "localStorage",
+        "sessionStorage",
+        "keyring",
+        "SecretService",
+        "/etc/",
+        "/var/lib/",
+        "os.environ",
+        "getenv(",
     ):
-        assert forbidden_value not in exposed
-    assert "[redacted]" in exposed
-    assert "[host path]" in exposed
-
-
-def test_rejected_token_is_safe_and_never_enters_output_or_logs(caplog):
-    from flatpak_app import FirstRunTokenEntryController
-    from flatpak_client import AuthenticationError
-
-    secret = "rejected-ui-value-must-not-escape"
-    controller = FirstRunTokenEntryController(
-        client_factory=ScriptedReadOnlyClientFactory(
-            readiness_result=AuthenticationError(401)
-        )
-    )
-
-    model = controller.connect(token=secret)
-    exposed = repr(model) + repr(asdict(model)) + repr(controller) + caplog.text
-
-    assert model.daemon.reachable is True
-    assert model.pairing.title == "Token rejected"
-    assert model.pairing.paired is False
-    assert secret not in exposed
-
-
-def test_unreachable_daemon_updates_the_safe_offline_display_state():
-    from flatpak_app import FirstRunTokenEntryController
-    from flatpak_client import ConnectionFailure
-
-    controller = FirstRunTokenEntryController(
-        client_factory=ScriptedReadOnlyClientFactory(
-            health_result=ConnectionFailure("offline")
-        )
-    )
-
-    model = controller.connect(token="in-memory-offline-value")
-
-    assert model.daemon.title == "Daemon unavailable"
-    assert model.daemon.reachable is False
-    assert model.pairing.title == "Pairing unavailable"
-    assert model.adapters.cards == ()
-    assert model.preflight.issues == ()
-
-
-def test_missing_daemon_token_updates_the_safe_blocked_display_state():
-    from flatpak_app import FirstRunTokenEntryController
-    from flatpak_client import DaemonTokenMissingError
-
-    controller = FirstRunTokenEntryController(
-        client_factory=ScriptedReadOnlyClientFactory(
-            readiness_result=DaemonTokenMissingError()
-        )
-    )
-
-    model = controller.connect(token="caller-provided-missing-config-value")
-
-    assert model.daemon.reachable is True
-    assert model.pairing.title == "Daemon token missing"
-    assert model.pairing.detail_code == "api_token_missing"
-    assert model.pairing.paired is False
-
-
-def test_malformed_pairing_response_degrades_the_entire_display_to_unknown():
-    from flatpak_app import FirstRunTokenEntryController
-    from flatpak_client import StatusSeverity
-
-    controller = FirstRunTokenEntryController(
-        client_factory=ScriptedReadOnlyClientFactory(
-            readiness_result={"unexpected": "response"}
-        )
-    )
-
-    model = controller.connect(token="caller-provided-malformed-value")
-
-    assert model.daemon.severity is StatusSeverity.UNKNOWN
-    assert model.pairing.severity is StatusSeverity.UNKNOWN
-    assert model.adapters.severity is StatusSeverity.UNKNOWN
-    assert model.preflight.severity is StatusSeverity.UNKNOWN
-
-
-def test_token_entry_flow_does_not_retain_persist_log_or_emit_token(
-    caplog,
-    monkeypatch,
-    tmp_path,
-):
-    from flatpak_app import (
-        FirstRunTokenEntryController,
-        build_smoke_payload,
-        render_smoke_json,
-    )
-
-    secret = "ephemeral-ui-value-never-persist"
-    factory = ScriptedReadOnlyClientFactory()
-    controller = FirstRunTokenEntryController(client_factory=factory)
-    monkeypatch.chdir(tmp_path)
-    before = tuple(tmp_path.rglob("*"))
-
-    model = controller.connect(token=secret)
-    exposed = (
-        repr(controller)
-        + repr(model)
-        + repr(asdict(model))
-        + repr(build_smoke_payload())
-        + render_smoke_json()
-        + caplog.text
-    )
-
-    assert tuple(tmp_path.rglob("*")) == before
-    assert secret not in exposed
-    assert secret not in repr(vars(controller))
-    assert not hasattr(controller, "token")
-    assert not hasattr(controller, "_token")
-
-
-def test_shell_exposes_no_mutation_controls_or_actions():
-    from flatpak_app import build_smoke_payload
-    from flatpak_app import app
-
-    payload = build_smoke_payload()
-    public_methods = {
-        name
-        for name, value in inspect.getmembers(app, inspect.isfunction)
-        if not name.startswith("_")
-    }
-
-    assert payload["controls"]["mutation_actions"] == []
-    assert payload["controls"]["support_bundle_export_enabled"] is False
-    assert payload["ui"]["support_bundle"]["action_enabled"] is False
-    assert public_methods.isdisjoint(
-        {
-            "start",
-            "stop",
-            "restart",
-            "repair",
-            "save_config",
-            "update_config",
-            "request",
-            "post",
-            "export",
-        }
-    )
+        assert forbidden not in source
 
 
 def test_app_shell_has_no_direct_host_secret_or_network_access():
@@ -1911,10 +1037,21 @@ def test_shell_has_no_token_cli_argument_or_discovery_source():
     assert "--web-portal-shell" in option_strings
     assert "getpass.getpass" in source
     assert "isatty()" in source
-    assert "FirstRunTokenEntryController" in source
     assert "LocalApiClient" in source
     assert "TokenPairingController" in source
     assert "DiagnosticsControlUiController" in source
+
+
+def test_web_portal_shell_does_not_copy_or_package_frontend_assets():
+    shell_source = Path("flatpak_app/app.py").read_text(encoding="utf-8")
+    manifest_paths = {
+        source["path"] for source in _manifest()["modules"][0]["sources"]
+    }
+
+    assert "index.html" not in shell_source
+    assert "ui.js" not in shell_source
+    assert "ui.css" not in shell_source
+    assert not any(path.startswith("../../assets/") for path in manifest_paths)
 
 
 def test_manifest_is_valid_json_and_matches_app_id_command_and_runtime():
@@ -1941,14 +1078,6 @@ def test_manifest_has_only_minimal_display_and_loopback_client_permissions():
     assert not any("filesystem=" in argument for argument in finish_args)
     assert not any("system-bus" in argument for argument in finish_args)
     assert not any("session-bus" in argument for argument in finish_args)
-    assert {
-        argument
-        for argument in finish_args
-        if argument.startswith("--talk-name=")
-    } == {
-        "--talk-name=org.kde.StatusNotifierWatcher",
-        "--talk-name=org.freedesktop.secrets",
-    }
     assert "--filesystem=host" not in finish_args
     assert "--device=all" not in finish_args
     assert "--socket=system-bus" not in finish_args

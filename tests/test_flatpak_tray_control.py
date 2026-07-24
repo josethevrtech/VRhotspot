@@ -17,6 +17,9 @@ from flatpak_client import (
     ApiResponse,
     AuthenticationError,
     ConnectionFailure,
+    DaemonTokenMissingError,
+    FirstRunResult,
+    FirstRunState,
     TrayControlController,
     TrayState,
     TrayStatus,
@@ -142,19 +145,37 @@ def test_tray_menu_contains_every_required_action():
         "Show VR Hotspot",
         "Hide VR Hotspot",
         "Current status: Running",
+        "Refresh Status",
         "Start Hotspot",
         "Stop Hotspot",
         "Restart Service",
         "Repair Network",
-        "Refresh Status",
         "Share Internet Connection",
         "Privacy Mode",
         "Start Hotspot Automatically",
         "Authentication…",
         "Open Diagnostics",
-        "Open Web Portal Shell",
         "Quit VR Hotspot",
     )
+    assert all(item.action != "web_portal" for item in model.items)
+    groups = []
+    current = []
+    for item in model.items:
+        if item.separator:
+            groups.append(tuple(current))
+            current = []
+        else:
+            current.append(item.action)
+    groups.append(tuple(current))
+    assert groups == [
+        ("show", "hide"),
+        ("status", "refresh"),
+        ("start", "stop", "restart", "repair"),
+        ("share_internet", "privacy", "hotspot_autostart"),
+        ("authentication",),
+        ("diagnostics",),
+        ("quit",),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -163,6 +184,16 @@ def test_tray_menu_contains_every_required_action():
         (TrayStatus.RUNNING, "Running", "Active"),
         (TrayStatus.STOPPED, "Stopped", "Active"),
         (TrayStatus.TRANSITIONING, "Transitioning", "Active"),
+        (
+            TrayStatus.NEEDS_AUTHENTICATION,
+            "Needs Authentication",
+            "NeedsAttention",
+        ),
+        (
+            TrayStatus.DAEMON_UNAVAILABLE,
+            "Daemon Unavailable",
+            "NeedsAttention",
+        ),
         (TrayStatus.ERROR, "Error", "NeedsAttention"),
     ),
 )
@@ -294,17 +325,31 @@ def test_successful_mutation_refreshes_status_and_configuration():
 
 
 @pytest.mark.parametrize(
-    ("error", "detail_code", "message"),
+    ("error", "detail_code", "message", "expected_status"),
     (
         (
             AuthenticationError(401),
             "authentication_rejected",
             "Authentication was rejected.",
+            TrayStatus.NEEDS_AUTHENTICATION,
+        ),
+        (
+            DaemonTokenMissingError(),
+            "daemon_token_missing",
+            "The daemon has no configured API token.",
+            TrayStatus.NEEDS_AUTHENTICATION,
         ),
         (
             ConnectionFailure("secret transport detail"),
             "daemon_unavailable",
             "The local daemon is unavailable.",
+            TrayStatus.DAEMON_UNAVAILABLE,
+        ),
+        (
+            RuntimeError("unexpected detail"),
+            "operation_failed",
+            "The tray operation failed safely.",
+            TrayStatus.ERROR,
         ),
     ),
 )
@@ -312,6 +357,7 @@ def test_auth_rejected_and_daemon_unavailable_states_are_bounded(
     error,
     detail_code,
     message,
+    expected_status,
 ):
     secret = "must-not-escape-tray-errors"
     client = FakeControlClient(status_error=error)
@@ -320,7 +366,7 @@ def test_auth_rejected_and_daemon_unavailable_states_are_bounded(
     state = controller.refresh()
     exposed = repr(state) + state.message + state.detail_code
 
-    assert state.status is TrayStatus.ERROR
+    assert state.status is expected_status
     assert state.detail_code == detail_code
     assert state.message == message
     assert secret not in exposed
@@ -333,10 +379,47 @@ def test_missing_token_disables_mutations_with_fixed_state():
     state = controller.refresh()
     outcome = controller.perform("start")
 
+    assert state.status is TrayStatus.NEEDS_AUTHENTICATION
     assert state.detail_code == "token_missing"
     assert outcome.succeeded is False
     assert outcome.code == "token_missing"
     assert "Authentication" in outcome.message
+
+    menu = build_tray_menu_model(state, window_visible=True)
+    assert _menu_enabled(menu, "authentication") is True
+    assert all(
+        not _menu_enabled(menu, action)
+        for action in ("start", "stop", "restart", "repair")
+    )
+
+
+def test_authenticated_running_refresh_maps_to_running():
+    controller = _controller(
+        FakeControlClient(phase="running", running=True)
+    )
+
+    state = controller.refresh()
+
+    assert state.status is TrayStatus.RUNNING
+    assert state.status_label == "Running"
+    assert state.authenticated is True
+    assert state.daemon_available is True
+
+
+def test_unexpected_client_construction_failure_maps_to_error():
+    controller = TrayControlController(
+        TokenProvider(),
+        client_factory=lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("secret construction detail")
+        ),
+    )
+
+    state = controller.refresh()
+
+    assert state.status is TrayStatus.ERROR
+    assert state.status_label == "Error"
+    assert state.detail_code == "operation_failed"
+    assert "secret construction detail" not in repr(state)
 
 
 def test_share_internet_toggle_uses_only_canonical_enable_internet_method():
@@ -445,6 +528,192 @@ def _menu_enabled(model, action):
     return next(item.enabled for item in model.items if item.action == action)
 
 
+def test_saving_and_testing_authentication_refreshes_status_without_leakage():
+    secret = "authentication-refresh-secret"
+
+    class Entry:
+        def __init__(self):
+            self.text = secret
+
+        def get_text(self):
+            return self.text
+
+        def set_text(self, text):
+            self.text = text
+
+    class SaveSecurely:
+        def __init__(self):
+            self.active = True
+
+        def get_active(self):
+            return self.active
+
+        def set_active(self, active):
+            self.active = active
+
+    class Status:
+        def __init__(self):
+            self.text = ""
+
+        def set_text(self, text):
+            self.text = text
+
+    class Authentication:
+        def __init__(self):
+            self.supplied = []
+
+        def save_or_replace(self, token, *, save_securely):
+            self.supplied.append(("save", bool(token), save_securely))
+            return type(
+                "Result",
+                (),
+                {
+                    "message": "API token saved in memory.",
+                    "securely_saved": False,
+                },
+            )()
+
+        def test_authentication(self, *, explicit_token):
+            self.supplied.append(("test", bool(explicit_token)))
+            return FirstRunResult(FirstRunState.TOKEN_ACCEPTED)
+
+    authentication = Authentication()
+    runtime = TrayRuntime(
+        application=FakeApplication(),
+        lifecycle=WindowLifecycleController(
+            application=FakeApplication(),
+            window=FakeWindow(),
+        ),
+        controls=FakeControls(),
+        authentication=authentication,
+        backend=FakeBackend(),
+        Gtk=object(),
+        Gdk=object(),
+        Gio=object(),
+        GLib=object(),
+        open_diagnostics=lambda: None,
+    )
+    refreshes = []
+    runtime.refresh_async = lambda: refreshes.append("refresh")
+    entry = Entry()
+    save_securely = SaveSecurely()
+    status = Status()
+
+    runtime._auth_save(entry, save_securely, status)
+    assert entry.text == ""
+    assert refreshes == ["refresh"]
+    assert secret not in status.text
+
+    entry.text = secret
+    runtime._auth_test(entry, status)
+    assert entry.text == ""
+    assert refreshes == ["refresh", "refresh"]
+    assert status.text == "Authentication succeeded."
+    assert authentication.supplied == [
+        ("save", True, True),
+        ("test", True),
+    ]
+    assert secret not in repr(authentication.supplied)
+
+
+def test_clearing_authentication_refreshes_needs_authentication_menu():
+    noncredential = "clear-refresh-test-placeholder"
+
+    class Entry:
+        def __init__(self):
+            self.text = noncredential
+
+        def set_text(self, text):
+            self.text = text
+
+    class Status:
+        def __init__(self):
+            self.text = ""
+
+        def set_text(self, text):
+            self.text = text
+
+    class Authentication:
+        def __init__(self):
+            self.clear_calls = 0
+
+        def clear(self):
+            self.clear_calls += 1
+            return type(
+                "Result",
+                (),
+                {"message": "VR Hotspot test credential was cleared."},
+            )()
+
+    class RefreshingControls:
+        def __init__(self):
+            self.refresh_calls = 0
+            self.state = TrayState(
+                status=TrayStatus.RUNNING,
+                status_label="Running",
+                phase="running",
+                running=True,
+                daemon_available=True,
+                authenticated=True,
+            )
+
+        def refresh(self):
+            self.refresh_calls += 1
+            self.state = TrayState(
+                status=TrayStatus.NEEDS_AUTHENTICATION,
+                status_label="Needs Authentication",
+                detail_code="token_missing",
+                message="Authentication is required.",
+                daemon_available=True,
+                authenticated=False,
+            )
+
+    application = FakeApplication()
+    authentication = Authentication()
+    controls = RefreshingControls()
+    backend = FakeBackend()
+    runtime = TrayRuntime(
+        application=application,
+        lifecycle=WindowLifecycleController(
+            application=application,
+            window=FakeWindow(),
+        ),
+        controls=controls,
+        authentication=authentication,
+        backend=backend,
+        Gtk=object(),
+        Gdk=object(),
+        Gio=object(),
+        GLib=object(),
+        open_diagnostics=lambda: None,
+    )
+
+    def refresh_now():
+        controls.refresh()
+        runtime._update_menu()
+
+    runtime.refresh_async = refresh_now
+    runtime._update_menu()
+    assert _menu_enabled(backend.models[-1], "stop") is True
+
+    entry = Entry()
+    status = Status()
+    runtime._auth_clear(entry, status)
+
+    refreshed_menu = backend.models[-1]
+    assert authentication.clear_calls == 1
+    assert controls.refresh_calls == 1
+    assert entry.text == ""
+    assert "Current status: Needs Authentication" in refreshed_menu.action_labels()
+    assert _menu_enabled(refreshed_menu, "authentication") is True
+    assert all(
+        not _menu_enabled(refreshed_menu, action)
+        for action in ("start", "stop", "restart", "repair")
+    )
+    assert noncredential not in status.text
+    assert noncredential not in repr(refreshed_menu)
+
+
 def test_close_to_tray_immediately_refreshes_exported_show_hide_state():
     application = FakeApplication()
     lifecycle = WindowLifecycleController(
@@ -464,7 +733,6 @@ def test_close_to_tray_immediately_refreshes_exported_show_hide_state():
         Gio=object(),
         GLib=object(),
         open_diagnostics=lambda: None,
-        open_web_portal=lambda: None,
     )
 
     runtime.show()
@@ -513,7 +781,6 @@ def test_explicit_quit_exits_only_the_companion_without_hotspot_stop():
         Gio=object(),
         GLib=object(),
         open_diagnostics=lambda: None,
-        open_web_portal=lambda: None,
     )
 
     runtime.dispatch_action("quit")
@@ -600,7 +867,6 @@ def test_significant_notifications_are_fixed_bounded_and_secret_free(
         Gio=Gio,
         GLib=object(),
         open_diagnostics=lambda: None,
-        open_web_portal=lambda: None,
     )
     outcome = ActionOutcome(
         accepted=True,
@@ -686,7 +952,7 @@ def test_dbus_menu_get_property_preserves_false_boolean_values():
     assert value.value is False
 
 
-def test_tray_mode_falls_back_to_normal_native_app_when_desktop_modules_missing(
+def test_tray_mode_uses_web_portal_shell_when_desktop_modules_are_missing(
     monkeypatch,
 ):
     from flatpak_app import app
@@ -697,10 +963,14 @@ def test_tray_mode_falls_back_to_normal_native_app_when_desktop_modules_missing(
         "run_tray",
         lambda: (_ for _ in ()).throw(app.GuiUnavailableError("missing")),
     )
-    monkeypatch.setattr(app, "run_gui", lambda: calls.append("native") or 0)
+    monkeypatch.setattr(
+        app,
+        "run_web_portal_shell",
+        lambda: calls.append("web-portal") or 0,
+    )
 
     assert app.main(["--tray"]) == 0
-    assert calls == ["native"]
+    assert calls == ["web-portal"]
 
 
 def test_flatpak_tray_sources_launch_no_host_service_or_network_commands():

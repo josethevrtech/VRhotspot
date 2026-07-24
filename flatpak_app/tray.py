@@ -22,6 +22,8 @@ ICON_NAMES = {
     TrayStatus.STOPPED: APP_ID,
     TrayStatus.RUNNING: f"{APP_ID}-running",
     TrayStatus.TRANSITIONING: f"{APP_ID}-working",
+    TrayStatus.NEEDS_AUTHENTICATION: f"{APP_ID}-error",
+    TrayStatus.DAEMON_UNAVAILABLE: f"{APP_ID}-error",
     TrayStatus.ERROR: f"{APP_ID}-error",
 }
 
@@ -70,32 +72,32 @@ def build_tray_menu_model(
             f"Current status: {state.status_label}",
             enabled=False,
         ),
-        TrayMenuItem(5, "separator-2", "", separator=True),
         TrayMenuItem(
-            6,
+            5,
+            "refresh",
+            "Refresh Status",
+            enabled=state.busy_action is None,
+        ),
+        TrayMenuItem(6, "separator-2", "", separator=True),
+        TrayMenuItem(
+            7,
             "start",
             "Start Hotspot",
             enabled=ready and state.status is TrayStatus.STOPPED,
         ),
         TrayMenuItem(
-            7,
+            8,
             "stop",
             "Stop Hotspot",
             enabled=ready and state.status is TrayStatus.RUNNING,
         ),
         TrayMenuItem(
-            8,
+            9,
             "restart",
             "Restart Service",
             enabled=ready and state.status is TrayStatus.RUNNING,
         ),
-        TrayMenuItem(9, "repair", "Repair Network", enabled=ready),
-        TrayMenuItem(
-            10,
-            "refresh",
-            "Refresh Status",
-            enabled=state.busy_action is None,
-        ),
+        TrayMenuItem(10, "repair", "Repair Network", enabled=ready),
         TrayMenuItem(11, "separator-3", "", separator=True),
         TrayMenuItem(
             12,
@@ -119,16 +121,23 @@ def build_tray_menu_model(
         ),
         TrayMenuItem(15, "separator-4", "", separator=True),
         TrayMenuItem(16, "authentication", "Authentication…"),
-        TrayMenuItem(17, "diagnostics", "Open Diagnostics"),
-        TrayMenuItem(18, "web_portal", "Open Web Portal Shell"),
-        TrayMenuItem(19, "separator-5", "", separator=True),
+        TrayMenuItem(17, "separator-5", "", separator=True),
+        TrayMenuItem(18, "diagnostics", "Open Diagnostics"),
+        TrayMenuItem(19, "separator-6", "", separator=True),
         TrayMenuItem(20, "quit", "Quit VR Hotspot"),
     )
     return TrayMenuModel(
         items=items,
         icon_name=ICON_NAMES[state.status],
         notifier_status=(
-            "NeedsAttention" if state.status is TrayStatus.ERROR else "Active"
+            "NeedsAttention"
+            if state.status
+            in {
+                TrayStatus.NEEDS_AUTHENTICATION,
+                TrayStatus.DAEMON_UNAVAILABLE,
+                TrayStatus.ERROR,
+            }
+            else "Active"
         ),
         tooltip=f"{APP_NAME} — {state.status_label}",
     )
@@ -635,7 +644,6 @@ class TrayRuntime:
         Gio,
         GLib,
         open_diagnostics: Callable[[], None],
-        open_web_portal: Callable[[], None],
     ):
         self._application = application
         self._lifecycle = lifecycle
@@ -647,7 +655,6 @@ class TrayRuntime:
         self._Gio = Gio
         self._GLib = GLib
         self._open_diagnostics = open_diagnostics
-        self._open_web_portal = open_web_portal
         self._worker_lock = threading.Lock()
         self._notification_counter = 0
         self._last_detail_code = ""
@@ -1007,8 +1014,6 @@ class TrayRuntime:
             self._open_authentication()
         elif action == "diagnostics":
             self._open_diagnostics()
-        elif action == "web_portal":
-            self._open_web_portal()
         elif action == "quit":
             self._backend.stop()
             self._lifecycle.quit_companion()

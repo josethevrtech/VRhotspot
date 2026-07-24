@@ -56,18 +56,26 @@ runtime/SDK to already be available. It does not add Flathub or another Flatpak
 remote. Missing prerequisites or a failed build are reported clearly, temporary
 build files are removed, and the daemon install continues.
 
-The desktop launcher starts the companion in tray mode. It opens a native
-dashboard initially, stays available through a cyan-and-black system-tray icon,
-and hides the window to the tray when the window is closed. The tray provides
-live status, lifecycle controls, Share Internet Connection, Privacy Mode, and
-the existing Start Hotspot Automatically setting. Explicit Quit exits only the
-desktop companion and does not stop an already-running hotspot.
+The desktop launcher starts the companion in tray mode. Its only graphical UI
+is the daemon-served Web Portal in a locked WebKitGTK window. Primary tray
+activation and **Show VR Hotspot** open or restore that same window;
+**Hide VR Hotspot** and the window close action hide it to the tray without
+creating another window. If WebKit cannot be constructed, the companion shows
+a bounded GTK error surface and does not open another interface. The tray
+provides live status, lifecycle controls, Share Internet Connection, Privacy
+Mode, and the existing Start Hotspot Automatically setting. Explicit Quit exits
+only the desktop companion and does not stop an already-running hotspot.
 
 Use **Authentication…** to enter the existing daemon API token. Saving it is an
 explicit choice and uses the desktop Secret Service provider (including a
 compatible KDE Wallet setup); otherwise it remains in memory only. The
-installer and Flatpak never discover the token from daemon host files. The Web
-Portal shell remains a separate opt-in launch mode:
+installer and Flatpak never discover the token from `/etc/vr-hotspot`,
+`/var/lib/vr-hotspot`, daemon configuration, environment variables, or command
+arguments. Missing or rejected credentials are reported as
+**Needs Authentication**, separately from **Daemon Unavailable** and unexpected
+**Error** states. Start, Stop, Restart, and Repair remain disabled until an
+explicitly entered or saved token authenticates successfully. The historical
+flag remains a compatibility alias for the same default graphical behavior:
 
 ```bash
 flatpak run io.github.josethevrtech.VRhotspot --web-portal-shell
