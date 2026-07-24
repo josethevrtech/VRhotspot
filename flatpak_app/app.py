@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import asdict
 import getpass
 import json
 import sys
+import threading
 from typing import Any, Sequence
 from urllib.parse import urlsplit
 import warnings
 
 from flatpak_client import (
     AuthenticationController,
+    AuthenticationError,
+    ConnectionFailure,
     DiagnosticsControlUiController,
     DiagnosticsControlUiModel,
     FirstRunResult,
@@ -37,8 +41,8 @@ MAX_SMOKE_JSON_BYTES = 8_192
 MAX_LIVE_SMOKE_JSON_BYTES = 65_536
 WEB_PORTAL_AUTH_HANDLER = "vrHotspotCompanionAuth"
 WEB_PORTAL_AUTH_PROTOCOL_VERSION = 1
-MAX_WEB_PORTAL_AUTH_MESSAGE_BYTES = 8_192
-MAX_WEB_PORTAL_AUTH_TOKEN_CHARS = 4_096
+MAX_WEB_PORTAL_AUTH_MESSAGE_BYTES = 262_144
+MAX_WEB_PORTAL_AUTH_REPLY_BYTES = 1_500_000
 _WEB_PORTAL_SHELL_ZOOM_MIN = 1.0
 _WEB_PORTAL_SHELL_ZOOM_MAX = 2.0
 _WEB_PORTAL_CSP = (
@@ -69,17 +73,25 @@ class WebKitUnavailableError(RuntimeError):
 
 
 class WebPortalAuthBridge:
-    """Share companion authentication with only the locked local Portal."""
+    """Broker auth state and exact local API calls without disclosing the token."""
 
-    _CLEAR_PORTAL_SCRIPT = (
-        "if (typeof window.vrHotspotCompanionAuthCleared === 'function') {"
-        "window.vrHotspotCompanionAuthCleared();"
+    _AUTH_CHANGED_SCRIPT = (
+        "if (typeof window.vrHotspotCompanionAuthChanged === 'function') {"
+        "window.vrHotspotCompanionAuthChanged();"
         "}"
     )
 
-    def __init__(self, authentication: AuthenticationController):
+    def __init__(
+        self,
+        authentication: AuthenticationController,
+        *,
+        auth_prompt=None,
+        reply_runner=None,
+    ):
         self._authentication = authentication
         self._auth_changed = None
+        self._auth_prompt = auth_prompt if callable(auth_prompt) else None
+        self._reply_runner = reply_runner if callable(reply_runner) else None
         self._web_view = None
 
     def __repr__(self) -> str:
@@ -90,6 +102,9 @@ class WebPortalAuthBridge:
 
     def set_auth_changed_callback(self, callback) -> None:
         self._auth_changed = callback if callable(callback) else None
+
+    def set_auth_prompt_callback(self, callback) -> None:
+        self._auth_prompt = callback if callable(callback) else None
 
     def attach_web_view(self, web_view) -> None:
         self._web_view = web_view
@@ -145,30 +160,136 @@ class WebPortalAuthBridge:
         if not isinstance(message_type, str):
             return None
         expected_keys = {
-            "token_request": {"version", "type"},
-            "auth_accepted": {"version", "type", "token"},
+            "auth_status": {"version", "type"},
+            "auth_prompt": {"version", "type"},
             "auth_cleared": {"version", "type"},
+            "api_request": {
+                "version",
+                "type",
+                "path",
+                "method",
+                "body",
+                "response",
+            },
         }.get(message_type)
         if expected_keys is None or set(payload) != expected_keys:
             return None
-        if message_type == "auth_accepted":
-            token = payload.get("token")
+        if message_type == "api_request":
+            path = payload.get("path")
+            method = payload.get("method")
+            body = payload.get("body")
+            response_kind = payload.get("response")
             if (
-                not isinstance(token, str)
-                or not token
-                or len(token) > MAX_WEB_PORTAL_AUTH_TOKEN_CHARS
+                not isinstance(path, str)
+                or not path.startswith("/v1/")
+                or len(path) > 256
+                or method not in {"GET", "POST"}
+                or (body is not None and not isinstance(body, dict))
+                or response_kind not in {"text", "blob"}
             ):
                 return None
         return payload
 
+    @staticmethod
+    def _render_reply(payload: dict[str, Any]) -> str:
+        try:
+            rendered = json.dumps(
+                payload,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except (TypeError, ValueError):
+            rendered = '{"code":"invalid_response","ok":false,"status":502}'
+        if len(rendered.encode("utf-8")) > MAX_WEB_PORTAL_AUTH_REPLY_BYTES:
+            return '{"code":"response_too_large","ok":false,"status":502}'
+        return rendered
+
+    def _auth_status_reply(self) -> str:
+        try:
+            result = self._authentication.refresh_saved_auth()
+            authenticated = result.state is FirstRunState.TOKEN_ACCEPTED
+            code = result.state.value
+        except Exception:
+            authenticated = False
+            code = FirstRunState.INVALID_RESPONSE.value
+        return self._render_reply(
+            {
+                "authenticated": authenticated,
+                "code": code,
+            }
+        )
+
+    def _api_reply(self, payload: dict[str, Any]) -> str:
+        try:
+            response = self._authentication.request_local_api(
+                payload["path"],
+                method=payload["method"],
+                body=payload["body"],
+            )
+        except AuthenticationError:
+            return self._render_reply(
+                {"body": "", "code": "authentication_required", "ok": False, "status": 401}
+            )
+        except ConnectionFailure:
+            return self._render_reply(
+                {"body": "", "code": "daemon_unavailable", "ok": False, "status": 503}
+            )
+        except Exception:
+            return self._render_reply(
+                {"body": "", "code": "request_failed", "ok": False, "status": 502}
+            )
+
+        headers = {}
+        for key, value in response.headers.items():
+            normalized = str(key).casefold()
+            if normalized in {"content-disposition", "content-type"}:
+                headers[normalized] = str(value)[:512]
+        if payload["response"] == "blob":
+            body = base64.b64encode(response.body).decode("ascii")
+            body_encoding = "base64"
+        else:
+            body = response.body.decode("utf-8", "replace")
+            body_encoding = "text"
+        return self._render_reply(
+            {
+                "body": body,
+                "body_encoding": body_encoding,
+                "headers": headers,
+                "ok": 200 <= response.status < 300,
+                "status": response.status,
+            }
+        )
+
+    def _run_reply(self, operation, message_value, reply) -> None:
+        runner = self._reply_runner
+        if runner is None:
+            try:
+                response = operation()
+            except Exception:
+                response = '{"code":"request_failed","ok":false,"status":502}'
+            self._reply_string(message_value, reply, response)
+            return
+
+        def complete(response) -> bool:
+            if not isinstance(response, str):
+                response = '{"code":"request_failed","ok":false,"status":502}'
+            self._reply_string(message_value, reply, response)
+            return False
+
+        try:
+            runner(operation, complete)
+        except Exception:
+            complete('{"code":"request_failed","ok":false,"status":502}')
+
     def _emit_auth_changed(self) -> None:
         callback = self._auth_changed
-        if callback is None:
-            return
-        try:
-            callback()
-        except Exception:
-            pass
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                pass
+        self.notify_web_portal_auth_changed()
 
     def handle_message(self, web_view, message_value, reply) -> bool:
         """Handle one bounded message and always return only a fixed reply."""
@@ -185,20 +306,33 @@ class WebPortalAuthBridge:
             return False
 
         message_type = payload["type"]
-        if message_type == "token_request":
-            token = ""
+        if message_type == "auth_status":
+            self._run_reply(
+                self._auth_status_reply,
+                message_value,
+                reply,
+            )
+            return True
+
+        if message_type == "api_request":
+            self._run_reply(
+                lambda: self._api_reply(payload),
+                message_value,
+                reply,
+            )
+            return True
+
+        if message_type == "auth_prompt":
+            callback = self._auth_prompt
+            if callback is None:
+                self._reply_string(message_value, reply, "unavailable")
+                return False
             try:
-                candidate = self._authentication.token_for_operation()
-                if (
-                    isinstance(candidate, str)
-                    and 0 < len(candidate) <= MAX_WEB_PORTAL_AUTH_TOKEN_CHARS
-                ):
-                    token = candidate
+                callback()
             except Exception:
-                token = ""
-            self._reply_string(message_value, reply, token)
-            token = ""
-            candidate = None
+                self._reply_string(message_value, reply, "unavailable")
+                return False
+            self._reply_string(message_value, reply, "opened")
             return True
 
         if message_type == "auth_cleared":
@@ -211,33 +345,11 @@ class WebPortalAuthBridge:
             self._reply_string(message_value, reply, "cleared")
             return True
 
-        token = payload["token"]
-        accepted = False
-        try:
-            result = self._authentication.save_or_replace(
-                token,
-                save_securely=True,
-            )
-            accepted = (
-                result.code in {"saved_securely", "wallet_unavailable"}
-                and result.token_available is True
-            )
-        except Exception:
-            accepted = False
-        finally:
-            payload = None
-            token = ""
-        if accepted:
-            self._emit_auth_changed()
-        self._reply_string(
-            message_value,
-            reply,
-            "accepted" if accepted else "rejected",
-        )
-        return accepted
+        self._reply_string(message_value, reply, "rejected")
+        return False
 
-    def clear_web_portal_session(self) -> None:
-        """Clear only the attached fixed-origin page's in-memory auth state."""
+    def notify_web_portal_auth_changed(self) -> None:
+        """Prompt only the attached fixed-origin page to re-check native state."""
 
         web_view = self._web_view
         if web_view is None:
@@ -246,7 +358,7 @@ class WebPortalAuthBridge:
             return
         try:
             web_view.evaluate_javascript(
-                self._CLEAR_PORTAL_SCRIPT,
+                self._AUTH_CHANGED_SCRIPT,
                 -1,
                 None,
                 f"{WEB_PORTAL_ORIGIN}/companion-auth-bridge",
@@ -256,6 +368,11 @@ class WebPortalAuthBridge:
             )
         except Exception:
             pass
+
+    def clear_web_portal_session(self) -> None:
+        """Compatibility callback for tray-driven auth clear notification."""
+
+        self.notify_web_portal_auth_changed()
 
 
 def build_initial_model() -> DiagnosticsControlUiModel:
@@ -554,7 +671,7 @@ def is_approved_web_portal_uri(uri: object) -> bool:
 
 
 def is_approved_web_portal_bridge_uri(uri: object) -> bool:
-    """Restrict companion auth to the Portal document and its asset namespace."""
+    """Restrict the native broker to the exact Portal document."""
 
     if not is_approved_web_portal_uri(uri):
         return False
@@ -562,7 +679,7 @@ def is_approved_web_portal_bridge_uri(uri: object) -> bool:
         path = urlsplit(uri).path
     except (TypeError, ValueError):
         return False
-    return path in {"/ui", "/ui/"} or path.startswith("/assets/")
+    return path in {"/ui", "/ui/"}
 
 
 def _policy_decision_uri(decision, decision_type, WebKit) -> str:
@@ -827,14 +944,52 @@ def _set_window_icon(Gtk, window) -> None:
     window.set_icon_name(WINDOW_ICON_NAME)
 
 
+def _background_reply_runner(GLib):
+    """Keep bounded daemon and wallet calls off the GTK/WebKit main thread."""
+
+    def run(operation, complete) -> None:
+        def worker() -> None:
+            try:
+                response = operation()
+            except Exception:
+                response = '{"code":"request_failed","ok":false,"status":502}'
+            try:
+                GLib.idle_add(complete, response)
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=worker,
+            name="vrhotspot-native-auth-broker",
+            daemon=True,
+        ).start()
+
+    return run
+
+
 def run_web_portal_shell() -> int:
     """Run the only Flatpak graphical UI inside a locked WebKit view."""
 
     Gtk = _load_gtk()
+    try:
+        import gi
+
+        gi.require_version("Gdk", "4.0")
+        from gi.repository import Gdk, GLib
+    except (ImportError, ValueError):
+        Gdk = None
+        GLib = None
     application = Gtk.Application(application_id=APP_ID)
     window_holder: dict[str, Any] = {}
     authentication = AuthenticationController()
-    auth_bridge = WebPortalAuthBridge(authentication)
+    auth_bridge = WebPortalAuthBridge(
+        authentication,
+        reply_runner=_background_reply_runner(GLib) if GLib is not None else None,
+    )
+    try:
+        authentication.refresh_saved_auth()
+    except Exception:
+        pass
 
     def on_activate(app) -> None:
         existing = window_holder.get("window")
@@ -844,6 +999,17 @@ def run_web_portal_shell() -> int:
 
         window = Gtk.ApplicationWindow(application=app)
         _set_window_icon(Gtk, window)
+        from .tray import NativeAuthenticationDialog
+
+        authentication_dialog = NativeAuthenticationDialog(
+            application=app,
+            parent_window=window,
+            authentication=authentication,
+            Gtk=Gtk,
+            Gdk=Gdk,
+            on_auth_changed=auth_bridge.notify_web_portal_auth_changed,
+        )
+        auth_bridge.set_auth_prompt_callback(authentication_dialog.open)
         _populate_new_portal_window(
             Gtk,
             window,
@@ -856,6 +1022,7 @@ def run_web_portal_shell() -> int:
 
         window.connect("close-request", clear_window)
         window_holder["window"] = window
+        window_holder["authentication_dialog"] = authentication_dialog
         window.present()
 
     application.connect("activate", on_activate)
@@ -886,7 +1053,14 @@ def run_tray() -> int:
         window = Gtk.ApplicationWindow(application=app)
         _set_window_icon(Gtk, window)
         authentication = AuthenticationController()
-        auth_bridge = WebPortalAuthBridge(authentication)
+        try:
+            authentication.refresh_saved_auth()
+        except Exception:
+            pass
+        auth_bridge = WebPortalAuthBridge(
+            authentication,
+            reply_runner=_background_reply_runner(GLib),
+        )
         _populate_new_portal_window(
             Gtk,
             window,
@@ -925,9 +1099,12 @@ def run_tray() -> int:
             Gio=Gio,
             GLib=GLib,
             open_diagnostics=open_diagnostics,
-            on_auth_cleared=auth_bridge.clear_web_portal_session,
+            on_auth_changed=auth_bridge.notify_web_portal_auth_changed,
         )
         auth_bridge.set_auth_changed_callback(runtime.refresh_after_auth_change)
+        auth_bridge.set_auth_prompt_callback(
+            getattr(runtime, "open_authentication", None)
+        )
         runtime_holder["runtime"] = runtime
         window.connect("close-request", runtime.close_request)
         lifecycle.show()

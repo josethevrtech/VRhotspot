@@ -3,16 +3,12 @@ const PREFLIGHT_REPORT_PATH = '/v1/diagnostics/preflight';
 const STORE = (function () {
   try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); return localStorage; } catch { return sessionStorage; }
 })();
-const TOKEN_KEY = 'vr_hotspot_token';
-const LEGACY_TOKEN_KEY = 'vr_hotspot_api_token';
 const COMPANION_AUTH_ORIGIN = 'http://127.0.0.1:8732';
 const COMPANION_AUTH_HANDLER = 'vrHotspotCompanionAuth';
 const COMPANION_AUTH_PROTOCOL_VERSION = 1;
-const MAX_COMPANION_AUTH_MESSAGE_CHARS = 8192;
-const MAX_COMPANION_AUTH_TOKEN_CHARS = 4096;
-const DEBUG_TOKEN = false;
+const MAX_COMPANION_AUTH_MESSAGE_CHARS = 262144;
+const COMPANION_AUTH_REFRESH_INTERVAL_MS = 2000;
 const LS = {
-  token: TOKEN_KEY,
   privacy: 'vr_hotspot_privacy',
   showTelemetry: 'vr_hotspot_show_telemetry',
   auto: 'vr_hotspot_auto',
@@ -80,7 +76,8 @@ let activeTipTarget = null;
 let floatingTipWired = false;
 let isAuthenticated = false;
 let authFlowLocked = false;
-let companionSessionToken = '';
+let browserSessionToken = '';
+let companionAuthPollTimer = null;
 let uiBootstrapped = false;
 let refreshTimer = null;
 const BASIC_REFRESH_INTERVAL_MS = 2000;
@@ -875,15 +872,11 @@ function wireDirtyTracking() {
 
 function cid() { return 'ui-' + Date.now() + '-' + Math.random().toString(16).slice(2); }
 
-function getLocalStorageSafe() {
-  try { return localStorage; } catch { return null; }
-}
-
 function getCompanionAuthHandler() {
   try {
     if (!window.location || window.location.origin !== COMPANION_AUTH_ORIGIN) return null;
     const path = window.location.pathname || '';
-    if (path !== '/ui' && path !== '/ui/' && !path.startsWith('/assets/')) return null;
+    if (path !== '/ui' && path !== '/ui/') return null;
     const handlers = window.webkit && window.webkit.messageHandlers;
     const handler = handlers && handlers[COMPANION_AUTH_HANDLER];
     return (handler && typeof handler.postMessage === 'function') ? handler : null;
@@ -921,25 +914,31 @@ async function postCompanionAuthMessage(message) {
   }
 }
 
-async function requestCompanionAuthToken() {
+async function requestCompanionAuthStatus() {
   const result = await postCompanionAuthMessage({
     version: COMPANION_AUTH_PROTOCOL_VERSION,
-    type: 'token_request',
+    type: 'auth_status',
   });
-  if (!result.available) return null;
-  const token = result.reply.trim();
-  if (!token || token.length > MAX_COMPANION_AUTH_TOKEN_CHARS) return '';
-  return token;
+  if (!result.available) return { available: false, authenticated: false, code: 'unavailable' };
+  try {
+    const status = JSON.parse(result.reply);
+    return {
+      available: true,
+      authenticated: status && status.authenticated === true,
+      code: (status && typeof status.code === 'string') ? status.code : 'invalid_response',
+    };
+  } catch {
+    return { available: true, authenticated: false, code: 'invalid_response' };
+  }
 }
 
-async function notifyCompanionAuthAccepted(token) {
+async function requestCompanionAuthPrompt() {
   const result = await postCompanionAuthMessage({
     version: COMPANION_AUTH_PROTOCOL_VERSION,
-    type: 'auth_accepted',
-    token,
+    type: 'auth_prompt',
   });
   if (!result.available) return null;
-  return result.reply === 'accepted';
+  return result.reply === 'opened';
 }
 
 function notifyCompanionAuthCleared() {
@@ -949,62 +948,22 @@ function notifyCompanionAuthCleared() {
   });
 }
 
-function getStoredToken() {
-  const ls = getLocalStorageSafe();
-  if (ls) return (ls.getItem(TOKEN_KEY) || '').trim();
-  try { return (STORE.getItem(TOKEN_KEY) || '').trim(); } catch { return ''; }
-}
-
-function setStoredToken(token) {
-  const val = (token || '').trim();
-  const ls = getLocalStorageSafe();
-  try {
-    if (ls) {
-      if (val) ls.setItem(TOKEN_KEY, val);
-      else ls.removeItem(TOKEN_KEY);
-    }
-  } catch { /* ignore */ }
-  if (!ls) {
-    try {
-      if (val) STORE.setItem(TOKEN_KEY, val);
-      else STORE.removeItem(TOKEN_KEY);
-    } catch { /* ignore */ }
+function clearLegacyBrowserTokenStorage() {
+  const storages = [];
+  try { storages.push(globalThis.localStorage); } catch { /* ignore */ }
+  try { storages.push(globalThis.sessionStorage); } catch { /* ignore */ }
+  for (const storage of storages) {
+    try { storage.removeItem('vr_hotspot_token'); } catch { /* ignore */ }
+    try { storage.removeItem('vr_hotspot_api_token'); } catch { /* ignore */ }
   }
-}
-
-function migrateLegacyToken() {
-  const current = getStoredToken();
-  if (current) return current;
-  const ls = getLocalStorageSafe();
-  let legacy = '';
-  if (ls) legacy = (ls.getItem(LEGACY_TOKEN_KEY) || '').trim();
-  if (!legacy) {
-    try { legacy = (STORE.getItem(LEGACY_TOKEN_KEY) || '').trim(); } catch { legacy = ''; }
-  }
-  if (legacy) {
-    setStoredToken(legacy);
-    try { if (ls) ls.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
-    try { STORE.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
-    return legacy;
-  }
-  return '';
-}
-
-function debugTokenLog(injected) {
-  if (!DEBUG_TOKEN) return;
-  const len = getStoredToken().length;
-  try {
-    console.log('[token]', { TOKEN_KEY, tokenLength: len, injected });
-  } catch { /* ignore */ }
 }
 
 function getToken() {
-  return companionSessionToken || getStoredToken();
+  return browserSessionToken;
 }
 
 function setToken(v) {
-  const val = (v || '').trim();
-  setStoredToken(val);
+  browserSessionToken = (v || '').trim();
 }
 
 function setAuthState(state) {
@@ -1017,20 +976,10 @@ function isUnauthorizedStatus(status) {
 }
 
 function clearStoredTokenEverywhere(opts = {}) {
-  companionSessionToken = '';
-  setStoredToken('');
-  const ls = getLocalStorageSafe();
-  try { if (ls) ls.removeItem(TOKEN_KEY); } catch { /* ignore */ }
-  try { if (ls) ls.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
-  try { STORE.removeItem(TOKEN_KEY); } catch { /* ignore */ }
-  try { STORE.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
+  browserSessionToken = '';
+  clearLegacyBrowserTokenStorage();
   if (opts.notifyCompanion !== false) notifyCompanionAuthCleared();
 }
-
-window.vrHotspotCompanionAuthCleared = function () {
-  clearStoredTokenEverywhere({ notifyCompanion: false });
-  renderLoginSplash();
-};
 
 function clearLoggedOutRouteState() {
   if (!window.location.hash) return;
@@ -1049,8 +998,10 @@ function setLoginError(text = '') {
 
 function renderLoginSplash(errorText = '', opts = {}) {
   const keepInput = !!opts.keepInput;
+  const companion = companionAuthBridgeAvailable();
   const input = document.getElementById('loginToken');
   const submit = document.getElementById('btnLoginSubmit');
+  const help = document.getElementById('loginHelp');
   const splash = document.getElementById('login-splash');
   if (splash) splash.setAttribute('aria-hidden', 'false');
   setAuthState('unauthenticated');
@@ -1059,11 +1010,20 @@ function renderLoginSplash(errorText = '', opts = {}) {
   stopActivePolling();
   setMsg('');
   setLoginError(errorText);
-  if (submit) submit.disabled = false;
+  if (help) {
+    help.textContent = companion
+      ? 'Use native authentication for this Flatpak desktop app. Saved local authentication is shared with the tray; remote browsers sign in separately.'
+      : 'Authenticate this browser session with the daemon API token.';
+  }
+  if (submit) {
+    submit.disabled = false;
+    submit.textContent = companion ? 'Authenticate this device' : 'Continue';
+  }
   if (input) {
-    input.disabled = false;
+    input.hidden = companion;
+    input.disabled = companion;
     if (!keepInput) input.value = '';
-    input.focus();
+    if (!companion) input.focus();
   }
 }
 
@@ -1082,6 +1042,45 @@ function logoutToSplash(errorText = 'Invalid token') {
   clearStoredTokenEverywhere();
   renderLoginSplash(errorText);
 }
+
+function enterAuthenticatedApp() {
+  showAuthenticatedApp();
+  if (!uiBootstrapped) {
+    bootstrapAuthenticatedUi();
+    return;
+  }
+  try {
+    refresh();
+    applyAutoRefresh();
+  } catch { /* ignore */ }
+}
+
+async function syncCompanionAuthState() {
+  if (!companionAuthBridgeAvailable()) return false;
+  const status = await requestCompanionAuthStatus();
+  if (status.authenticated) {
+    if (!isAuthenticated) enterAuthenticatedApp();
+    return true;
+  }
+  if (isAuthenticated || document.body.getAttribute('data-auth-state') === 'pending') {
+    renderLoginSplash(
+      status.code === 'token_rejected' ? 'Saved authentication was rejected.' : '',
+    );
+  }
+  return false;
+}
+
+function startCompanionAuthRefresh() {
+  if (companionAuthPollTimer !== null) return;
+  companionAuthPollTimer = setInterval(
+    () => { void syncCompanionAuthState(); },
+    COMPANION_AUTH_REFRESH_INTERVAL_MS,
+  );
+}
+
+window.vrHotspotCompanionAuthChanged = function () {
+  void syncCompanionAuthState();
+};
 
 async function validateTokenCandidate(token) {
   const val = (token || '').trim();
@@ -1104,6 +1103,17 @@ async function submitLoginSplashToken() {
   const input = document.getElementById('loginToken');
   const submit = document.getElementById('btnLoginSubmit');
   if (!input || !submit) return;
+  if (companionAuthBridgeAvailable()) {
+    submit.disabled = true;
+    const opened = await requestCompanionAuthPrompt();
+    setLoginError(
+      opened === true
+        ? 'Complete authentication in the native VR Hotspot dialog.'
+        : 'Native authentication is unavailable.',
+    );
+    submit.disabled = false;
+    return;
+  }
   const token = (input.value || '').trim();
   if (!token) {
     setLoginError('Token required');
@@ -1116,25 +1126,9 @@ async function submitLoginSplashToken() {
 
   const result = await validateTokenCandidate(token);
   if (result.ok) {
-    const companionAccepted = await notifyCompanionAuthAccepted(token);
-    if (companionAccepted === true) {
-      companionSessionToken = token;
-      input.value = '';
-      showAuthenticatedApp();
-      bootstrapAuthenticatedUi();
-      return;
-    }
-    if (companionAccepted === false) {
-      clearStoredTokenEverywhere({ notifyCompanion: false });
-      input.value = '';
-      setLoginError('Invalid token');
-      input.disabled = false;
-      submit.disabled = false;
-      input.focus();
-      return;
-    }
     setToken(token);
-    window.location.reload();
+    input.value = '';
+    enterAuthenticatedApp();
     return;
   }
 
@@ -1942,11 +1936,62 @@ function updateCharts(t) {
   rateChartRef.update('none');
 }
 
+async function companionApiRequest(path, opts = {}, responseKind = 'text') {
+  const method = String(opts.method || 'GET').toUpperCase();
+  let body = null;
+  if (opts.body !== undefined && opts.body !== null && opts.body !== '') {
+    try {
+      body = (typeof opts.body === 'string') ? JSON.parse(opts.body) : opts.body;
+    } catch {
+      return { ok: false, status: 400, body: '', headers: {}, body_encoding: 'text' };
+    }
+  }
+  const result = await postCompanionAuthMessage({
+    version: COMPANION_AUTH_PROTOCOL_VERSION,
+    type: 'api_request',
+    path,
+    method,
+    body,
+    response: responseKind,
+  });
+  if (!result.available) {
+    return { ok: false, status: 503, body: '', headers: {}, body_encoding: 'text' };
+  }
+  try {
+    const response = JSON.parse(result.reply);
+    return {
+      ok: response && response.ok === true,
+      status: Number.isInteger(response && response.status) ? response.status : 502,
+      body: (response && typeof response.body === 'string') ? response.body : '',
+      body_encoding: (response && response.body_encoding === 'base64') ? 'base64' : 'text',
+      headers: (response && response.headers && typeof response.headers === 'object')
+        ? response.headers
+        : {},
+    };
+  } catch {
+    return { ok: false, status: 502, body: '', headers: {}, body_encoding: 'text' };
+  }
+}
+
 async function api(path, opts = {}) {
   const tokenOverride = (typeof opts.tokenOverride === 'string') ? opts.tokenOverride.trim() : '';
   const skipAuthHandling = !!opts.skipAuthHandling;
   if (!tokenOverride && !skipAuthHandling && !isAuthenticated) {
     return { ok: false, status: 401, json: null, raw: '' };
+  }
+  if (companionAuthBridgeAvailable()) {
+    const response = await companionApiRequest(path, opts, 'text');
+    let json = null;
+    try { json = JSON.parse(response.body); } catch { /* keep null */ }
+    if (!skipAuthHandling && isUnauthorizedStatus(response.status)) {
+      logoutToSplash('Invalid saved local authentication');
+    }
+    return {
+      ok: response.ok,
+      status: response.status,
+      json,
+      raw: response.body,
+    };
   }
   const fetchOpts = Object.assign({}, opts);
   delete fetchOpts.tokenOverride;
@@ -1966,10 +2011,8 @@ async function api(path, opts = {}) {
   }, {});
   if (!headerKeys['x-correlation-id']) baseHeaders['X-Correlation-Id'] = cid();
   const tok = tokenOverride || getToken();
-  const injected = !!(tok && !headerKeys['x-api-token']);
-  if (injected) baseHeaders['X-Api-Token'] = tok;
+  if (tok && !headerKeys['x-api-token']) baseHeaders['X-Api-Token'] = tok;
   if (fetchOpts.body && !headerKeys['content-type']) baseHeaders['Content-Type'] = 'application/json';
-  debugTokenLog(injected);
 
   const res = await fetch(BASE + path, Object.assign({}, fetchOpts, { headers: baseHeaders }));
   const text = await res.text();
@@ -1997,9 +2040,7 @@ function getAuthenticatedHeaders(opts = {}) {
   if (!headerKeys['x-correlation-id']) baseHeaders['X-Correlation-Id'] = cid();
   const tokenOverride = (typeof opts.tokenOverride === 'string') ? opts.tokenOverride.trim() : '';
   const tok = tokenOverride || getToken();
-  const injected = !!(tok && !headerKeys['x-api-token']);
-  if (injected) baseHeaders['X-Api-Token'] = tok;
-  debugTokenLog(injected);
+  if (tok && !headerKeys['x-api-token']) baseHeaders['X-Api-Token'] = tok;
   return baseHeaders;
 }
 
@@ -2008,6 +2049,34 @@ async function apiBlob(path, opts = {}) {
   const skipAuthHandling = !!opts.skipAuthHandling;
   if (!tokenOverride && !skipAuthHandling && !isAuthenticated) {
     return { ok: false, status: 401, blob: null, headers: new Headers() };
+  }
+  if (companionAuthBridgeAvailable()) {
+    const response = await companionApiRequest(path, opts, 'blob');
+    if (!skipAuthHandling && isUnauthorizedStatus(response.status)) {
+      logoutToSplash('Your local authentication expired. Sign in again.');
+    }
+    let blob = null;
+    if (response.ok && response.body_encoding === 'base64') {
+      try {
+        const binary = atob(response.body);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        blob = new Blob(
+          [bytes],
+          { type: response.headers['content-type'] || 'application/octet-stream' },
+        );
+      } catch {
+        blob = null;
+      }
+    }
+    return {
+      ok: response.ok && blob !== null,
+      status: response.status,
+      blob,
+      headers: new Headers(response.headers),
+    };
   }
   const fetchOpts = Object.assign({}, opts);
   delete fetchOpts.tokenOverride;
@@ -3856,19 +3925,20 @@ function bootstrapAuthenticatedUi() {
 async function init() {
   wireFloatingTips();
   wireLoginSplash();
+  clearLegacyBrowserTokenStorage();
   window.addEventListener('hashchange', () => {
     if (!isAuthenticated) clearLoggedOutRouteState();
   });
 
-  const companionBridge = companionAuthBridgeAvailable();
-  let tok = '';
-  if (companionBridge) {
-    clearStoredTokenEverywhere({ notifyCompanion: false });
-    tok = (await requestCompanionAuthToken()) || '';
-    companionSessionToken = tok;
-  } else {
-    tok = migrateLegacyToken() || getStoredToken();
+  if (companionAuthBridgeAvailable()) {
+    setAuthState('pending');
+    startCompanionAuthRefresh();
+    const authenticated = await syncCompanionAuthState();
+    if (!authenticated) renderLoginSplash();
+    return;
   }
+
+  const tok = getToken();
   if (!tok) {
     renderLoginSplash();
     return;
@@ -3888,10 +3958,8 @@ async function init() {
     return;
   }
 
-  if (companionBridge) companionSessionToken = tok;
-  else setToken(tok);
-  showAuthenticatedApp();
-  bootstrapAuthenticatedUi();
+  setToken(tok);
+  enterAuthenticatedApp();
 }
 
 function wireQr() {

@@ -71,15 +71,29 @@ autostart. Launching VR Hotspot at desktop login remains deferred and is not
 shown as a tray item. Explicit Quit exits only the desktop companion and does
 not stop an already-running hotspot.
 
-The Web Portal shell and tray are one companion and share authentication state.
-An API token accepted after explicit entry in the Portal is adopted immediately
-by the tray. When Secret Service is available, the accepted token is saved in
-the app-specific wallet; otherwise it remains in memory for the current
-companion process only. A valid saved wallet token authenticates the tray at
-launch and is supplied to the Portal only through a bounded, fixed-origin,
-in-memory WebKit bridge—not through a URL, file, or command argument.
+The Flatpak Web Portal window and tray share saved local authentication through
+one native authentication controller and the app-specific Secret Service wallet.
+Both modes load and validate that wallet entry against the bounded loopback API
+at startup. Saving or replacing authentication in either mode is therefore
+detected by the other; clearing it returns both to needs-authentication state on
+their next prompt refresh. A rejected stale wallet entry is forgotten safely
+instead of being retried indefinitely.
 
-**Authentication…** remains available for explicit token entry, replacement,
+The locked page receives only token-free authentication readiness and
+allowlisted daemon responses through the fixed-origin native broker. The wallet
+token is never returned to JavaScript or placed in page HTML, browser storage,
+URLs, labels, tooltips, notifications, logs, exception representations, or
+smoke JSON. Selecting **Authenticate this device** in the Flatpak page opens the
+native dialog; **Save for this desktop** controls Secret Service persistence.
+If saving is not selected or the wallet is unavailable, the accepted token
+remains local to that Flatpak process and is not shared through new IPC.
+
+A normal local or remote browser is not connected to the Flatpak wallet or
+native broker. Each browser page load requires explicit login, and the
+browser-entered token is kept only in that page's memory—not Local Storage,
+Session Storage, or IndexedDB.
+
+**Authentication…** remains available for native token entry, replacement,
 testing, and clearing. The companion never uses sudo to obtain a token and
 never discovers one from `/etc/vr-hotspot/env`, `/var/lib/vr-hotspot`, daemon
 configuration, environment variables, or command arguments. Missing or

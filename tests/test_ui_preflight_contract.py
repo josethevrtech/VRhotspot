@@ -784,6 +784,7 @@ async function scenarioCompanionAuth() {
     const environment = createEnvironment();
     environment.context.__bridgeMessages = [];
     environment.context.__bootstraps = 0;
+    environment.context.__nativeAuthenticated = false;
     environment.run(`
       window.location.origin = 'http://127.0.0.1:8732';
       window.location.pathname = '/ui';
@@ -793,7 +794,27 @@ async function scenarioCompanionAuth() {
             postMessage: async (raw) => {
               const message = JSON.parse(raw);
               __bridgeMessages.push(message);
-              return message.type === 'auth_accepted' ? 'accepted' : '';
+              if (message.type === 'auth_status') {
+                return JSON.stringify({
+                  authenticated: __nativeAuthenticated,
+                  code: __nativeAuthenticated ? 'token_accepted' : 'daemon_reachable_unpaired',
+                });
+              }
+              if (message.type === 'auth_prompt') return 'opened';
+              if (message.type === 'auth_cleared') {
+                __nativeAuthenticated = false;
+                return 'cleared';
+              }
+              if (message.type === 'api_request') {
+                return JSON.stringify({
+                  ok: true,
+                  status: 200,
+                  body: JSON.stringify({ result_code: 'ok', data: { phase: 'stopped' } }),
+                  body_encoding: 'text',
+                  headers: { 'content-type': 'application/json' },
+                });
+              }
+              return 'rejected';
             },
           },
         },
@@ -801,27 +822,38 @@ async function scenarioCompanionAuth() {
       bootstrapAuthenticatedUi = () => { __bootstraps += 1; };
     `);
     environment.document.getElementById('loginToken').value = secret;
-    environment.state.responses.push(responseBody({ result_code: 'ok', data: { phase: 'stopped' } }));
 
     await environment.run('submitLoginSplashToken()');
 
-    assert.strictEqual(environment.run('isAuthenticated'), true);
-    assert.strictEqual(environment.run('getToken()'), secret);
+    assert.strictEqual(environment.run('isAuthenticated'), false);
+    assert.strictEqual(environment.run('getToken()'), '');
     assert.strictEqual(environment.localStorage.getItem('vr_hotspot_token'), null);
-    assert.strictEqual(environment.context.__bootstraps, 1);
     assert.deepStrictEqual(
       Array.from(environment.context.__bridgeMessages, (message) => message.type),
-      ['auth_accepted'],
+      ['auth_prompt'],
     );
-    assert.strictEqual(environment.context.__bridgeMessages[0].version, 1);
+    assert(!JSON.stringify(environment.context.__bridgeMessages).includes(secret));
+
+    environment.context.__nativeAuthenticated = true;
+    await environment.run('syncCompanionAuthState()');
+    assert.strictEqual(environment.run('isAuthenticated'), true);
+    assert.strictEqual(environment.context.__bootstraps, 1);
+    assert.strictEqual(environment.run('getToken()'), '');
+    const apiResult = await environment.run(`api('/v1/status')`);
+    assert.strictEqual(apiResult.ok, true);
+    assert.strictEqual(apiResult.json.data.phase, 'stopped');
+    const apiMessage = environment.context.__bridgeMessages.find((message) => message.type === 'api_request');
+    assert.strictEqual(apiMessage.path, '/v1/status');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(apiMessage, 'token'), false);
+    assert(!JSON.stringify(apiMessage).includes(secret));
 
     environment.run(`logoutToSplash('Invalid token');`);
     await settle();
     assert.strictEqual(environment.run('isAuthenticated'), false);
     assert.strictEqual(environment.run('getToken()'), '');
-    assert.deepStrictEqual(
-      Array.from(environment.context.__bridgeMessages, (message) => message.type),
-      ['auth_accepted', 'auth_cleared'],
+    assert.strictEqual(
+      environment.context.__bridgeMessages.at(-1).type,
+      'auth_cleared',
     );
   }
 
@@ -838,8 +870,8 @@ async function scenarioCompanionAuth() {
             postMessage: async (raw) => {
               const message = JSON.parse(raw);
               __bridgeMessages.push(message);
-              return message.type === 'token_request'
-                ? ${JSON.stringify(secret)}
+              return message.type === 'auth_status'
+                ? JSON.stringify({ authenticated: true, code: 'token_accepted' })
                 : 'rejected';
             },
           },
@@ -847,18 +879,19 @@ async function scenarioCompanionAuth() {
       };
       bootstrapAuthenticatedUi = () => { __bootstraps += 1; };
     `);
-    environment.state.responses.push(responseBody({ result_code: 'ok', data: { phase: 'running' } }));
 
     await environment.run('init()');
 
     assert.strictEqual(environment.run('isAuthenticated'), true);
-    assert.strictEqual(environment.run('getToken()'), secret);
+    assert.strictEqual(environment.run('getToken()'), '');
     assert.strictEqual(environment.localStorage.getItem('vr_hotspot_token'), null);
+    assert.strictEqual(environment.context.sessionStorage.getItem('vr_hotspot_token'), null);
     assert.strictEqual(environment.context.__bootstraps, 1);
     assert.deepStrictEqual(
       Array.from(environment.context.__bridgeMessages, (message) => message.type),
-      ['token_request'],
+      ['auth_status'],
     );
+    assert(!JSON.stringify(environment.context.__bridgeMessages).includes(secret));
   }
 }
 

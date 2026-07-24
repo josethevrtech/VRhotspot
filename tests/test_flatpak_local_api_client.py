@@ -14,6 +14,7 @@ from flatpak_client import (
     InvalidJsonError,
     InvalidResponseError,
     LocalApiClient,
+    LocalApiClientError,
     RedirectRejectedError,
 )
 
@@ -281,6 +282,7 @@ def test_client_exposes_only_reviewed_routes_and_no_generic_public_request_metho
         "adapter_readiness",
         "config",
         "health",
+        "portal_request",
         "preflight_report",
         "repair_network",
         "restart_service",
@@ -306,6 +308,83 @@ def test_client_exposes_only_reviewed_routes_and_no_generic_public_request_metho
             "update_config",
         }
     )
+
+
+def test_portal_request_is_exact_route_bounded_and_keeps_token_native():
+    secret = "native-broker-only-token"
+    transport = FakeTransport(
+        HttpResponse(
+            status=200,
+            headers={"Content-Type": "application/json"},
+            body=_envelope({"saved": True}, result_code="config_saved"),
+        )
+    )
+    client = LocalApiClient(token=secret, transport=transport)
+
+    response = client.portal_request(
+        "/v1/config",
+        method="POST",
+        body={"config": {"enable_internet": True}},
+    )
+
+    request = transport.requests[0]
+    assert response.status == 200
+    assert request.url == "http://127.0.0.1:8732/v1/config"
+    assert request.method == "POST"
+    assert json.loads(request.body) == {"config": {"enable_internet": True}}
+    assert request.headers["X-Api-Token"] == secret
+    assert secret not in repr(request)
+    assert secret not in repr(response)
+
+
+@pytest.mark.parametrize(
+    ("path", "method", "body"),
+    (
+        ("https://example.com/v1/status", "GET", None),
+        ("/v1/unknown", "GET", None),
+        ("/v1/status", "POST", {}),
+        ("/v1/status", "GET", {}),
+        ("/v1/config", "DELETE", None),
+    ),
+)
+def test_portal_request_rejects_unreviewed_routes_and_shapes(path, method, body):
+    client = LocalApiClient(
+        token="native-broker-token",
+        transport=FakeTransport([]),
+    )
+
+    with pytest.raises(LocalApiClientError):
+        client.portal_request(path, method=method, body=body)
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        HttpResponse(
+            status=200,
+            body=b'{"value":"native-reflection-guard-token"}',
+        ),
+        HttpResponse(
+            status=200,
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="native-reflection-guard-token.zip"'
+                )
+            },
+        ),
+    ),
+)
+def test_portal_request_discards_any_daemon_token_reflection(response):
+    secret = "native-reflection-guard-token"
+    client = LocalApiClient(
+        token=secret,
+        transport=FakeTransport(response),
+    )
+
+    with pytest.raises(InvalidResponseError) as exc_info:
+        client.portal_request("/v1/status", method="GET")
+
+    assert secret not in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
