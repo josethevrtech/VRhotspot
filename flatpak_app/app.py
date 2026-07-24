@@ -34,6 +34,10 @@ WEBKIT_GI_VERSION = "6.0"
 WEB_PORTAL_SHELL_ZOOM = 1.75
 MAX_SMOKE_JSON_BYTES = 8_192
 MAX_LIVE_SMOKE_JSON_BYTES = 65_536
+WEB_PORTAL_AUTH_HANDLER = "vrHotspotCompanionAuth"
+WEB_PORTAL_AUTH_PROTOCOL_VERSION = 1
+MAX_WEB_PORTAL_AUTH_MESSAGE_BYTES = 8_192
+MAX_WEB_PORTAL_AUTH_TOKEN_CHARS = 4_096
 _WEB_PORTAL_SHELL_ZOOM_MIN = 1.0
 _WEB_PORTAL_SHELL_ZOOM_MAX = 2.0
 _WEB_PORTAL_CSP = (
@@ -61,6 +65,196 @@ class GuiUnavailableError(RuntimeError):
 
 class WebKitUnavailableError(RuntimeError):
     """The pinned WebKitGTK GI API is unavailable for the portal shell."""
+
+
+class WebPortalAuthBridge:
+    """Share companion authentication with only the locked local Portal."""
+
+    _CLEAR_PORTAL_SCRIPT = (
+        "if (typeof window.vrHotspotCompanionAuthCleared === 'function') {"
+        "window.vrHotspotCompanionAuthCleared();"
+        "}"
+    )
+
+    def __init__(self, authentication: AuthenticationController):
+        self._authentication = authentication
+        self._auth_changed = None
+        self._web_view = None
+
+    def __repr__(self) -> str:
+        return (
+            "WebPortalAuthBridge("
+            f"view_attached={self._web_view is not None!r})"
+        )
+
+    def set_auth_changed_callback(self, callback) -> None:
+        self._auth_changed = callback if callable(callback) else None
+
+    def attach_web_view(self, web_view) -> None:
+        self._web_view = web_view
+
+    @staticmethod
+    def _reply_string(message_value, reply, response: str) -> None:
+        try:
+            context = message_value.get_context()
+            value = type(message_value).new_string(context, response)
+            reply.return_value(value)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _page_uri(web_view) -> str:
+        try:
+            uri = web_view.get_uri()
+        except Exception:
+            return ""
+        return uri if isinstance(uri, str) else ""
+
+    @staticmethod
+    def _raw_message(message_value) -> str | None:
+        try:
+            if message_value.is_string() is not True:
+                return None
+            raw = message_value.to_string()
+        except Exception:
+            return None
+        if not isinstance(raw, str):
+            return None
+        try:
+            size = len(raw.encode("utf-8"))
+        except UnicodeError:
+            return None
+        if size > MAX_WEB_PORTAL_AUTH_MESSAGE_BYTES:
+            return None
+        return raw
+
+    @staticmethod
+    def _parsed_message(raw: str) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if type(payload.get("version")) is not int:
+            return None
+        if payload.get("version") != WEB_PORTAL_AUTH_PROTOCOL_VERSION:
+            return None
+        message_type = payload.get("type")
+        if not isinstance(message_type, str):
+            return None
+        expected_keys = {
+            "token_request": {"version", "type"},
+            "auth_accepted": {"version", "type", "token"},
+            "auth_cleared": {"version", "type"},
+        }.get(message_type)
+        if expected_keys is None or set(payload) != expected_keys:
+            return None
+        if message_type == "auth_accepted":
+            token = payload.get("token")
+            if (
+                not isinstance(token, str)
+                or not token
+                or len(token) > MAX_WEB_PORTAL_AUTH_TOKEN_CHARS
+            ):
+                return None
+        return payload
+
+    def _emit_auth_changed(self) -> None:
+        callback = self._auth_changed
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            pass
+
+    def handle_message(self, web_view, message_value, reply) -> bool:
+        """Handle one bounded message and always return only a fixed reply."""
+
+        if not is_approved_web_portal_bridge_uri(self._page_uri(web_view)):
+            self._reply_string(message_value, reply, "rejected")
+            return False
+
+        raw = self._raw_message(message_value)
+        payload = self._parsed_message(raw) if raw is not None else None
+        raw = None
+        if payload is None:
+            self._reply_string(message_value, reply, "rejected")
+            return False
+
+        message_type = payload["type"]
+        if message_type == "token_request":
+            token = ""
+            try:
+                candidate = self._authentication.token_for_operation()
+                if (
+                    isinstance(candidate, str)
+                    and 0 < len(candidate) <= MAX_WEB_PORTAL_AUTH_TOKEN_CHARS
+                ):
+                    token = candidate
+            except Exception:
+                token = ""
+            self._reply_string(message_value, reply, token)
+            token = ""
+            candidate = None
+            return True
+
+        if message_type == "auth_cleared":
+            try:
+                self._authentication.clear()
+            except Exception:
+                self._reply_string(message_value, reply, "rejected")
+                return False
+            self._emit_auth_changed()
+            self._reply_string(message_value, reply, "cleared")
+            return True
+
+        token = payload["token"]
+        accepted = False
+        try:
+            result = self._authentication.save_or_replace(
+                token,
+                save_securely=True,
+            )
+            accepted = (
+                result.code in {"saved_securely", "wallet_unavailable"}
+                and result.token_available is True
+            )
+        except Exception:
+            accepted = False
+        finally:
+            payload = None
+            token = ""
+        if accepted:
+            self._emit_auth_changed()
+        self._reply_string(
+            message_value,
+            reply,
+            "accepted" if accepted else "rejected",
+        )
+        return accepted
+
+    def clear_web_portal_session(self) -> None:
+        """Clear only the attached fixed-origin page's in-memory auth state."""
+
+        web_view = self._web_view
+        if web_view is None:
+            return
+        if not is_approved_web_portal_bridge_uri(self._page_uri(web_view)):
+            return
+        try:
+            web_view.evaluate_javascript(
+                self._CLEAR_PORTAL_SCRIPT,
+                -1,
+                None,
+                f"{WEB_PORTAL_ORIGIN}/companion-auth-bridge",
+                None,
+                None,
+                None,
+            )
+        except Exception:
+            pass
 
 
 def build_initial_model() -> DiagnosticsControlUiModel:
@@ -358,6 +552,18 @@ def is_approved_web_portal_uri(uri: object) -> bool:
     )
 
 
+def is_approved_web_portal_bridge_uri(uri: object) -> bool:
+    """Restrict companion auth to the Portal document and its asset namespace."""
+
+    if not is_approved_web_portal_uri(uri):
+        return False
+    try:
+        path = urlsplit(uri).path
+    except (TypeError, ValueError):
+        return False
+    return path in {"/ui", "/ui/"} or path.startswith("/assets/")
+
+
 def _policy_decision_uri(decision, decision_type, WebKit) -> str:
     try:
         if decision_type in (
@@ -399,8 +605,36 @@ def _bounded_web_portal_shell_zoom() -> float:
     )
 
 
-def _build_locked_web_portal_view(WebKit):
-    """Create an ephemeral WebView without credential or script injection."""
+def _attach_web_portal_auth_bridge(web_view, auth_bridge) -> None:
+    """Register one bounded request/reply channel on the locked WebView."""
+
+    try:
+        manager = web_view.get_user_content_manager()
+        manager.connect(
+            f"script-message-with-reply-received::{WEB_PORTAL_AUTH_HANDLER}",
+            lambda _manager, value, reply: auth_bridge.handle_message(
+                web_view,
+                value,
+                reply,
+            ),
+        )
+        registered = manager.register_script_message_handler_with_reply(
+            WEB_PORTAL_AUTH_HANDLER,
+            None,
+        )
+    except Exception:
+        raise WebKitUnavailableError(
+            "WebKitGTK did not provide the required local auth bridge."
+        ) from None
+    if registered is not True:
+        raise WebKitUnavailableError(
+            "WebKitGTK did not provide the required local auth bridge."
+        )
+    auth_bridge.attach_web_view(web_view)
+
+
+def _build_locked_web_portal_view(WebKit, *, auth_bridge=None):
+    """Create an ephemeral fixed-origin WebView with an optional auth bridge."""
 
     network_session = WebKit.NetworkSession.new_ephemeral()
     if network_session.is_ephemeral() is not True:
@@ -448,6 +682,8 @@ def _build_locked_web_portal_view(WebKit):
         return True
 
     web_view.connect("permission-request", deny_permission)
+    if auth_bridge is not None:
+        _attach_web_portal_auth_bridge(web_view, auth_bridge)
     return web_view
 
 
@@ -495,7 +731,13 @@ def _populate_web_portal_error(Gtk, window) -> None:
     window.set_child(error_box)
 
 
-def _populate_web_portal_window(Gtk, WebKit, window) -> bool:
+def _populate_web_portal_window(
+    Gtk,
+    WebKit,
+    window,
+    *,
+    auth_bridge=None,
+) -> bool:
     """Populate the locked portal shell or a bounded error surface."""
 
     window.set_title(APP_NAME)
@@ -505,7 +747,10 @@ def _populate_web_portal_window(Gtk, WebKit, window) -> bool:
         _populate_web_portal_error(Gtk, window)
         return False
     try:
-        web_view = _build_locked_web_portal_view(WebKit)
+        web_view = _build_locked_web_portal_view(
+            WebKit,
+            auth_bridge=auth_bridge,
+        )
     except Exception:
         _populate_web_portal_error(Gtk, window)
         return False
@@ -559,14 +804,19 @@ def _populate_web_portal_window(Gtk, WebKit, window) -> bool:
     return True
 
 
-def _populate_new_portal_window(Gtk, window) -> bool:
+def _populate_new_portal_window(Gtk, window, *, auth_bridge=None) -> bool:
     """Load WebKit lazily and always leave the window with bounded content."""
 
     try:
         WebKit = _load_webkit()
     except Exception:
         WebKit = None
-    return _populate_web_portal_window(Gtk, WebKit, window)
+    return _populate_web_portal_window(
+        Gtk,
+        WebKit,
+        window,
+        auth_bridge=auth_bridge,
+    )
 
 
 def run_web_portal_shell() -> int:
@@ -575,6 +825,8 @@ def run_web_portal_shell() -> int:
     Gtk = _load_gtk()
     application = Gtk.Application(application_id=APP_ID)
     window_holder: dict[str, Any] = {}
+    authentication = AuthenticationController()
+    auth_bridge = WebPortalAuthBridge(authentication)
 
     def on_activate(app) -> None:
         existing = window_holder.get("window")
@@ -583,7 +835,11 @@ def run_web_portal_shell() -> int:
             return
 
         window = Gtk.ApplicationWindow(application=app)
-        _populate_new_portal_window(Gtk, window)
+        _populate_new_portal_window(
+            Gtk,
+            window,
+            auth_bridge=auth_bridge,
+        )
 
         def clear_window(*_args):
             window_holder.pop("window", None)
@@ -619,8 +875,13 @@ def run_tray() -> int:
             return
 
         window = Gtk.ApplicationWindow(application=app)
-        _populate_new_portal_window(Gtk, window)
         authentication = AuthenticationController()
+        auth_bridge = WebPortalAuthBridge(authentication)
+        _populate_new_portal_window(
+            Gtk,
+            window,
+            auth_bridge=auth_bridge,
+        )
         controls = TrayControlController(authentication)
         lifecycle = WindowLifecycleController(
             application=app,
@@ -654,7 +915,9 @@ def run_tray() -> int:
             Gio=Gio,
             GLib=GLib,
             open_diagnostics=open_diagnostics,
+            on_auth_cleared=auth_bridge.clear_web_portal_session,
         )
+        auth_bridge.set_auth_changed_callback(runtime.refresh_after_auth_change)
         runtime_holder["runtime"] = runtime
         window.connect("close-request", runtime.close_request)
         lifecycle.show()

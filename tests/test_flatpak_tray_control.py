@@ -183,18 +183,22 @@ def test_tray_menu_contains_every_required_action():
     (
         (TrayStatus.RUNNING, "Running", "Active"),
         (TrayStatus.STOPPED, "Stopped", "Active"),
-        (TrayStatus.TRANSITIONING, "Transitioning", "Active"),
+        (
+            TrayStatus.TRANSITIONING,
+            "Transitioning",
+            "NeedsAttention",
+        ),
         (
             TrayStatus.NEEDS_AUTHENTICATION,
             "Needs Authentication",
-            "NeedsAttention",
+            "Active",
         ),
         (
             TrayStatus.DAEMON_UNAVAILABLE,
             "Daemon Unavailable",
-            "NeedsAttention",
+            "Active",
         ),
-        (TrayStatus.ERROR, "Error", "NeedsAttention"),
+        (TrayStatus.ERROR, "Error", "Active"),
     ),
 )
 def test_tray_status_labels_and_icon_variants_reflect_daemon_state(
@@ -210,6 +214,31 @@ def test_tray_status_labels_and_icon_variants_reflect_daemon_state(
     assert f"Current status: {label}" in model.action_labels()
     assert model.icon_name == ICON_NAMES[status]
     assert model.notifier_status == notifier_status
+
+
+def test_needs_authentication_is_static_and_only_transitioning_requests_attention():
+    needs_authentication = build_tray_menu_model(
+        TrayState(
+            status=TrayStatus.NEEDS_AUTHENTICATION,
+            status_label="Needs Authentication",
+        ),
+        window_visible=True,
+    )
+    transitioning = build_tray_menu_model(
+        TrayState(
+            status=TrayStatus.TRANSITIONING,
+            status_label="Transitioning",
+            busy_action="start",
+        ),
+        window_visible=True,
+    )
+
+    assert needs_authentication.icon_name == ICON_NAMES[
+        TrayStatus.NEEDS_AUTHENTICATION
+    ]
+    assert needs_authentication.notifier_status == "Active"
+    assert transitioning.icon_name == ICON_NAMES[TrayStatus.TRANSITIONING]
+    assert transitioning.notifier_status == "NeedsAttention"
 
 
 class FakeWindow:
@@ -404,6 +433,11 @@ def test_authenticated_running_refresh_maps_to_running():
     assert state.status_label == "Running"
     assert state.authenticated is True
     assert state.daemon_available is True
+    menu = build_tray_menu_model(state, window_visible=True)
+    assert _menu_enabled(menu, "start") is False
+    assert _menu_enabled(menu, "stop") is True
+    assert _menu_enabled(menu, "restart") is True
+    assert _menu_enabled(menu, "repair") is True
 
 
 def test_unexpected_client_construction_failure_maps_to_error():
@@ -520,8 +554,48 @@ class FakeBackend:
 class FakeControls:
     state = TrayState()
 
+    def refresh(self):
+        return self.state
+
     def perform(self, *_args, **_kwargs):
         raise AssertionError("Quit must not perform a hotspot action")
+
+
+def test_auth_change_refresh_is_deferred_until_active_worker_finishes():
+    application = FakeApplication()
+    runtime = TrayRuntime(
+        application=application,
+        lifecycle=WindowLifecycleController(
+            application=application,
+            window=FakeWindow(),
+        ),
+        controls=FakeControls(),
+        authentication=object(),
+        backend=FakeBackend(),
+        Gtk=object(),
+        Gdk=object(),
+        Gio=object(),
+        GLib=object(),
+        open_diagnostics=lambda: None,
+    )
+    attempts = []
+
+    def fake_run_worker(call, **_kwargs):
+        attempts.append(call)
+        return len(attempts) > 1
+
+    runtime._run_worker = fake_run_worker
+
+    runtime.refresh_after_auth_change()
+
+    assert runtime._auth_refresh_pending is True
+    assert len(attempts) == 1
+
+    runtime._worker_lock.acquire()
+    runtime._finish_worker()
+
+    assert runtime._auth_refresh_pending is False
+    assert len(attempts) == 2
 
 
 def _menu_enabled(model, action):
@@ -594,6 +668,7 @@ def test_saving_and_testing_authentication_refreshes_status_without_leakage():
         open_diagnostics=lambda: None,
     )
     refreshes = []
+    runtime.refresh_after_auth_change = lambda: refreshes.append("refresh")
     runtime.refresh_async = lambda: refreshes.append("refresh")
     entry = Entry()
     save_securely = SaveSecurely()
@@ -618,6 +693,7 @@ def test_saving_and_testing_authentication_refreshes_status_without_leakage():
 
 def test_clearing_authentication_refreshes_needs_authentication_menu():
     noncredential = "clear-refresh-test-placeholder"
+    portal_clears = []
 
     class Entry:
         def __init__(self):
@@ -686,13 +762,14 @@ def test_clearing_authentication_refreshes_needs_authentication_menu():
         Gio=object(),
         GLib=object(),
         open_diagnostics=lambda: None,
+        on_auth_cleared=lambda: portal_clears.append("clear"),
     )
 
     def refresh_now():
         controls.refresh()
         runtime._update_menu()
 
-    runtime.refresh_async = refresh_now
+    runtime.refresh_after_auth_change = refresh_now
     runtime._update_menu()
     assert _menu_enabled(backend.models[-1], "stop") is True
 
@@ -703,6 +780,7 @@ def test_clearing_authentication_refreshes_needs_authentication_menu():
     refreshed_menu = backend.models[-1]
     assert authentication.clear_calls == 1
     assert controls.refresh_calls == 1
+    assert portal_clears == ["clear"]
     assert entry.text == ""
     assert "Current status: Needs Authentication" in refreshed_menu.action_labels()
     assert _menu_enabled(refreshed_menu, "authentication") is True

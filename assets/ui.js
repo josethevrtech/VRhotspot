@@ -5,6 +5,11 @@ const STORE = (function () {
 })();
 const TOKEN_KEY = 'vr_hotspot_token';
 const LEGACY_TOKEN_KEY = 'vr_hotspot_api_token';
+const COMPANION_AUTH_ORIGIN = 'http://127.0.0.1:8732';
+const COMPANION_AUTH_HANDLER = 'vrHotspotCompanionAuth';
+const COMPANION_AUTH_PROTOCOL_VERSION = 1;
+const MAX_COMPANION_AUTH_MESSAGE_CHARS = 8192;
+const MAX_COMPANION_AUTH_TOKEN_CHARS = 4096;
 const DEBUG_TOKEN = false;
 const LS = {
   token: TOKEN_KEY,
@@ -75,6 +80,7 @@ let activeTipTarget = null;
 let floatingTipWired = false;
 let isAuthenticated = false;
 let authFlowLocked = false;
+let companionSessionToken = '';
 let uiBootstrapped = false;
 let refreshTimer = null;
 const BASIC_REFRESH_INTERVAL_MS = 2000;
@@ -873,6 +879,76 @@ function getLocalStorageSafe() {
   try { return localStorage; } catch { return null; }
 }
 
+function getCompanionAuthHandler() {
+  try {
+    if (!window.location || window.location.origin !== COMPANION_AUTH_ORIGIN) return null;
+    const path = window.location.pathname || '';
+    if (path !== '/ui' && path !== '/ui/' && !path.startsWith('/assets/')) return null;
+    const handlers = window.webkit && window.webkit.messageHandlers;
+    const handler = handlers && handlers[COMPANION_AUTH_HANDLER];
+    return (handler && typeof handler.postMessage === 'function') ? handler : null;
+  } catch {
+    return null;
+  }
+}
+
+function companionAuthBridgeAvailable() {
+  return getCompanionAuthHandler() !== null;
+}
+
+async function postCompanionAuthMessage(message) {
+  const handler = getCompanionAuthHandler();
+  if (!handler) return { available: false, reply: '' };
+  let raw = '';
+  try {
+    raw = JSON.stringify(message);
+  } catch {
+    return { available: true, reply: '' };
+  }
+  if (!raw || raw.length > MAX_COMPANION_AUTH_MESSAGE_CHARS) {
+    return { available: true, reply: '' };
+  }
+  try {
+    const reply = await handler.postMessage(raw);
+    return {
+      available: true,
+      reply: (typeof reply === 'string') ? reply : '',
+    };
+  } catch {
+    return { available: true, reply: '' };
+  } finally {
+    raw = '';
+  }
+}
+
+async function requestCompanionAuthToken() {
+  const result = await postCompanionAuthMessage({
+    version: COMPANION_AUTH_PROTOCOL_VERSION,
+    type: 'token_request',
+  });
+  if (!result.available) return null;
+  const token = result.reply.trim();
+  if (!token || token.length > MAX_COMPANION_AUTH_TOKEN_CHARS) return '';
+  return token;
+}
+
+async function notifyCompanionAuthAccepted(token) {
+  const result = await postCompanionAuthMessage({
+    version: COMPANION_AUTH_PROTOCOL_VERSION,
+    type: 'auth_accepted',
+    token,
+  });
+  if (!result.available) return null;
+  return result.reply === 'accepted';
+}
+
+function notifyCompanionAuthCleared() {
+  void postCompanionAuthMessage({
+    version: COMPANION_AUTH_PROTOCOL_VERSION,
+    type: 'auth_cleared',
+  });
+}
+
 function getStoredToken() {
   const ls = getLocalStorageSafe();
   if (ls) return (ls.getItem(TOKEN_KEY) || '').trim();
@@ -923,7 +999,7 @@ function debugTokenLog(injected) {
 }
 
 function getToken() {
-  return getStoredToken();
+  return companionSessionToken || getStoredToken();
 }
 
 function setToken(v) {
@@ -940,14 +1016,21 @@ function isUnauthorizedStatus(status) {
   return status === 401 || status === 403;
 }
 
-function clearStoredTokenEverywhere() {
+function clearStoredTokenEverywhere(opts = {}) {
+  companionSessionToken = '';
   setStoredToken('');
   const ls = getLocalStorageSafe();
   try { if (ls) ls.removeItem(TOKEN_KEY); } catch { /* ignore */ }
   try { if (ls) ls.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
   try { STORE.removeItem(TOKEN_KEY); } catch { /* ignore */ }
   try { STORE.removeItem(LEGACY_TOKEN_KEY); } catch { /* ignore */ }
+  if (opts.notifyCompanion !== false) notifyCompanionAuthCleared();
 }
+
+window.vrHotspotCompanionAuthCleared = function () {
+  clearStoredTokenEverywhere({ notifyCompanion: false });
+  renderLoginSplash();
+};
 
 function clearLoggedOutRouteState() {
   if (!window.location.hash) return;
@@ -1033,6 +1116,23 @@ async function submitLoginSplashToken() {
 
   const result = await validateTokenCandidate(token);
   if (result.ok) {
+    const companionAccepted = await notifyCompanionAuthAccepted(token);
+    if (companionAccepted === true) {
+      companionSessionToken = token;
+      input.value = '';
+      showAuthenticatedApp();
+      bootstrapAuthenticatedUi();
+      return;
+    }
+    if (companionAccepted === false) {
+      clearStoredTokenEverywhere({ notifyCompanion: false });
+      input.value = '';
+      setLoginError('Invalid token');
+      input.disabled = false;
+      submit.disabled = false;
+      input.focus();
+      return;
+    }
     setToken(token);
     window.location.reload();
     return;
@@ -3760,7 +3860,15 @@ async function init() {
     if (!isAuthenticated) clearLoggedOutRouteState();
   });
 
-  const tok = migrateLegacyToken() || getStoredToken();
+  const companionBridge = companionAuthBridgeAvailable();
+  let tok = '';
+  if (companionBridge) {
+    clearStoredTokenEverywhere({ notifyCompanion: false });
+    tok = (await requestCompanionAuthToken()) || '';
+    companionSessionToken = tok;
+  } else {
+    tok = migrateLegacyToken() || getStoredToken();
+  }
   if (!tok) {
     renderLoginSplash();
     return;
@@ -3780,7 +3888,8 @@ async function init() {
     return;
   }
 
-  setToken(tok);
+  if (companionBridge) companionSessionToken = tok;
+  else setToken(tok);
   showAuthenticatedApp();
   bootstrapAuthenticatedUi();
 }

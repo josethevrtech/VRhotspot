@@ -131,12 +131,7 @@ def build_tray_menu_model(
         icon_name=ICON_NAMES[state.status],
         notifier_status=(
             "NeedsAttention"
-            if state.status
-            in {
-                TrayStatus.NEEDS_AUTHENTICATION,
-                TrayStatus.DAEMON_UNAVAILABLE,
-                TrayStatus.ERROR,
-            }
+            if state.status is TrayStatus.TRANSITIONING
             else "Active"
         ),
         tooltip=f"{APP_NAME} — {state.status_label}",
@@ -386,6 +381,7 @@ class StatusNotifierBackend:
     def update(self, model: TrayMenuModel) -> None:
         icon_changed = model.icon_name != self._model.icon_name
         status_changed = model.notifier_status != self._model.notifier_status
+        attention_changed = icon_changed or status_changed
         tooltip_changed = model.tooltip != self._model.tooltip
         self._model = model
         self._revision += 1
@@ -406,6 +402,14 @@ class StatusNotifierBackend:
                     self.ITEM_PATH,
                     self.ITEM_INTERFACE,
                     "NewIcon",
+                    None,
+                )
+            if attention_changed:
+                connection.emit_signal(
+                    None,
+                    self.ITEM_PATH,
+                    self.ITEM_INTERFACE,
+                    "NewAttentionIcon",
                     None,
                 )
             if status_changed:
@@ -446,7 +450,10 @@ class StatusNotifierBackend:
             "IconPixmap": Variant("a(iiay)", []),
             "OverlayIconName": Variant("s", ""),
             "OverlayIconPixmap": Variant("a(iiay)", []),
-            "AttentionIconName": Variant("s", f"{APP_ID}-error"),
+            "AttentionIconName": Variant(
+                "s",
+                ICON_NAMES[TrayStatus.TRANSITIONING],
+            ),
             "AttentionIconPixmap": Variant("a(iiay)", []),
             "AttentionMovieName": Variant("s", ""),
             "ToolTip": Variant(
@@ -644,6 +651,7 @@ class TrayRuntime:
         Gio,
         GLib,
         open_diagnostics: Callable[[], None],
+        on_auth_cleared: Callable[[], None] | None = None,
     ):
         self._application = application
         self._lifecycle = lifecycle
@@ -655,7 +663,13 @@ class TrayRuntime:
         self._Gio = Gio
         self._GLib = GLib
         self._open_diagnostics = open_diagnostics
+        self._on_auth_cleared = (
+            on_auth_cleared
+            if callable(on_auth_cleared)
+            else lambda: None
+        )
         self._worker_lock = threading.Lock()
+        self._auth_refresh_pending = False
         self._notification_counter = 0
         self._last_detail_code = ""
         self._auth_window = None
@@ -757,6 +771,10 @@ class TrayRuntime:
         finally:
             if self._worker_lock.locked():
                 self._worker_lock.release()
+        if self._auth_refresh_pending:
+            self._auth_refresh_pending = False
+            if not self._run_worker(self._controls.refresh):
+                self._auth_refresh_pending = True
         return False
 
     def _run_worker(
@@ -764,9 +782,9 @@ class TrayRuntime:
         call: Callable[[], object],
         *,
         pending_action: str | None = None,
-    ) -> None:
+    ) -> bool:
         if not self._worker_lock.acquire(blocking=False):
-            return
+            return False
         if pending_action is not None:
             self._controls.mark_operation_pending(pending_action)
         self._update_menu()
@@ -792,9 +810,18 @@ class TrayRuntime:
             name="vrhotspot-tray-operation",
             daemon=True,
         ).start()
+        return True
 
     def refresh_async(self) -> None:
         self._run_worker(self._controls.refresh)
+
+    def refresh_after_auth_change(self) -> None:
+        """Guarantee one refresh after shared authentication state changes."""
+
+        if self._run_worker(self._controls.refresh):
+            self._auth_refresh_pending = False
+        else:
+            self._auth_refresh_pending = True
 
     def _open_authentication(self) -> None:
         if self._auth_window is not None:
@@ -903,7 +930,7 @@ class TrayRuntime:
             token = ""
         status.set_text(result.message)
         save_securely.set_active(result.securely_saved)
-        self.refresh_async()
+        self.refresh_after_auth_change()
 
     def _auth_test(self, entry, status) -> None:
         token = entry.get_text()
@@ -961,7 +988,11 @@ class TrayRuntime:
         entry.set_text("")
         result = self._authentication.clear()
         status.set_text(result.message)
-        self.refresh_async()
+        try:
+            self._on_auth_cleared()
+        except Exception:
+            pass
+        self.refresh_after_auth_change()
 
     def dispatch_action(self, action: str) -> None:
         state = self._controls.state

@@ -66,16 +66,25 @@ provides live status, lifecycle controls, Share Internet Connection, Privacy
 Mode, and the existing Start Hotspot Automatically setting. Explicit Quit exits
 only the desktop companion and does not stop an already-running hotspot.
 
-Use **Authentication…** to enter the existing daemon API token. Saving it is an
-explicit choice and uses the desktop Secret Service provider (including a
-compatible KDE Wallet setup); otherwise it remains in memory only. The
-installer and Flatpak never discover the token from `/etc/vr-hotspot`,
-`/var/lib/vr-hotspot`, daemon configuration, environment variables, or command
-arguments. Missing or rejected credentials are reported as
-**Needs Authentication**, separately from **Daemon Unavailable** and unexpected
-**Error** states. Start, Stop, Restart, and Repair remain disabled until an
-explicitly entered or saved token authenticates successfully. The historical
-flag remains a compatibility alias for the same default graphical behavior:
+The Web Portal shell and tray are one companion and share authentication state.
+An API token accepted after explicit entry in the Portal is adopted immediately
+by the tray. When Secret Service is available, the accepted token is saved in
+the app-specific wallet; otherwise it remains in memory for the current
+companion process only. A valid saved wallet token authenticates the tray at
+launch and is supplied to the Portal only through a bounded, fixed-origin,
+in-memory WebKit bridge—not through a URL, file, or command argument.
+
+**Authentication…** remains available for explicit token entry, replacement,
+testing, and clearing. The companion never uses sudo to obtain a token and
+never discovers one from `/etc/vr-hotspot/env`, `/var/lib/vr-hotspot`, daemon
+configuration, environment variables, or command arguments. Missing or
+rejected credentials are reported as **Needs Authentication**, separately from
+**Daemon Unavailable** and unexpected **Error** states. Needs Authentication is
+a static icon state; working/pulsing indication is reserved for active
+transitions. Start, Stop, Restart, and Repair remain disabled until the shared
+token authenticates successfully and then become available according to the
+real daemon state. The historical flag remains a compatibility alias for the
+same default graphical behavior:
 
 ```bash
 flatpak run io.github.josethevrtech.VRhotspot --web-portal-shell

@@ -778,8 +778,93 @@ async function scenarioExport() {
   assert.deepStrictEqual(environment.state.revokedUrls, ['blob:test-1']);
 }
 
+async function scenarioCompanionAuth() {
+  const secret = 'companion-auth-secret-value';
+  {
+    const environment = createEnvironment();
+    environment.context.__bridgeMessages = [];
+    environment.context.__bootstraps = 0;
+    environment.run(`
+      window.location.origin = 'http://127.0.0.1:8732';
+      window.location.pathname = '/ui';
+      window.webkit = {
+        messageHandlers: {
+          vrHotspotCompanionAuth: {
+            postMessage: async (raw) => {
+              const message = JSON.parse(raw);
+              __bridgeMessages.push(message);
+              return message.type === 'auth_accepted' ? 'accepted' : '';
+            },
+          },
+        },
+      };
+      bootstrapAuthenticatedUi = () => { __bootstraps += 1; };
+    `);
+    environment.document.getElementById('loginToken').value = secret;
+    environment.state.responses.push(responseBody({ result_code: 'ok', data: { phase: 'stopped' } }));
+
+    await environment.run('submitLoginSplashToken()');
+
+    assert.strictEqual(environment.run('isAuthenticated'), true);
+    assert.strictEqual(environment.run('getToken()'), secret);
+    assert.strictEqual(environment.localStorage.getItem('vr_hotspot_token'), null);
+    assert.strictEqual(environment.context.__bootstraps, 1);
+    assert.deepStrictEqual(
+      Array.from(environment.context.__bridgeMessages, (message) => message.type),
+      ['auth_accepted'],
+    );
+    assert.strictEqual(environment.context.__bridgeMessages[0].version, 1);
+
+    environment.run(`logoutToSplash('Invalid token');`);
+    await settle();
+    assert.strictEqual(environment.run('isAuthenticated'), false);
+    assert.strictEqual(environment.run('getToken()'), '');
+    assert.deepStrictEqual(
+      Array.from(environment.context.__bridgeMessages, (message) => message.type),
+      ['auth_accepted', 'auth_cleared'],
+    );
+  }
+
+  {
+    const environment = createEnvironment();
+    environment.context.__bridgeMessages = [];
+    environment.context.__bootstraps = 0;
+    environment.run(`
+      window.location.origin = 'http://127.0.0.1:8732';
+      window.location.pathname = '/ui';
+      window.webkit = {
+        messageHandlers: {
+          vrHotspotCompanionAuth: {
+            postMessage: async (raw) => {
+              const message = JSON.parse(raw);
+              __bridgeMessages.push(message);
+              return message.type === 'token_request'
+                ? ${JSON.stringify(secret)}
+                : 'rejected';
+            },
+          },
+        },
+      };
+      bootstrapAuthenticatedUi = () => { __bootstraps += 1; };
+    `);
+    environment.state.responses.push(responseBody({ result_code: 'ok', data: { phase: 'running' } }));
+
+    await environment.run('init()');
+
+    assert.strictEqual(environment.run('isAuthenticated'), true);
+    assert.strictEqual(environment.run('getToken()'), secret);
+    assert.strictEqual(environment.localStorage.getItem('vr_hotspot_token'), null);
+    assert.strictEqual(environment.context.__bootstraps, 1);
+    assert.deepStrictEqual(
+      Array.from(environment.context.__bridgeMessages, (message) => message.type),
+      ['token_request'],
+    );
+  }
+}
+
 const scenarios = {
   auth_errors: scenarioAuthErrors,
+  companion_auth: scenarioCompanionAuth,
   export: scenarioExport,
   hostile: scenarioHostileValues,
   on_demand: scenarioOnDemand,
@@ -863,6 +948,9 @@ class TestUiPreflightContract(unittest.TestCase):
 
     def test_unauthorized_responses_follow_logout_behavior(self):
         _run_node_scenario("auth_errors")
+
+    def test_companion_auth_success_wallet_startup_and_logout_sync(self):
+        _run_node_scenario("companion_auth")
 
     def test_network_http_and_malformed_response_errors_are_clear(self):
         _run_node_scenario("request_errors")
