@@ -24,6 +24,7 @@
         "install -Dm644 io.github.josethevrtech.VRhotspot.desktop /app/share/applications/io.github.josethevrtech.VRhotspot.desktop",
         "install -Dm644 io.github.josethevrtech.VRhotspot.metainfo.xml /app/share/metainfo/io.github.josethevrtech.VRhotspot.metainfo.xml",
         "install -Dm644 io.github.josethevrtech.VRhotspot.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot.svg",
+        "install -Dm644 io.github.josethevrtech.VRhotspot-stopped.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot-stopped.svg",
         "install -Dm644 io.github.josethevrtech.VRhotspot-running.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot-running.svg",
         "install -Dm644 io.github.josethevrtech.VRhotspot-working.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot-working.svg",
         "install -Dm644 io.github.josethevrtech.VRhotspot-error.svg /app/share/icons/hicolor/scalable/apps/io.github.josethevrtech.VRhotspot-error.svg"
@@ -94,6 +95,10 @@
         {
           "type": "file",
           "path": "io.github.josethevrtech.VRhotspot.svg"
+        },
+        {
+          "type": "file",
+          "path": "io.github.josethevrtech.VRhotspot-stopped.svg"
         },
         {
           "type": "file",

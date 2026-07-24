@@ -752,9 +752,10 @@ arguments, URLs, query strings, or plaintext files for a token, and clearing
 removes only the matching VR Hotspot wallet item.
 
 The installed scalable application icon now uses a cyan VR mark on a near-black
-rounded tile, with running, working, and error variants that retain the same
-base identity at panel sizes. Packaging installs all variants through the
-existing application-ID icon path.
+rounded tile. Stopped, running, working, and error variants retain the same VR
+base identity at panel sizes and represent state through a small red/off,
+green/on, amber/working, or red/error-style indicator. Packaging installs all
+variants through deterministic application-ID icon paths.
 
 The only new session-bus grants are:
 
@@ -833,7 +834,11 @@ and daemon controls stay disabled. Daemon connection failure maps to
 an authenticated stopped hotspot maps to `Stopped`, with controls enabled
 according to those states. `Needs Authentication` is static. The working
 attention/pulsing state is used only for `Transitioning` while Start, Stop,
-Restart, Repair, or another serialized operation is active.
+Restart, Repair, or another serialized operation is active. Every status maps
+to the VR Hotspot icon family: `Stopped` uses the red/off variant, `Running`
+uses green/on, `Transitioning` uses amber/working, and `Needs Authentication`,
+`Daemon Unavailable`, and `Error` use the static VR-branded red/error variant.
+No tray status uses a generic system Wi-Fi icon.
 
 ## Sandbox and portal expectations
 
