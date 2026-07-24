@@ -19,7 +19,7 @@ from flatpak_client import (
 APP_ID = "io.github.josethevrtech.VRhotspot"
 APP_NAME = "VR Hotspot"
 ICON_NAMES = {
-    TrayStatus.STOPPED: APP_ID,
+    TrayStatus.STOPPED: f"{APP_ID}-stopped",
     TrayStatus.RUNNING: f"{APP_ID}-running",
     TrayStatus.TRANSITIONING: f"{APP_ID}-working",
     TrayStatus.NEEDS_AUTHENTICATION: f"{APP_ID}-error",

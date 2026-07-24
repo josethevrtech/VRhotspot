@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from flatpak_app.tray import (
+    APP_ID,
     ICON_NAMES,
     StatusNotifierBackend,
     TrayRuntime,
@@ -400,6 +401,24 @@ def test_tray_status_labels_and_icon_variants_reflect_daemon_state(
     assert _menu_enabled(model, "authentication") is True
 
 
+def test_all_tray_states_use_vr_hotspot_state_icon_family():
+    assert ICON_NAMES == {
+        TrayStatus.STOPPED: f"{APP_ID}-stopped",
+        TrayStatus.RUNNING: f"{APP_ID}-running",
+        TrayStatus.TRANSITIONING: f"{APP_ID}-working",
+        TrayStatus.NEEDS_AUTHENTICATION: f"{APP_ID}-error",
+        TrayStatus.DAEMON_UNAVAILABLE: f"{APP_ID}-error",
+        TrayStatus.ERROR: f"{APP_ID}-error",
+    }
+    assert set(ICON_NAMES) == set(TrayStatus)
+    assert APP_ID not in ICON_NAMES.values()
+    assert all(
+        icon_name.startswith(f"{APP_ID}-")
+        and "wifi" not in icon_name.casefold()
+        for icon_name in ICON_NAMES.values()
+    )
+
+
 def test_needs_authentication_is_static_and_only_transitioning_requests_attention():
     needs_authentication = build_tray_menu_model(
         TrayState(
@@ -417,11 +436,9 @@ def test_needs_authentication_is_static_and_only_transitioning_requests_attentio
         window_visible=True,
     )
 
-    assert needs_authentication.icon_name == ICON_NAMES[
-        TrayStatus.NEEDS_AUTHENTICATION
-    ]
+    assert needs_authentication.icon_name == f"{APP_ID}-error"
     assert needs_authentication.notifier_status == "Active"
-    assert transitioning.icon_name == ICON_NAMES[TrayStatus.TRANSITIONING]
+    assert transitioning.icon_name == f"{APP_ID}-working"
     assert transitioning.notifier_status == "NeedsAttention"
 
 
@@ -865,17 +882,58 @@ class FakeControls:
 
 
 @pytest.mark.parametrize(
-    ("status", "label", "start_enabled", "stop_enabled"),
     (
-        (TrayStatus.RUNNING, "Running", False, True),
-        (TrayStatus.STOPPED, "Stopped", True, False),
+        "status",
+        "label",
+        "daemon_available",
+        "authenticated",
+        "expected_icon",
+        "start_enabled",
+        "stop_enabled",
+        "restart_enabled",
+    ),
+    (
+        (
+            TrayStatus.RUNNING,
+            "Running",
+            True,
+            True,
+            f"{APP_ID}-running",
+            False,
+            True,
+            True,
+        ),
+        (
+            TrayStatus.STOPPED,
+            "Stopped",
+            True,
+            True,
+            f"{APP_ID}-stopped",
+            True,
+            False,
+            True,
+        ),
+        (
+            TrayStatus.NEEDS_AUTHENTICATION,
+            "Needs Authentication",
+            True,
+            False,
+            f"{APP_ID}-error",
+            False,
+            False,
+            False,
+        ),
     ),
 )
-def test_startup_refresh_registers_authenticated_daemon_state_as_initial_model(
+def test_startup_refresh_registers_live_state_as_initial_model(
     status,
     label,
+    daemon_available,
+    authenticated,
+    expected_icon,
     start_enabled,
     stop_enabled,
+    restart_enabled,
 ):
     class Application(FakeApplication):
         def __init__(self):
@@ -897,8 +955,8 @@ def test_startup_refresh_registers_authenticated_daemon_state_as_initial_model(
                 status_label=label,
                 phase=status.value,
                 running=status is TrayStatus.RUNNING,
-                daemon_available=True,
-                authenticated=True,
+                daemon_available=daemon_available,
+                authenticated=authenticated,
             )
             return self.state
 
@@ -934,14 +992,63 @@ def test_startup_refresh_registers_authenticated_daemon_state_as_initial_model(
     initial = backend.model_at_start
     assert controls.refresh_calls == 1
     assert backend.start_calls == 1
-    assert initial.icon_name == ICON_NAMES[status]
+    assert initial.icon_name == expected_icon
+    assert initial.icon_name != APP_ID
     assert initial.tooltip == f"VR Hotspot — {label}"
     assert _menu_enabled(initial, "start") is start_enabled
     assert _menu_enabled(initial, "stop") is stop_enabled
-    assert _menu_enabled(initial, "restart") is True
+    assert _menu_enabled(initial, "restart") is restart_enabled
     assert application.hold_calls == 1
     assert len(GLib.timers) == 1
     assert GLib.timers[0][0] == 5
+
+
+def test_refresh_status_keeps_stopped_icon_vr_branded():
+    class Controls:
+        def __init__(self):
+            self.refresh_calls = 0
+            self.state = TrayState(
+                status=TrayStatus.STOPPED,
+                status_label="Stopped",
+                phase="stopped",
+                daemon_available=True,
+                authenticated=True,
+            )
+
+        def refresh(self):
+            self.refresh_calls += 1
+            return self.state
+
+    application = FakeApplication()
+    controls = Controls()
+    backend = FakeBackend()
+    runtime = TrayRuntime(
+        application=application,
+        lifecycle=WindowLifecycleController(
+            application=application,
+            window=FakeWindow(),
+        ),
+        controls=controls,
+        authentication=object(),
+        backend=backend,
+        Gtk=object(),
+        Gdk=object(),
+        Gio=object(),
+        GLib=object(),
+        open_diagnostics=lambda: None,
+    )
+
+    def refresh_now(call, **_kwargs):
+        call()
+        runtime._update_menu()
+        return True
+
+    runtime._run_worker = refresh_now
+    runtime.dispatch_action("refresh")
+
+    assert controls.refresh_calls == 1
+    assert backend.models[-1].icon_name == f"{APP_ID}-stopped"
+    assert all(model.icon_name != APP_ID for model in backend.models)
 
 
 def test_auth_change_refresh_is_deferred_until_active_worker_finishes():
@@ -1459,10 +1566,11 @@ def test_flatpak_tray_sources_launch_no_host_service_or_network_commands():
         assert forbidden not in sources
 
 
-def test_cyan_black_icon_variants_are_valid_scalable_and_packaged():
+def test_vr_hotspot_icon_variants_are_valid_scalable_and_packaged():
     icon_dir = Path("packaging/flatpak")
     names = (
         "io.github.josethevrtech.VRhotspot.svg",
+        "io.github.josethevrtech.VRhotspot-stopped.svg",
         "io.github.josethevrtech.VRhotspot-running.svg",
         "io.github.josethevrtech.VRhotspot-working.svg",
         "io.github.josethevrtech.VRhotspot-error.svg",
@@ -1482,3 +1590,18 @@ def test_cyan_black_icon_variants_are_valid_scalable_and_packaged():
         assert "#6d4aff" not in source
         assert "#1466cc" not in source
         assert name in manifest_text
+
+    state_sources = {
+        icon_name: (icon_dir / f"{icon_name}.svg").read_text(encoding="utf-8")
+        for icon_name in set(ICON_NAMES.values())
+    }
+    assert all(
+        "M22 34 42 91 62 34M69 91V35" in source
+        and "M88 22" not in source
+        for source in state_sources.values()
+    )
+    assert "#ff0055" in state_sources[f"{APP_ID}-stopped"]
+    assert 'r="7" fill="#ff0055"' in state_sources[f"{APP_ID}-stopped"]
+    assert "#00ff9d" in state_sources[f"{APP_ID}-running"]
+    assert "#ffee00" in state_sources[f"{APP_ID}-working"]
+    assert "#ff0055" in state_sources[f"{APP_ID}-error"]
