@@ -1,9 +1,11 @@
 import inspect
+import json
 from pathlib import Path
 import sys
 
 
 from flatpak_app import build_smoke_payload, render_smoke_json
+from flatpak_app.app import WebPortalAuthBridge
 from flatpak_client import (
     ApiResponse,
     AuthenticationController,
@@ -73,6 +75,49 @@ def client_factory(*, token):
 
         raise LocalApiClientError("invalid token")
     return AuthClient(token)
+
+
+class FixedOriginView:
+    def get_uri(self):
+        return "http://127.0.0.1:8732/ui"
+
+
+class MessageValue:
+    def __init__(self, message):
+        self.value = json.dumps(message)
+
+    @classmethod
+    def new_string(cls, _context, value):
+        instance = cls.__new__(cls)
+        instance.value = value
+        return instance
+
+    def get_context(self):
+        return object()
+
+    def is_string(self):
+        return True
+
+    def to_string(self):
+        return self.value
+
+
+class MessageReply:
+    def __init__(self):
+        self.value = None
+
+    def return_value(self, value):
+        self.value = value.value
+
+
+def _accepted_portal_message(token):
+    return MessageValue(
+        {
+            "version": 1,
+            "type": "auth_accepted",
+            "token": token,
+        }
+    )
 
 
 def test_manual_token_is_retained_only_in_memory_when_not_saved():
@@ -148,6 +193,54 @@ def test_wallet_unavailable_falls_back_to_memory_only_with_fixed_message():
     assert "memory" in result.message.casefold()
     assert secret not in result.message
     assert controller.token_for_operation() == secret
+
+
+def test_accepted_portal_token_is_saved_to_available_app_wallet():
+    secret = "accepted-portal-wallet-value"
+    wallet = FakeWallet()
+    controller = AuthenticationController(
+        wallet=wallet,
+        client_factory=client_factory,
+    )
+    bridge = WebPortalAuthBridge(controller)
+    reply = MessageReply()
+
+    assert bridge.handle_message(
+        FixedOriginView(),
+        _accepted_portal_message(secret),
+        reply,
+    ) is True
+
+    assert reply.value == "accepted"
+    assert wallet.stored == [secret]
+    assert controller.token_for_operation() == secret
+    assert controller.securely_saved is True
+    assert secret not in repr(bridge)
+    assert secret not in repr(controller)
+
+
+def test_accepted_portal_token_falls_back_to_current_process_memory():
+    secret = "accepted-portal-memory-value"
+    wallet = FakeWallet(available=False)
+    controller = AuthenticationController(
+        wallet=wallet,
+        client_factory=client_factory,
+    )
+    bridge = WebPortalAuthBridge(controller)
+    reply = MessageReply()
+
+    assert bridge.handle_message(
+        FixedOriginView(),
+        _accepted_portal_message(secret),
+        reply,
+    ) is True
+
+    assert reply.value == "accepted"
+    assert wallet.stored == []
+    assert controller.token_for_operation() == secret
+    assert controller.securely_saved is False
+    assert secret not in repr(bridge)
+    assert secret not in repr(controller)
 
 
 def test_memory_only_replace_reports_when_old_wallet_entry_cannot_be_removed():

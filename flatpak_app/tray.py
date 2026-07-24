@@ -36,6 +36,7 @@ class TrayMenuItem:
     enabled: bool = True
     checked: bool | None = None
     separator: bool = False
+    children: tuple[TrayMenuItem, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -45,8 +46,18 @@ class TrayMenuModel:
     notifier_status: str
     tooltip: str
 
+    def all_items(self) -> tuple[TrayMenuItem, ...]:
+        def descendants(items: tuple[TrayMenuItem, ...]):
+            for item in items:
+                yield item
+                yield from descendants(item.children)
+
+        return tuple(descendants(self.items))
+
     def action_labels(self) -> tuple[str, ...]:
-        return tuple(item.label for item in self.items if not item.separator)
+        return tuple(
+            item.label for item in self.all_items() if not item.separator
+        )
 
 
 def build_tray_menu_model(
@@ -60,70 +71,86 @@ def build_tray_menu_model(
         state.daemon_available
         and state.authenticated
         and state.busy_action is None
-        and state.status is not TrayStatus.TRANSITIONING
+        and state.status in {TrayStatus.RUNNING, TrayStatus.STOPPED}
+    )
+    hotspot_commands = TrayMenuItem(
+        21,
+        "",
+        "Hotspot Commands",
+        children=(
+            TrayMenuItem(
+                7,
+                "start",
+                "Start Hotspot",
+                enabled=ready and state.status is TrayStatus.STOPPED,
+            ),
+            TrayMenuItem(
+                8,
+                "stop",
+                "Stop Hotspot",
+                enabled=ready and state.status is TrayStatus.RUNNING,
+            ),
+            TrayMenuItem(
+                9,
+                "restart",
+                "Restart Service",
+                enabled=ready,
+            ),
+            TrayMenuItem(10, "repair", "Repair Network", enabled=ready),
+        ),
+    )
+    network = TrayMenuItem(
+        22,
+        "",
+        "Network",
+        children=(
+            TrayMenuItem(
+                12,
+                "share_internet",
+                "Share Internet Connection",
+                enabled=ready and state.share_internet is not None,
+                checked=state.share_internet is True,
+            ),
+        ),
+    )
+    advanced = TrayMenuItem(
+        23,
+        "",
+        "Advanced",
+        children=(
+            TrayMenuItem(16, "authentication", "Authentication…"),
+            TrayMenuItem(
+                5,
+                "refresh",
+                "Refresh Status",
+                enabled=state.busy_action is None,
+            ),
+            TrayMenuItem(18, "diagnostics", "Open Diagnostics"),
+            TrayMenuItem(
+                13,
+                "privacy",
+                "Privacy Mode",
+                checked=state.privacy_mode,
+            ),
+            TrayMenuItem(
+                14,
+                "hotspot_autostart",
+                "Start Hotspot Automatically",
+                enabled=ready and state.hotspot_autostart is not None,
+                checked=state.hotspot_autostart is True,
+            ),
+        ),
     )
     items = (
-        TrayMenuItem(1, "show", "Show VR Hotspot", not window_visible),
-        TrayMenuItem(2, "hide", "Hide VR Hotspot", window_visible),
-        TrayMenuItem(3, "separator-1", "", separator=True),
         TrayMenuItem(
             4,
             "status",
             f"Current status: {state.status_label}",
             enabled=False,
         ),
-        TrayMenuItem(
-            5,
-            "refresh",
-            "Refresh Status",
-            enabled=state.busy_action is None,
-        ),
-        TrayMenuItem(6, "separator-2", "", separator=True),
-        TrayMenuItem(
-            7,
-            "start",
-            "Start Hotspot",
-            enabled=ready and state.status is TrayStatus.STOPPED,
-        ),
-        TrayMenuItem(
-            8,
-            "stop",
-            "Stop Hotspot",
-            enabled=ready and state.status is TrayStatus.RUNNING,
-        ),
-        TrayMenuItem(
-            9,
-            "restart",
-            "Restart Service",
-            enabled=ready and state.status is TrayStatus.RUNNING,
-        ),
-        TrayMenuItem(10, "repair", "Repair Network", enabled=ready),
-        TrayMenuItem(11, "separator-3", "", separator=True),
-        TrayMenuItem(
-            12,
-            "share_internet",
-            "Share Internet Connection",
-            enabled=ready and state.share_internet is not None,
-            checked=state.share_internet is True,
-        ),
-        TrayMenuItem(
-            13,
-            "privacy",
-            "Privacy Mode",
-            checked=state.privacy_mode,
-        ),
-        TrayMenuItem(
-            14,
-            "hotspot_autostart",
-            "Start Hotspot Automatically",
-            enabled=ready and state.hotspot_autostart is not None,
-            checked=state.hotspot_autostart is True,
-        ),
-        TrayMenuItem(15, "separator-4", "", separator=True),
-        TrayMenuItem(16, "authentication", "Authentication…"),
-        TrayMenuItem(17, "separator-5", "", separator=True),
-        TrayMenuItem(18, "diagnostics", "Open Diagnostics"),
-        TrayMenuItem(19, "separator-6", "", separator=True),
+        hotspot_commands,
+        network,
+        advanced,
         TrayMenuItem(20, "quit", "Quit VR Hotspot"),
     )
     return TrayMenuModel(
@@ -131,12 +158,7 @@ def build_tray_menu_model(
         icon_name=ICON_NAMES[state.status],
         notifier_status=(
             "NeedsAttention"
-            if state.status
-            in {
-                TrayStatus.NEEDS_AUTHENTICATION,
-                TrayStatus.DAEMON_UNAVAILABLE,
-                TrayStatus.ERROR,
-            }
+            if state.status is TrayStatus.TRANSITIONING
             else "Active"
         ),
         tooltip=f"{APP_NAME} — {state.status_label}",
@@ -384,8 +406,40 @@ class StatusNotifierBackend:
         self._connection = None
 
     def update(self, model: TrayMenuModel) -> None:
+        previous_items = {
+            item.item_id: item for item in self._model.all_items()
+        }
+        property_updates = []
+        removed_properties = []
+        for item in model.all_items():
+            previous = previous_items.get(item.item_id)
+            if previous is None:
+                continue
+            changed = {}
+            if item.label != previous.label:
+                changed["label"] = self._GLib.Variant("s", item.label)
+            if item.enabled != previous.enabled:
+                changed["enabled"] = self._GLib.Variant("b", item.enabled)
+            if item.checked != previous.checked:
+                if item.checked is None:
+                    removed_properties.append(
+                        (item.item_id, ["toggle-type", "toggle-state"])
+                    )
+                else:
+                    changed["toggle-type"] = self._GLib.Variant(
+                        "s",
+                        "checkmark",
+                    )
+                    changed["toggle-state"] = self._GLib.Variant(
+                        "i",
+                        1 if item.checked else 0,
+                    )
+            if changed:
+                property_updates.append((item.item_id, changed))
+
         icon_changed = model.icon_name != self._model.icon_name
         status_changed = model.notifier_status != self._model.notifier_status
+        attention_changed = icon_changed or status_changed
         tooltip_changed = model.tooltip != self._model.tooltip
         self._model = model
         self._revision += 1
@@ -400,12 +454,31 @@ class StatusNotifierBackend:
                 "LayoutUpdated",
                 self._GLib.Variant("(ui)", (self._revision, 0)),
             )
+            if property_updates or removed_properties:
+                connection.emit_signal(
+                    None,
+                    self.MENU_PATH,
+                    self.MENU_INTERFACE,
+                    "ItemsPropertiesUpdated",
+                    self._GLib.Variant(
+                        "(a(ia{sv})a(ias))",
+                        (property_updates, removed_properties),
+                    ),
+                )
             if icon_changed:
                 connection.emit_signal(
                     None,
                     self.ITEM_PATH,
                     self.ITEM_INTERFACE,
                     "NewIcon",
+                    None,
+                )
+            if attention_changed:
+                connection.emit_signal(
+                    None,
+                    self.ITEM_PATH,
+                    self.ITEM_INTERFACE,
+                    "NewAttentionIcon",
                     None,
                 )
             if status_changed:
@@ -446,7 +519,10 @@ class StatusNotifierBackend:
             "IconPixmap": Variant("a(iiay)", []),
             "OverlayIconName": Variant("s", ""),
             "OverlayIconPixmap": Variant("a(iiay)", []),
-            "AttentionIconName": Variant("s", f"{APP_ID}-error"),
+            "AttentionIconName": Variant(
+                "s",
+                ICON_NAMES[TrayStatus.TRANSITIONING],
+            ),
             "AttentionIconPixmap": Variant("a(iiay)", []),
             "AttentionMovieName": Variant("s", ""),
             "ToolTip": Variant(
@@ -482,7 +558,11 @@ class StatusNotifierBackend:
 
     def _item_by_id(self, item_id: int) -> TrayMenuItem | None:
         return next(
-            (item for item in self._model.items if item.item_id == item_id),
+            (
+                item
+                for item in self._model.all_items()
+                if item.item_id == item_id
+            ),
             None,
         )
 
@@ -503,23 +583,81 @@ class StatusNotifierBackend:
             if item.checked is not None:
                 values["toggle-type"] = Variant("s", "checkmark")
                 values["toggle-state"] = Variant("i", 1 if item.checked else 0)
+            if item.children:
+                values["children-display"] = Variant("s", "submenu")
         if property_names:
             allowed = set(property_names)
             values = {key: value for key, value in values.items() if key in allowed}
         return values
 
-    def _layout(self):
+    def _layout_item(
+        self,
+        item: TrayMenuItem,
+        recursion_depth: int,
+        property_names: tuple[str, ...],
+    ):
         Variant = self._GLib.Variant
-        children = [
-            Variant(
-                "(ia{sv}av)",
-                (item.item_id, self._menu_properties(item), []),
+        children = []
+        if recursion_depth != 0:
+            child_depth = (
+                recursion_depth - 1
+                if recursion_depth > 0
+                else recursion_depth
             )
-            for item in self._model.items
-        ]
+            children = [
+                Variant(
+                    "(ia{sv}av)",
+                    self._layout_item(child, child_depth, property_names),
+                )
+                for child in item.children
+            ]
         return (
-            0,
-            {"children-display": Variant("s", "submenu")},
+            item.item_id,
+            self._menu_properties(item, property_names),
+            children,
+        )
+
+    def _layout(
+        self,
+        parent_id: int = 0,
+        recursion_depth: int = -1,
+        property_names: tuple[str, ...] = (),
+    ):
+        Variant = self._GLib.Variant
+        if parent_id == 0:
+            child_items = self._model.items
+            properties = {"children-display": Variant("s", "submenu")}
+            if property_names:
+                allowed = set(property_names)
+                properties = {
+                    key: value
+                    for key, value in properties.items()
+                    if key in allowed
+                }
+        else:
+            parent = self._item_by_id(parent_id)
+            if parent is None:
+                return (parent_id, {}, [])
+            child_items = parent.children
+            properties = self._menu_properties(parent, property_names)
+
+        children = []
+        if recursion_depth != 0:
+            child_depth = (
+                recursion_depth - 1
+                if recursion_depth > 0
+                else recursion_depth
+            )
+            children = [
+                Variant(
+                    "(ia{sv}av)",
+                    self._layout_item(item, child_depth, property_names),
+                )
+                for item in child_items
+            ]
+        return (
+            parent_id,
+            properties,
             children,
         )
 
@@ -544,6 +682,8 @@ class StatusNotifierBackend:
         if (
             item is None
             or item.separator
+            or item.children
+            or not item.action
             or not item.enabled
             or event_id not in {"clicked", "activated"}
         ):
@@ -567,8 +707,19 @@ class StatusNotifierBackend:
         Variant = self._GLib.Variant
         values = parameters.unpack()
         if method_name == "GetLayout":
+            parent_id, recursion_depth, property_names = values
             invocation.return_value(
-                Variant("(u(ia{sv}av))", (self._revision, self._layout()))
+                Variant(
+                    "(u(ia{sv}av))",
+                    (
+                        self._revision,
+                        self._layout(
+                            parent_id,
+                            recursion_depth,
+                            tuple(property_names),
+                        ),
+                    ),
+                )
             )
             return
         if method_name == "GetGroupProperties":
@@ -644,6 +795,7 @@ class TrayRuntime:
         Gio,
         GLib,
         open_diagnostics: Callable[[], None],
+        on_auth_cleared: Callable[[], None] | None = None,
     ):
         self._application = application
         self._lifecycle = lifecycle
@@ -655,7 +807,13 @@ class TrayRuntime:
         self._Gio = Gio
         self._GLib = GLib
         self._open_diagnostics = open_diagnostics
+        self._on_auth_cleared = (
+            on_auth_cleared
+            if callable(on_auth_cleared)
+            else lambda: None
+        )
         self._worker_lock = threading.Lock()
+        self._auth_refresh_pending = False
         self._notification_counter = 0
         self._last_detail_code = ""
         self._auth_window = None
@@ -668,13 +826,16 @@ class TrayRuntime:
         )
 
     def start(self) -> bool:
+        # Resolve an existing wallet/session token and daemon state before the
+        # StatusNotifierItem is registered so Plasma never caches the default
+        # menu and icon as the tray's initial authoritative state.
+        self._controls.refresh()
+        self._update_menu()
         active = self._backend.start()
         self._lifecycle.set_tray_active(active)
         if active:
             self._application.hold()
             self._GLib.timeout_add_seconds(5, self._periodic_refresh)
-        self._update_menu()
-        self.refresh_async()
         return active
 
     def _periodic_refresh(self) -> bool:
@@ -757,6 +918,10 @@ class TrayRuntime:
         finally:
             if self._worker_lock.locked():
                 self._worker_lock.release()
+        if self._auth_refresh_pending:
+            self._auth_refresh_pending = False
+            if not self._run_worker(self._controls.refresh):
+                self._auth_refresh_pending = True
         return False
 
     def _run_worker(
@@ -764,9 +929,9 @@ class TrayRuntime:
         call: Callable[[], object],
         *,
         pending_action: str | None = None,
-    ) -> None:
+    ) -> bool:
         if not self._worker_lock.acquire(blocking=False):
-            return
+            return False
         if pending_action is not None:
             self._controls.mark_operation_pending(pending_action)
         self._update_menu()
@@ -792,9 +957,18 @@ class TrayRuntime:
             name="vrhotspot-tray-operation",
             daemon=True,
         ).start()
+        return True
 
     def refresh_async(self) -> None:
         self._run_worker(self._controls.refresh)
+
+    def refresh_after_auth_change(self) -> None:
+        """Guarantee one refresh after shared authentication state changes."""
+
+        if self._run_worker(self._controls.refresh):
+            self._auth_refresh_pending = False
+        else:
+            self._auth_refresh_pending = True
 
     def _open_authentication(self) -> None:
         if self._auth_window is not None:
@@ -903,7 +1077,7 @@ class TrayRuntime:
             token = ""
         status.set_text(result.message)
         save_securely.set_active(result.securely_saved)
-        self.refresh_async()
+        self.refresh_after_auth_change()
 
     def _auth_test(self, entry, status) -> None:
         token = entry.get_text()
@@ -961,15 +1135,15 @@ class TrayRuntime:
         entry.set_text("")
         result = self._authentication.clear()
         status.set_text(result.message)
-        self.refresh_async()
+        try:
+            self._on_auth_cleared()
+        except Exception:
+            pass
+        self.refresh_after_auth_change()
 
     def dispatch_action(self, action: str) -> None:
         state = self._controls.state
-        if action == "show":
-            self.show()
-        elif action == "hide":
-            self.hide()
-        elif action == "start":
+        if action == "start":
             self._run_worker(
                 lambda: self._controls.perform("start"),
                 pending_action="start",

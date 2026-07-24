@@ -1,17 +1,17 @@
 # Flatpak control app architecture plan
 
-Status: PR #92 Web Portal-only Flatpak graphical UI; PRs #77-#91 retained
+Status: PR #93 shared Web Portal/tray companion authentication; PRs #77-#92 retained
 
 Date: 2026-07-24
 
 This document defines the boundary for the VRhotspot Flatpak control
 application. PR #92 makes the origin-locked, daemon-served Web Portal the only
-Flatpak graphical UI. Normal launch, tray primary activation, and
-**Show VR Hotspot** all open or restore one locked WebKitGTK window;
-**Hide VR Hotspot** and close-to-tray hide that same window. The pre-PR #92 GTK
-content implementation, its token-entry flow, and every launch or failure path
-that could reach it have been removed from active code. GTK remains only for
-the WebKit host window, tray integration, the explicit authentication dialog,
+Flatpak graphical UI. Normal launch and tray primary activation open or restore
+one locked WebKitGTK window; close-to-tray hides that same window. Redundant
+Show and Hide menu commands are not exported. The pre-PR #92 GTK content
+implementation, its token-entry flow, and every launch or failure path that
+could reach it have been removed from active code. GTK remains only for the
+WebKit host window, tray integration, the explicit authentication dialog,
 bounded error surfaces, and small desktop utility dialogs.
 
 PR #90's fixed 1.75x WebKit display zoom and PR #88's exact loopback origin,
@@ -21,9 +21,11 @@ copy; it never opens another graphical surface. The browser `/ui` route
 continues to use the shared assets at normal browser scale.
 
 PR #83's explicit terminal-only live daemon pairing smoke path and PR #84's
-optional installer prompt remain. PR #92 does not inject a token into WebKit,
-change the shared Web Portal assets, add direct host command execution, add host
-filesystem access, or move privileged network ownership out of the daemon.
+optional installer prompt remain. PR #93 connects the Portal and tray through a
+bounded, fixed-origin, in-memory WebKit authentication bridge and the existing
+companion wallet/session controller. It adds no direct host command execution,
+host filesystem access, token argument or discovery path, permission, or change
+to the daemon's privileged network ownership.
 
 ## Architectural decision
 
@@ -690,12 +692,12 @@ PR #91 makes the optional Flatpak companion a persistent desktop utility while
 keeping `vr-hotspotd` as the sole privileged host-mutation boundary. An explicit
 `--tray` launch mode owns a StatusNotifierItem and DBusMenu. PR #92 changes its
 lifecycle-owned window to the locked Web Portal shell: it is shown initially,
-restored on primary tray activation or **Show VR Hotspot**, and hidden by
-**Hide VR Hotspot** or close-to-tray. Repeated activation reuses the same
-window. `Quit VR Hotspot` exits only the companion; it does not issue a hotspot
-stop request. If the tray backend cannot register, the Web Portal window still
-opens and closes normally instead of crashing or becoming hidden without a
-reachable tray icon.
+restored on primary tray activation, and hidden by close-to-tray. Repeated
+activation reuses the same window, so redundant Show and Hide menu commands are
+not exported. `Quit VR Hotspot` exits only the companion; it does not issue a
+hotspot stop request. If the tray backend cannot register, the Web Portal
+window still opens and closes normally instead of crashing or becoming hidden
+without a reachable tray icon.
 
 The GNOME 50 runtime provides Gio/GDBus and libsecret but does not provide an
 AppIndicator/Ayatana binding. The tray therefore implements the standard
@@ -773,15 +775,65 @@ Tray status distinguishes `Running`, `Stopped`, `Transitioning`,
 `Needs Authentication`, `Daemon Unavailable`, and `Error`. Missing, rejected,
 or daemon-missing credentials map to `Needs Authentication`; connection
 failure maps to `Daemon Unavailable`; only unexpected or malformed failures
-map to `Error`. Authentication remains enabled while credentials are needed.
-Start, Stop, Restart, and Repair require an authenticated state, and saving or
-testing an explicitly entered token triggers a status refresh.
+map to `Error`. The saved wallet/session state and daemon status are resolved
+before the tray item is registered, so the initial icon, tooltip, and command
+sensitivity use the authenticated live state. Authentication remains enabled
+while credentials are needed. Authenticated `Stopped` enables Start, Restart,
+and Repair; authenticated `Running` enables Stop, Restart, and Repair.
+Transitioning disables conflicting mutations and alone requests the working
+attention state. Needs Authentication and Stopped remain static. Saving or
+testing an explicitly entered token triggers a serialized status refresh.
 
-The exported menu uses deterministic separator-delimited sections in this
-order: Window (Show, Hide), Status (current status, refresh), Hotspot Controls
-(Start, Stop, Restart, Repair), Settings (internet sharing, privacy, hotspot
-autostart), Authentication, Tools (Diagnostics), and Quit. There is no second
-menu action for opening the already-default graphical shell.
+The exported menu is deterministic and grouped without duplicating submenu
+actions at the top level. Current status remains at the top. **Hotspot
+Commands** contains Start, Stop, Restart, and Repair; **Network** contains Share
+Internet Connection; and **Advanced** contains Authentication, Refresh Status,
+Open Diagnostics, Privacy Mode, and Start Hotspot Automatically. Quit remains
+top-level and exits only the companion. Start Hotspot Automatically controls
+daemon/hotspot boot autostart, not desktop-companion login autostart. Launch at
+Logon remains deferred and no tray item is exported for it. Primary activation
+is the only tray action that opens or restores the already-default graphical
+shell.
+
+## PR #93 shared Portal and tray authentication state
+
+PR #93 treats the Web Portal shell and tray as two surfaces of one companion
+process, not as separate authentication clients. Both use the existing
+`AuthenticationController`. An explicitly entered token is still accepted only
+after the Portal's authenticated status request succeeds. The origin-locked
+WebKit page then sends one bounded, versioned message to the host; the host
+adopts the token in memory, stores it in the app-specific Secret Service wallet
+when that provider is available, and requests an immediate tray refresh.
+
+The reverse path is equally narrow. On launch, the existing authentication
+controller may retrieve the matching app-specific wallet item. The Portal can
+request that current wallet/session token only through WebKit's in-memory
+script-message reply mechanism. The credential is not placed in a URL, query
+string, command argument, local file, log, notification, menu label, smoke JSON,
+or exception. The bridge accepts only fixed protocol message shapes, enforces
+token and message-size limits, and responds only while the WebView is at the
+exact loopback origin used by `/ui` and its same-origin assets.
+
+Portal logout and token clearing clear the companion's session and matching
+wallet item and refresh the tray. Clearing through the tray authentication
+dialog also clears the Portal's in-memory session. If Secret Service is
+unavailable, an accepted Portal token remains usable only in the current
+companion process; it is not persisted elsewhere.
+
+The companion never invokes sudo or searches `/etc/vr-hotspot/env`,
+`/var/lib/vr-hotspot`, daemon configuration, environment variables, or command
+arguments for credentials. PR #93 adds no filesystem, host/home, device,
+system-bus, or other Flatpak permission. The exact WebKit origin and navigation
+lock, CSP, ephemeral network session, and 1.75x zoom remain unchanged.
+
+Tray status and icon policy is explicit. Missing or rejected credentials map to
+`Needs Authentication`, not `Error`; the authentication action stays enabled
+and daemon controls stay disabled. Daemon connection failure maps to
+`Daemon Unavailable`. An authenticated running hotspot maps to `Running`, and
+an authenticated stopped hotspot maps to `Stopped`, with controls enabled
+according to those states. `Needs Authentication` is static. The working
+attention/pulsing state is used only for `Transitioning` while Start, Stop,
+Restart, Repair, or another serialized operation is active.
 
 ## Sandbox and portal expectations
 
@@ -880,7 +932,8 @@ bounded, cleaned up, and contain only the already-sanitized daemon output.
 | PR #89 | Web Portal shell layout and theme polish. Improve shared Portal CSS across viewport sizes and WebKitGTK form controls. | Asset tests prove responsive layout, dark control states, retained Basic/Pro behavior, and one daemon-served asset source for browser and Flatpak. |
 | PR #90 | Flatpak Web Portal shell scaling/density polish. Apply fixed bounded 1.75x WebKit zoom to the locked shell. | Tests prove fixed zoom/clamping, no user-controlled scale, normal browser scale, and unchanged origin/session/token boundaries. |
 | PR #91 | Flatpak system-tray control surface and desktop identity. Add StatusNotifierItem/DBusMenu, close-to-tray, typed live state, fixed controls, explicit Secret Service authentication, and cyan/black icons. | Tests prove complete menu/state mapping, serialized mutations, refresh-after-success, companion-only quit, safe wallet behavior, narrow D-Bus grants, and installed icon identity. |
-| PR #92 | Web Portal-only Flatpak graphical UI. Delete the retired GTK content surface and all routes/tests supporting it; make default and tray window behavior use one locked Web Portal shell; classify authentication and daemon availability separately; organize the tray menu. | Tests prove default/alias/tray activation, show/hide/close and single-window behavior, bounded WebKit errors with no alternate surface, retained origin/CSP/session/zoom locks, six status classes, explicit-auth refresh, deterministic menu sections, no credential leakage, unchanged permissions, and zero forbidden active references. |
+| PR #92 | Web Portal-only Flatpak graphical UI. Delete the retired GTK content surface and all routes/tests supporting it; make default and tray window behavior use one locked Web Portal shell; classify authentication and daemon availability separately; organize the tray menu. | Tests prove default/alias/tray activation, close-to-tray and single-window behavior, bounded WebKit errors with no alternate surface, retained origin/CSP/session/zoom locks, six status classes, explicit-auth refresh, deterministic menu sections, no credential leakage, unchanged permissions, and zero forbidden active references. |
+| PR #93 | Shared Web Portal/tray companion authentication. Connect accepted Portal entry and logout to the existing wallet/in-memory session controller, supply an existing wallet token only through a bounded fixed-origin WebKit reply, refresh tray state immediately, and reserve working attention for transitions. | Tests prove bidirectional sync, wallet and current-process fallback behavior, strict message/origin bounds, clear synchronization, token secrecy, correct auth/running/unavailable state and menu mapping, static auth-needed indication, retained WebKit locks, unchanged permissions, and no native dashboard. |
 | Later, separately approved work | Steam Frame and VR Direct Link evidence-based research, followed by any separately approved adapter-intelligence work. | Work begins from lawful public or user-provided evidence and does not claim support before hardware, driver, regulatory, and security validation. |
 
 Each phase is independently reviewable. A later phase is not authorized merely
@@ -961,17 +1014,16 @@ reporting. Flatpak work must not weaken or bypass those controls.
   be downloaded, bundled, redistributed, or collected as a side effect of
   Flatpak installation or use.
 
-## Explicit non-goals for PR #92
+## Explicit non-goals for PR #93
 
 - No second graphical shell, alternate failure UI, legacy launch route, or
   development-only route for the removed GTK content surface.
-- No Web UI JavaScript, CSS, route, CSP, origin, navigation, token, or session
-  behavior change.
+- No Web UI route, CSS, CSP, origin, navigation, ephemeral-session, or zoom
+  change outside the narrow companion authentication bridge.
 - No arbitrary URL argument, address bar, external/new-window navigation,
   remote-site load, or general browser.
 - No token CLI argument, discovery endpoint, direct `/etc` or `/var/lib`
-  secret read, plaintext credential file, automatic copy/reveal, or WebKit
-  token injection.
+  secret read, plaintext credential file, or automatic copy/reveal.
 - No desktop-login companion autostart. It remains distinct from existing
   hotspot boot autostart and requires a separately reviewed reliable mechanism.
 - No generic daemon configuration or systemd-control API. The new endpoint is
@@ -986,10 +1038,11 @@ reporting. Flatpak work must not weaken or bypass those controls.
 - No Steam Frame, VR Direct Link, known-adapter registry, or
   HostFactsSnapshot work.
 
-PR #92 authorizes only deletion of the retired GTK content surface, the default
-and tray-window Web Portal cutover, status classification correction, menu
-organization, deterministic tests, and documentation above. It does not change
-the fixed autostart API, session-bus grants, desktop identity, or permissions.
-A real daemon pairing or live lifecycle result is claimed only when exercised
-with an explicitly entered credential; no credential is printed or exported in
-validation.
+PR #93 authorizes only the fixed-origin WebKit authentication bridge, reuse of
+the existing companion wallet/session state, Portal/tray clear synchronization,
+tray status and attention-icon correction, deterministic tests, and
+documentation above. It does not change the fixed autostart API, session-bus
+grants, desktop identity, WebKit security boundaries, or permissions. A real
+daemon pairing or live lifecycle result is claimed only when exercised with an
+explicitly entered or previously saved credential; no credential is printed or
+exported in validation.

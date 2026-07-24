@@ -299,6 +299,19 @@ class FakeWebKitSettings:
         raise AttributeError(name)
 
 
+class FakeWebKitUserContentManager:
+    def __init__(self):
+        self.signal_handlers = {}
+        self.registrations = []
+
+    def connect(self, signal, handler):
+        self.signal_handlers[signal] = handler
+
+    def register_script_message_handler_with_reply(self, name, world_name):
+        self.registrations.append((name, world_name))
+        return True
+
+
 class FakeWebKitWebView(FakeGtkWidget):
     created = []
     last_created = None
@@ -308,14 +321,27 @@ class FakeWebKitWebView(FakeGtkWidget):
         self.properties = properties
         self.loaded_uris = []
         self.zoom_levels = []
+        self.current_uri = ""
+        self.user_content_manager = FakeWebKitUserContentManager()
+        self.evaluated_scripts = []
         type(self).created.append(self)
         type(self).last_created = self
 
     def load_uri(self, uri):
         self.loaded_uris.append(uri)
+        self.current_uri = uri
 
     def set_zoom_level(self, zoom_level):
         self.zoom_levels.append(zoom_level)
+
+    def get_uri(self):
+        return self.current_uri
+
+    def get_user_content_manager(self):
+        return self.user_content_manager
+
+    def evaluate_javascript(self, *arguments):
+        self.evaluated_scripts.append(arguments)
 
 
 class FakeWebKit:
@@ -528,6 +554,234 @@ def test_locked_web_portal_view_is_ephemeral_zoomed_and_has_no_injection():
         assert forbidden not in source
 
 
+class FakeJavascriptValue:
+    def __init__(self, value):
+        self.value = value
+
+    @classmethod
+    def new_string(cls, _context, value):
+        return cls(value)
+
+    def get_context(self):
+        return object()
+
+    def is_string(self):
+        return isinstance(self.value, str)
+
+    def to_string(self):
+        return self.value
+
+
+class FakeScriptReply:
+    def __init__(self):
+        self.value = None
+
+    def return_value(self, value):
+        self.value = value.value
+
+
+class FakeBridgeAuthentication:
+    def __init__(self, *, token=None):
+        self.token = token
+        self.saved = []
+        self.clear_calls = 0
+
+    def token_for_operation(self):
+        return self.token
+
+    def save_or_replace(self, token, *, save_securely):
+        self.saved.append((bool(token), save_securely))
+        self.token = token
+        return type(
+            "Result",
+            (),
+            {
+                "code": "saved_securely",
+                "token_available": True,
+            },
+        )()
+
+    def clear(self):
+        self.token = None
+        self.clear_calls += 1
+
+
+def _bridge_message(message):
+    return FakeJavascriptValue(json.dumps(message)), FakeScriptReply()
+
+
+def test_web_portal_auth_success_updates_shared_state_and_refreshes_tray():
+    from flatpak_app import app
+
+    secret = "accepted-portal-value"
+    authentication = FakeBridgeAuthentication()
+    bridge = app.WebPortalAuthBridge(authentication)
+    refreshes = []
+    bridge.set_auth_changed_callback(lambda: refreshes.append("refresh"))
+    web_view = FakeWebKitWebView()
+    web_view.current_uri = f"{app.WEB_PORTAL_ORIGIN}/ui"
+    value, reply = _bridge_message(
+        {
+            "version": app.WEB_PORTAL_AUTH_PROTOCOL_VERSION,
+            "type": "auth_accepted",
+            "token": secret,
+        }
+    )
+
+    assert bridge.handle_message(web_view, value, reply) is True
+
+    assert authentication.saved == [(True, True)]
+    assert refreshes == ["refresh"]
+    assert reply.value == "accepted"
+    assert secret not in repr(bridge)
+    assert secret not in repr(authentication.saved)
+
+
+def test_wallet_token_reply_is_fixed_origin_only_and_never_enters_bridge_repr():
+    from flatpak_app import app
+
+    secret = "wallet-value-for-fixed-origin"
+    authentication = FakeBridgeAuthentication(token=secret)
+    bridge = app.WebPortalAuthBridge(authentication)
+    value, reply = _bridge_message(
+        {
+            "version": app.WEB_PORTAL_AUTH_PROTOCOL_VERSION,
+            "type": "token_request",
+        }
+    )
+    web_view = FakeWebKitWebView()
+    web_view.current_uri = f"{app.WEB_PORTAL_ORIGIN}/assets/ui.js"
+
+    assert bridge.handle_message(web_view, value, reply) is True
+    assert reply.value == secret
+    assert secret not in repr(bridge)
+
+    rejected_value, rejected_reply = _bridge_message(
+        {
+            "version": app.WEB_PORTAL_AUTH_PROTOCOL_VERSION,
+            "type": "token_request",
+        }
+    )
+    web_view.current_uri = "https://example.com/ui"
+    assert bridge.handle_message(
+        web_view,
+        rejected_value,
+        rejected_reply,
+    ) is False
+    assert rejected_reply.value == "rejected"
+
+    same_origin_value, same_origin_reply = _bridge_message(
+        {
+            "version": app.WEB_PORTAL_AUTH_PROTOCOL_VERSION,
+            "type": "token_request",
+        }
+    )
+    web_view.current_uri = f"{app.WEB_PORTAL_ORIGIN}/v1/status"
+    assert bridge.handle_message(
+        web_view,
+        same_origin_value,
+        same_origin_reply,
+    ) is False
+    assert same_origin_reply.value == "rejected"
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        None,
+        [],
+        {"version": True, "type": "token_request"},
+        {"version": 2, "type": "token_request"},
+        {"version": 1, "type": "unknown"},
+        {"version": 1, "type": "token_request", "extra": True},
+        {"version": 1, "type": "auth_accepted"},
+        {"version": 1, "type": "auth_accepted", "token": ""},
+    ),
+)
+def test_web_portal_auth_bridge_rejects_invalid_message_schema(message):
+    from flatpak_app import app
+
+    authentication = FakeBridgeAuthentication()
+    bridge = app.WebPortalAuthBridge(authentication)
+    web_view = FakeWebKitWebView()
+    web_view.current_uri = app.WEB_PORTAL_URL
+    value = FakeJavascriptValue(json.dumps(message))
+    reply = FakeScriptReply()
+
+    assert bridge.handle_message(web_view, value, reply) is False
+    assert reply.value == "rejected"
+    assert authentication.saved == []
+
+
+def test_web_portal_auth_bridge_bounds_message_bytes_before_parsing():
+    from flatpak_app import app
+
+    bridge = app.WebPortalAuthBridge(FakeBridgeAuthentication())
+    web_view = FakeWebKitWebView()
+    web_view.current_uri = app.WEB_PORTAL_URL
+    value = FakeJavascriptValue(
+        "x" * (app.MAX_WEB_PORTAL_AUTH_MESSAGE_BYTES + 1)
+    )
+    reply = FakeScriptReply()
+
+    assert bridge.handle_message(web_view, value, reply) is False
+    assert reply.value == "rejected"
+
+
+def test_web_portal_clear_syncs_shared_auth_and_refreshes_tray():
+    from flatpak_app import app
+
+    authentication = FakeBridgeAuthentication(token="present")
+    bridge = app.WebPortalAuthBridge(authentication)
+    refreshes = []
+    bridge.set_auth_changed_callback(lambda: refreshes.append("refresh"))
+    web_view = FakeWebKitWebView()
+    web_view.current_uri = app.WEB_PORTAL_URL
+    value, reply = _bridge_message(
+        {
+            "version": app.WEB_PORTAL_AUTH_PROTOCOL_VERSION,
+            "type": "auth_cleared",
+        }
+    )
+
+    assert bridge.handle_message(web_view, value, reply) is True
+    assert authentication.clear_calls == 1
+    assert authentication.token is None
+    assert refreshes == ["refresh"]
+    assert reply.value == "cleared"
+
+
+def test_web_portal_bridge_registration_and_host_clear_stay_fixed_origin():
+    from flatpak_app import app
+
+    bridge = app.WebPortalAuthBridge(FakeBridgeAuthentication())
+    web_view = app._build_locked_web_portal_view(
+        FakeWebKit,
+        auth_bridge=bridge,
+    )
+    manager = web_view.user_content_manager
+    signal = (
+        "script-message-with-reply-received::"
+        f"{app.WEB_PORTAL_AUTH_HANDLER}"
+    )
+
+    assert manager.registrations == [(app.WEB_PORTAL_AUTH_HANDLER, None)]
+    assert signal in manager.signal_handlers
+
+    web_view.current_uri = app.WEB_PORTAL_URL
+    bridge.clear_web_portal_session()
+    assert len(web_view.evaluated_scripts) == 1
+    script_call = web_view.evaluated_scripts[0]
+    assert script_call[0] == bridge._CLEAR_PORTAL_SCRIPT
+    assert script_call[3] == (
+        f"{app.WEB_PORTAL_ORIGIN}/companion-auth-bridge"
+    )
+
+    web_view.current_uri = "https://example.com/"
+    bridge.clear_web_portal_session()
+    assert len(web_view.evaluated_scripts) == 1
+
+
 @pytest.mark.parametrize(
     ("configured_zoom", "expected_zoom"),
     ((-100.0, 1.0), (100.0, 2.0)),
@@ -624,6 +878,12 @@ def test_tray_primary_activation_restores_single_web_portal_window(monkeypatch):
 
         def start(self):
             return True
+
+        def refresh_async(self):
+            pass
+
+        def refresh_after_auth_change(self):
+            pass
 
         def close_request(self, *_args):
             return self.lifecycle.close_request(*_args)
@@ -956,7 +1216,7 @@ def test_live_smoke_rejects_getpass_echo_fallback(capsys):
     assert secret not in rendered
 
 
-def test_web_portal_shell_has_no_token_injection_or_persistence_path():
+def test_web_portal_shell_keeps_tokens_out_of_urls_and_webview_configuration():
     from flatpak_app import app
 
     source = "\n".join(
