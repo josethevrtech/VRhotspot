@@ -78,6 +78,16 @@ def _stub_bundle_sources(monkeypatch):
     )
     monkeypatch.setattr(
         api,
+        "collect_devbridge_status",
+        lambda: {
+            "schema_version": 1,
+            "mode": "read_only",
+            "adb_tcp_port": 5555,
+            "host_adb": {"present": False, "path": None},
+        },
+    )
+    monkeypatch.setattr(
+        api,
         "collect_vendor_provenance",
         lambda **kwargs: {
             "report_schema_version": 1,
@@ -145,6 +155,9 @@ def test_support_bundle_returns_zip_headers_and_required_members(monkeypatch):
     assert headers["content-disposition"].endswith(".zip\"")
     assert "manifest.json" in members
     assert "README.txt" in members
+    assert "vr-hotspot/devbridge.json" in members
+    devbridge_member = json.loads(members["vr-hotspot/devbridge.json"].decode("utf-8"))
+    assert devbridge_member["mode"] == "read_only"
     bundle_manifest = json.loads(members["manifest.json"].decode("utf-8"))
     vendor_provenance = json.loads(
         members["vr-hotspot/vendor_provenance.json"].decode("utf-8")

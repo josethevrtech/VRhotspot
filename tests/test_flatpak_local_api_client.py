@@ -281,6 +281,10 @@ def test_client_exposes_only_reviewed_routes_and_no_generic_public_request_metho
     assert public_methods == {
         "adapter_readiness",
         "config",
+        "devbridge_adb_commands",
+        "devbridge_devices",
+        "devbridge_readiness",
+        "devbridge_status",
         "health",
         "portal_request",
         "preflight_report",

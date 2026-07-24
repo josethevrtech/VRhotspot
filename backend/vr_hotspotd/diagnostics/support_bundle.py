@@ -203,6 +203,7 @@ SUPPORT_BUNDLE_ARCHIVE_LAYOUT = (
     ArchiveFileMetadata("vr-hotspot/status.json", "vr hotspot status", "application/json"),
     ArchiveFileMetadata("vr-hotspot/adapters.json", "vr hotspot adapters", "application/json"),
     ArchiveFileMetadata("vr-hotspot/readiness.json", "vr hotspot readiness", "application/json"),
+    ArchiveFileMetadata("vr-hotspot/devbridge.json", "vr hotspot dev bridge", "application/json"),
     ArchiveFileMetadata(
         "vr-hotspot/vendor_provenance.json",
         "vendor provenance",

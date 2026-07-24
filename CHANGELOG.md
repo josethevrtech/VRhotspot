@@ -25,6 +25,15 @@ Fedora, and Pop!_OS users.
 
 ### Completed v1.1.0 work in this branch
 
+- Add the read-only ADB Dev Bridge foundation for standalone VR headset
+  development: authenticated `GET /v1/devbridge/status`, `/devices`, `/adb`,
+  and `/readiness` endpoints, `vr-hotspot devbridge
+  status|scan|adb-command|logcat-command` CLI commands, an optional TCP
+  reachability probe of ADB port 5555, copyable-only `adb connect`, Wireless
+  Debugging pairing, and logcat helper commands (never executed by the
+  daemon), Unity Build & Run readiness checks with copyable next steps, and a
+  safe `vr-hotspot/devbridge.json` support-bundle section.
+
 - Add authenticated `GET /v1/adapters/readiness` endpoint for Adapter
   Intelligence v2 summaries, reason codes, Basic Mode recommendation data, and
   no-adapter responses.

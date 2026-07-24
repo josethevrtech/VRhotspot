@@ -18,6 +18,7 @@ if str(BACKEND) not in sys.path:
 _ALLOW_REAL_SYSTEM_COMMANDS = "VR_HOTSPOT_TEST_ALLOW_REAL_SYSTEM_COMMANDS"
 _BLOCKED_SYSTEM_COMMANDS = frozenset(
     {
+        "adb",
         "nmcli",
         "iw",
         "iwctl",

@@ -243,6 +243,18 @@ Enter the **API token** shown during installation to access the interface.
 - `POST /v1/diagnostics/ping_under_load` - Performance under load
 - `GET /v1/diagnostics/support_bundle` - Download a sanitized support bundle
 
+**ADB Dev Bridge (read-only, for standalone headset development):**
+- `GET /v1/devbridge/status` - Hotspot/subnet state, host adb presence, and
+  detected device counts
+- `GET /v1/devbridge/devices` - Devices on the hotspot with an optional ADB
+  TCP (port 5555) reachability check (`?probe=0` to skip)
+- `GET /v1/devbridge/adb` - Copyable `adb connect`/pairing/logcat commands
+  (`?ip=`, `?kind=connect|logcat|all`); the daemon never executes adb
+- `GET /v1/devbridge/readiness` - Unity Build & Run readiness checks; every
+  failed check includes a copyable next step
+- `vr-hotspot devbridge status|scan|adb-command|logcat-command` - The same
+  data through the authenticated CLI; see `docs/dev-bridge.md`
+
 ### 🔥 Firewalld Integration (SteamOS-Friendly)
 
 When `firewalld` is running, the daemon uses `firewall-cmd` (not raw nftables/iptables):

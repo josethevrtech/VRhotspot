@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import errno
 import getpass
+import ipaddress
 import json
 import os
 from pathlib import Path
 import sys
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from urllib.request import build_opener, HTTPRedirectHandler, Request
 import uuid
 
@@ -19,6 +20,10 @@ import uuid
 DEFAULT_API_URL = "http://127.0.0.1:8732"
 DEFAULT_ENV_FILE = "/etc/vr-hotspot/env"
 PREFLIGHT_PATH = "/v1/diagnostics/preflight"
+DEVBRIDGE_STATUS_PATH = "/v1/devbridge/status"
+DEVBRIDGE_DEVICES_PATH = "/v1/devbridge/devices"
+DEVBRIDGE_ADB_PATH = "/v1/devbridge/adb"
+DEVBRIDGE_READINESS_PATH = "/v1/devbridge/readiness"
 
 _ENV_KEYS = {
     "VR_HOTSPOTD_API_TOKEN",
@@ -35,7 +40,7 @@ class CLIError(RuntimeError):
 def _redirect_error(status: int) -> CLIError:
     return CLIError(
         f"API request was redirected (HTTP {status}); redirects are not allowed for "
-        "vr-hotspot preflight."
+        "the vr-hotspot CLI."
     )
 
 
@@ -232,20 +237,23 @@ def _transport_cli_error(
     )
 
 
-def fetch_preflight_report(
+def _fetch_api_data(
     api_url: str,
+    path: str,
     *,
     token: str = "",
     timeout: float = 15.0,
+    correlation_prefix: str = "cli",
+    payload_description: str = "a response payload",
 ) -> Dict[str, Any]:
-    """Fetch and return only the canonical report from the API envelope."""
+    """Fetch one GET endpoint and return only the data from the API envelope."""
 
-    endpoint = _validated_api_url(api_url) + PREFLIGHT_PATH
+    endpoint = _validated_api_url(api_url) + path
     token = _validated_token(token)
     headers = {
         "Accept": "application/json",
         "User-Agent": "vr-hotspot-cli",
-        "X-Correlation-Id": f"cli-preflight-{uuid.uuid4()}",
+        "X-Correlation-Id": f"{correlation_prefix}-{uuid.uuid4()}",
     }
     if token:
         headers["X-Api-Token"] = token
@@ -288,13 +296,33 @@ def fetch_preflight_report(
         raise CLIError(f"The VR Hotspot API returned {safe_result_code}.")
     report = payload.get("data")
     if not isinstance(report, Mapping):
-        raise CLIError("The VR Hotspot API response did not contain a preflight report.")
+        raise CLIError(
+            f"The VR Hotspot API response did not contain {payload_description}."
+        )
     if _contains_secret(report, token):
         raise CLIError(
             "The VR Hotspot API returned a report containing the authentication token; "
             "refusing to print or export it."
         )
     return dict(report)
+
+
+def fetch_preflight_report(
+    api_url: str,
+    *,
+    token: str = "",
+    timeout: float = 15.0,
+) -> Dict[str, Any]:
+    """Fetch and return only the canonical preflight report from the API envelope."""
+
+    return _fetch_api_data(
+        api_url,
+        PREFLIGHT_PATH,
+        token=token,
+        timeout=timeout,
+        correlation_prefix="cli-preflight",
+        payload_description="a preflight report",
+    )
 
 
 def _positive_timeout(value: str) -> float:
@@ -307,21 +335,12 @@ def _positive_timeout(value: str) -> float:
     return timeout
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="vr-hotspot",
-        description="Read-only client for the VR Hotspot daemon API.",
-    )
-    commands = parser.add_subparsers(dest="command", required=True)
-    preflight_parser = commands.add_parser(
-        "preflight",
-        help="Print or export the daemon's canonical preflight diagnostics report.",
-    )
-    preflight_parser.add_argument(
+def _add_client_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
         "--api-url",
         help=f"Daemon API base URL (default: {DEFAULT_API_URL}).",
     )
-    token_group = preflight_parser.add_mutually_exclusive_group()
+    token_group = parser.add_mutually_exclusive_group()
     token_group.add_argument(
         "--token",
         metavar="TOKEN",
@@ -335,27 +354,110 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Read the API token from stdin without echoing it on an interactive terminal.",
     )
-    preflight_parser.add_argument(
+    parser.add_argument(
         "--env-file",
         default=os.environ.get("VR_HOTSPOTD_ENV_FILE", DEFAULT_ENV_FILE),
         help=f"Daemon environment file (default: {DEFAULT_ENV_FILE}).",
     )
-    preflight_parser.add_argument(
+    parser.add_argument(
         "--output",
         default="-",
         metavar="PATH",
         help=(
-            "Write canonical report JSON to a new mode-0600 PATH; existing paths and "
+            "Write the JSON result to a new mode-0600 PATH; existing paths and "
             "symlinks are refused. Use - for stdout."
         ),
     )
-    preflight_parser.add_argument(
+    parser.add_argument(
         "--timeout",
         type=_positive_timeout,
         default=15.0,
         metavar="SECONDS",
         help="HTTP request timeout (default: 15).",
     )
+
+
+def _validated_ipv4_argument(value: str) -> str:
+    try:
+        ipaddress.IPv4Address(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "must be an IPv4 address, for example 192.168.68.23"
+        ) from exc
+    return value
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="vr-hotspot",
+        description="Read-only client for the VR Hotspot daemon API.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    preflight_parser = commands.add_parser(
+        "preflight",
+        help="Print or export the daemon's canonical preflight diagnostics report.",
+    )
+    _add_client_arguments(preflight_parser)
+
+    devbridge_parser = commands.add_parser(
+        "devbridge",
+        help=(
+            "Read-only ADB Dev Bridge helpers for standalone VR headset development. "
+            "Never executes adb; only prints copyable commands."
+        ),
+    )
+    devbridge_commands = devbridge_parser.add_subparsers(
+        dest="devbridge_command",
+        required=True,
+    )
+
+    devbridge_status_parser = devbridge_commands.add_parser(
+        "status",
+        help="Print the Dev Bridge status: hotspot state, subnet, and detected devices.",
+    )
+    _add_client_arguments(devbridge_status_parser)
+
+    devbridge_scan_parser = devbridge_commands.add_parser(
+        "scan",
+        help=(
+            "Discover devices on the hotspot network and check ADB TCP reachability "
+            "on port 5555."
+        ),
+    )
+    _add_client_arguments(devbridge_scan_parser)
+    devbridge_scan_parser.add_argument(
+        "--no-probe",
+        action="store_true",
+        help="Skip the TCP reachability check on the ADB port.",
+    )
+
+    devbridge_adb_parser = devbridge_commands.add_parser(
+        "adb-command",
+        help=(
+            "Print copyable adb connect and Wireless Debugging pairing commands; "
+            "nothing is executed."
+        ),
+    )
+    _add_client_arguments(devbridge_adb_parser)
+    devbridge_adb_parser.add_argument(
+        "--ip",
+        type=_validated_ipv4_argument,
+        metavar="IPV4",
+        help="Target headset IPv4 address to generate commands for.",
+    )
+
+    devbridge_logcat_parser = devbridge_commands.add_parser(
+        "logcat-command",
+        help="Print copyable logcat helper commands; logcat is never collected for you.",
+    )
+    _add_client_arguments(devbridge_logcat_parser)
+    devbridge_logcat_parser.add_argument(
+        "--ip",
+        type=_validated_ipv4_argument,
+        metavar="IPV4",
+        help="Target headset IPv4 address to generate commands for.",
+    )
+
     return parser
 
 
@@ -413,7 +515,7 @@ def _write_new_private_file(path: Path, rendered: str, *, token: str) -> None:
         raise write_error
 
 
-def _run_preflight(args: argparse.Namespace) -> int:
+def _resolve_client_settings(args: argparse.Namespace) -> Tuple[str, str]:
     settings = _load_client_settings(Path(args.env_file))
     api_url = _validated_api_url(args.api_url) if args.api_url else _api_url_from_settings(settings)
     if args.token_stdin:
@@ -422,7 +524,16 @@ def _run_preflight(args: argparse.Namespace) -> int:
         token = args.token
     else:
         token = settings.get("VR_HOTSPOTD_API_TOKEN", "")
-    report = fetch_preflight_report(api_url, token=token, timeout=args.timeout)
+    return api_url, token
+
+
+def _emit_json_result(
+    args: argparse.Namespace,
+    report: Mapping[str, Any],
+    *,
+    token: str,
+    description: str,
+) -> int:
     rendered = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
 
     if args.output == "-":
@@ -432,8 +543,57 @@ def _run_preflight(args: argparse.Namespace) -> int:
     output_path = Path(args.output)
     _write_new_private_file(output_path, rendered, token=token)
     safe_output_path = _redacted_error_text(output_path, token)
-    sys.stderr.write(f"Wrote canonical preflight report to {safe_output_path}\n")
+    sys.stderr.write(f"Wrote {description} to {safe_output_path}\n")
     return 0
+
+
+def _run_preflight(args: argparse.Namespace) -> int:
+    api_url, token = _resolve_client_settings(args)
+    report = fetch_preflight_report(api_url, token=token, timeout=args.timeout)
+    return _emit_json_result(
+        args,
+        report,
+        token=token,
+        description="canonical preflight report",
+    )
+
+
+def _devbridge_request(args: argparse.Namespace) -> Tuple[str, str, str]:
+    """Return (path, correlation prefix, payload description) for a devbridge command."""
+
+    subcommand = args.devbridge_command
+    if subcommand == "status":
+        return DEVBRIDGE_STATUS_PATH, "cli-devbridge-status", "a Dev Bridge status report"
+    if subcommand == "scan":
+        path = DEVBRIDGE_DEVICES_PATH
+        if args.no_probe:
+            path += "?" + urlencode({"probe": "0"})
+        return path, "cli-devbridge-scan", "a Dev Bridge device scan"
+    if subcommand in ("adb-command", "logcat-command"):
+        kind = "connect" if subcommand == "adb-command" else "logcat"
+        query = {"kind": kind}
+        if args.ip:
+            query["ip"] = args.ip
+        return (
+            DEVBRIDGE_ADB_PATH + "?" + urlencode(query),
+            f"cli-devbridge-{kind}",
+            "Dev Bridge copyable commands",
+        )
+    raise CLIError(f"unknown devbridge command: {subcommand}")
+
+
+def _run_devbridge(args: argparse.Namespace) -> int:
+    api_url, token = _resolve_client_settings(args)
+    path, correlation_prefix, description = _devbridge_request(args)
+    report = _fetch_api_data(
+        api_url,
+        path,
+        token=token,
+        timeout=args.timeout,
+        correlation_prefix=correlation_prefix,
+        payload_description=description,
+    )
+    return _emit_json_result(args, report, token=token, description=description)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -442,6 +602,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.command == "preflight":
             return _run_preflight(args)
+        if args.command == "devbridge":
+            return _run_devbridge(args)
     except CLIError as exc:
         parser.exit(1, f"vr-hotspot: error: {exc}\n")
     parser.error(f"unknown command: {args.command}")

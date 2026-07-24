@@ -256,6 +256,10 @@ def test_pairing_flow_wires_only_health_and_adapter_readiness():
     assert public_client_methods == {
         "adapter_readiness",
         "config",
+        "devbridge_adb_commands",
+        "devbridge_devices",
+        "devbridge_readiness",
+        "devbridge_status",
         "health",
         "portal_request",
         "preflight_report",

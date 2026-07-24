@@ -27,6 +27,10 @@ _STATUS_WITH_LOGS_PATH = "/v1/status?include_logs=1"
 _CONFIG_PATH = "/v1/config"
 _PREFLIGHT_PATH = "/v1/diagnostics/preflight"
 _ADAPTER_READINESS_PATH = "/v1/adapters/readiness"
+_DEVBRIDGE_STATUS_PATH = "/v1/devbridge/status"
+_DEVBRIDGE_DEVICES_PATH = "/v1/devbridge/devices"
+_DEVBRIDGE_ADB_PATH = "/v1/devbridge/adb"
+_DEVBRIDGE_READINESS_PATH = "/v1/devbridge/readiness"
 _START_PATH = "/v1/start"
 _STOP_PATH = "/v1/stop"
 _RESTART_PATH = "/v1/restart"
@@ -44,6 +48,10 @@ _PORTAL_REQUEST_METHODS = {
     "/v1/adapters/readiness": frozenset({"GET"}),
     "/v1/config": frozenset({"GET", "POST"}),
     "/v1/config/reveal_passphrase": frozenset({"POST"}),
+    "/v1/devbridge/adb": frozenset({"GET"}),
+    "/v1/devbridge/devices": frozenset({"GET"}),
+    "/v1/devbridge/readiness": frozenset({"GET"}),
+    "/v1/devbridge/status": frozenset({"GET"}),
     "/v1/diagnostics/preflight": frozenset({"GET"}),
     "/v1/diagnostics/support_bundle": frozenset({"GET"}),
     "/v1/info": frozenset({"GET"}),
@@ -404,6 +412,26 @@ class LocalApiClient:
         """Fetch the daemon-owned adapter readiness model."""
 
         return self._get_api_response(_ADAPTER_READINESS_PATH)
+
+    def devbridge_status(self) -> ApiResponse:
+        """Fetch the read-only ADB Dev Bridge status."""
+
+        return self._get_api_response(_DEVBRIDGE_STATUS_PATH)
+
+    def devbridge_devices(self) -> ApiResponse:
+        """Fetch the read-only ADB Dev Bridge device scan."""
+
+        return self._get_api_response(_DEVBRIDGE_DEVICES_PATH)
+
+    def devbridge_adb_commands(self) -> ApiResponse:
+        """Fetch copyable adb/logcat commands; the daemon never executes them."""
+
+        return self._get_api_response(_DEVBRIDGE_ADB_PATH)
+
+    def devbridge_readiness(self) -> ApiResponse:
+        """Fetch the read-only ADB Dev Bridge readiness checks."""
+
+        return self._get_api_response(_DEVBRIDGE_READINESS_PATH)
 
     def status(self, *, include_logs: bool = False) -> ApiResponse:
         """Fetch current daemon-owned hotspot state with an explicit log choice."""
