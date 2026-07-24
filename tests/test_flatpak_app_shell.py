@@ -186,6 +186,9 @@ class FakeGtkWidget:
     def set_hexpand(self, _expand):
         pass
 
+    def set_vexpand(self, _expand):
+        pass
+
     def set_column_homogeneous(self, _homogeneous):
         pass
 
@@ -273,6 +276,77 @@ class FakeGtk:
     PasswordEntry = FakeGtkPasswordEntry
 
 
+class FakeCookieManager:
+    def __init__(self):
+        self.accept_policy = None
+
+    def set_accept_policy(self, policy):
+        self.accept_policy = policy
+
+
+class FakeWebKitNetworkSession:
+    last_created = None
+
+    def __init__(self):
+        self.ephemeral = True
+        self.persistent_credentials = None
+        self.cookie_manager = FakeCookieManager()
+        type(self).last_created = self
+
+    @classmethod
+    def new_ephemeral(cls):
+        return cls()
+
+    def is_ephemeral(self):
+        return self.ephemeral
+
+    def set_persistent_credential_storage_enabled(self, enabled):
+        self.persistent_credentials = enabled
+
+    def get_cookie_manager(self):
+        return self.cookie_manager
+
+
+class FakeWebKitSettings:
+    last_created = None
+
+    def __init__(self):
+        self.values = {}
+        type(self).last_created = self
+
+    def __getattr__(self, name):
+        if name.startswith("set_"):
+            return lambda value: self.values.__setitem__(name, value)
+        raise AttributeError(name)
+
+
+class FakeWebKitWebView(FakeGtkWidget):
+    last_created = None
+
+    def __init__(self, **properties):
+        super().__init__()
+        self.properties = properties
+        self.loaded_uris = []
+        type(self).last_created = self
+
+    def load_uri(self, uri):
+        self.loaded_uris.append(uri)
+
+
+class FakeWebKit:
+    class PolicyDecisionType:
+        NAVIGATION_ACTION = "navigation"
+        NEW_WINDOW_ACTION = "new-window"
+        RESPONSE = "response"
+
+    class CookieAcceptPolicy:
+        NEVER = "never"
+
+    NetworkSession = FakeWebKitNetworkSession
+    Settings = FakeWebKitSettings
+    WebView = FakeWebKitWebView
+
+
 def _walk_fake_widgets(widget):
     yield widget
     for child in widget.children:
@@ -311,6 +385,324 @@ def test_app_shell_imports_without_importing_gtk(monkeypatch):
 
     assert module.APP_ID == APP_ID
     assert sys.modules.get("gi") is None
+
+
+@pytest.mark.parametrize(
+    "uri",
+    (
+        "http://127.0.0.1:8732/",
+        "http://127.0.0.1:8732/ui",
+        "http://127.0.0.1:8732/assets/ui.js?v=1",
+        "http://127.0.0.1:8732/v1/status#safe-fragment",
+    ),
+)
+def test_web_portal_shell_accepts_only_paths_on_the_pinned_origin(uri):
+    from flatpak_app import (
+        WEB_PORTAL_ORIGIN,
+        WEB_PORTAL_URL,
+        is_approved_web_portal_uri,
+    )
+
+    assert WEB_PORTAL_ORIGIN == "http://127.0.0.1:8732"
+    assert WEB_PORTAL_URL == "http://127.0.0.1:8732/ui"
+    assert is_approved_web_portal_uri(uri) is True
+
+
+@pytest.mark.parametrize(
+    "uri",
+    (
+        "",
+        None,
+        "https://127.0.0.1:8732/ui",
+        "http://localhost:8732/ui",
+        "http://127.0.0.1/ui",
+        "http://127.0.0.1:80/ui",
+        "http://127.0.0.2:8732/ui",
+        "http://[::1]:8732/ui",
+        "http://127.0.0.1:8732.evil.example/ui",
+        "http://127.0.0.1:8732@evil.example/ui",
+        "https://example.com/",
+        "file:///etc/vr-hotspot/env",
+        "data:text/html,external",
+        "javascript:alert(1)",
+        "blob:http://127.0.0.1:8732/value",
+    ),
+)
+def test_web_portal_shell_rejects_arbitrary_or_non_pinned_urls(uri):
+    from flatpak_app import is_approved_web_portal_uri
+
+    assert is_approved_web_portal_uri(uri) is False
+
+
+@pytest.mark.parametrize(
+    ("decision_type", "uri", "expected_action"),
+    (
+        ("navigation", "http://127.0.0.1:8732/ui", "use"),
+        ("navigation", "https://example.com/", "ignore"),
+        ("new-window", "http://127.0.0.1:8732/ui", "ignore"),
+        ("new-window", "https://example.com/", "ignore"),
+        ("response", "http://127.0.0.1:8732/assets/ui.js", "use"),
+        ("response", "https://example.com/remote.js", "ignore"),
+        ("unknown", "http://127.0.0.1:8732/ui", "ignore"),
+    ),
+)
+def test_web_portal_policy_explicitly_blocks_external_and_new_window_navigation(
+    decision_type,
+    uri,
+    expected_action,
+):
+    from flatpak_app import app
+
+    class Request:
+        def get_uri(self):
+            return uri
+
+    class NavigationAction:
+        def get_request(self):
+            return Request()
+
+    class Response:
+        def get_uri(self):
+            return uri
+
+    class Decision:
+        def __init__(self):
+            self.actions = []
+
+        def get_navigation_action(self):
+            return NavigationAction()
+
+        def get_response(self):
+            return Response()
+
+        def use(self):
+            self.actions.append("use")
+
+        def ignore(self):
+            self.actions.append("ignore")
+
+    decision = Decision()
+
+    assert (
+        app._handle_web_portal_policy(
+            None,
+            decision,
+            decision_type,
+            FakeWebKit,
+        )
+        is True
+    )
+    assert decision.actions == [expected_action]
+
+
+def test_locked_web_portal_view_is_ephemeral_and_has_no_injection_surface():
+    from flatpak_app import app
+
+    web_view = app._build_locked_web_portal_view(FakeWebKit)
+    session = FakeWebKitNetworkSession.last_created
+    settings = FakeWebKitSettings.last_created
+    source = inspect.getsource(app._build_locked_web_portal_view)
+
+    assert session is not None
+    assert session.is_ephemeral() is True
+    assert session.persistent_credentials is False
+    assert session.cookie_manager.accept_policy == "never"
+    assert web_view.properties["network_session"] is session
+    assert web_view.properties["settings"] is settings
+    assert (
+        web_view.properties["default_content_security_policy"]
+        == app._WEB_PORTAL_CSP
+    )
+    assert app.WEB_PORTAL_ORIGIN in app._WEB_PORTAL_CSP
+    assert "object-src 'none'" in app._WEB_PORTAL_CSP
+    assert "frame-src 'none'" in app._WEB_PORTAL_CSP
+    assert settings.values["set_enable_dns_prefetching"] is False
+    assert settings.values["set_enable_page_cache"] is False
+    assert (
+        settings.values["set_javascript_can_open_windows_automatically"] is False
+    )
+    assert {
+        "decide-policy",
+        "create",
+        "context-menu",
+        "permission-request",
+    } <= set(web_view.signal_handlers)
+    for forbidden in (
+        "X-Api-Token",
+        "Authorization",
+        "Bearer ",
+        "localStorage",
+        "sessionStorage",
+        "UserScript",
+        "add_script",
+        "add_style_sheet",
+        "set_uri(",
+    ):
+        assert forbidden not in source
+
+
+def test_web_portal_shell_loads_only_the_fixed_daemon_served_route(monkeypatch):
+    from flatpak_app import app
+
+    FakeGtkApplicationWindow.last_presented = None
+    FakeWebKitWebView.last_created = None
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+    monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
+
+    assert app.run_web_portal_shell() == 0
+
+    window = FakeGtkApplicationWindow.last_presented
+    web_view = FakeWebKitWebView.last_created
+    assert window is not None
+    assert web_view is not None
+    assert web_view.loaded_uris == [app.WEB_PORTAL_URL]
+    assert "load-failed" in web_view.signal_handlers
+    assert not any(
+        isinstance(widget, FakeGtkPasswordEntry)
+        for widget in _walk_fake_widgets(window)
+    )
+
+
+def test_web_portal_load_failure_shows_bounded_safe_retry_ui(monkeypatch):
+    from flatpak_app import app
+
+    FakeGtkApplicationWindow.last_presented = None
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+    monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
+    assert app.run_web_portal_shell() == 0
+
+    window = FakeGtkApplicationWindow.last_presented
+    web_view = FakeWebKitWebView.last_created
+    secret = "failure-detail-must-not-render"
+    handled = web_view.signal_handlers["load-failed"](
+        web_view,
+        "started",
+        app.WEB_PORTAL_URL,
+        RuntimeError(secret),
+    )
+    widgets = tuple(_walk_fake_widgets(window))
+    labels = {
+        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
+    }
+    buttons = [
+        widget for widget in widgets if isinstance(widget, FakeGtkButton)
+    ]
+
+    assert handled is True
+    assert "Local Web Portal unavailable" in labels
+    assert secret not in repr(labels)
+    assert [button.label for button in buttons] == ["Retry local portal"]
+    buttons[0].signal_handlers["clicked"](buttons[0])
+    assert web_view.loaded_uris == [app.WEB_PORTAL_URL, app.WEB_PORTAL_URL]
+
+
+def test_webkit_unavailable_falls_back_to_native_dashboard(monkeypatch):
+    from flatpak_app import app
+
+    calls = []
+
+    def unavailable():
+        raise app.WebKitUnavailableError("bounded")
+
+    monkeypatch.setattr(app, "run_web_portal_shell", unavailable)
+    monkeypatch.setattr(app, "run_gui", lambda: calls.append("native") or 19)
+
+    assert app.main(["--web-portal-shell"]) == 19
+    assert calls == ["native"]
+
+
+def test_webkit_construction_failure_falls_back_in_the_same_window(monkeypatch):
+    from flatpak_app import app
+
+    FakeGtkApplicationWindow.last_presented = None
+    monkeypatch.setattr(app, "_load_gtk", lambda: FakeGtk)
+    monkeypatch.setattr(app, "_load_webkit", lambda: FakeWebKit)
+
+    def fail_to_construct(_webkit):
+        raise RuntimeError("bounded")
+
+    monkeypatch.setattr(app, "_build_locked_web_portal_view", fail_to_construct)
+
+    assert app.run_web_portal_shell() == 0
+
+    window = FakeGtkApplicationWindow.last_presented
+    widgets = tuple(_walk_fake_widgets(window))
+    labels = {
+        widget.label for widget in widgets if isinstance(widget, FakeGtkLabel)
+    }
+    assert isinstance(window.children[0], FakeGtkScrolledWindow)
+    assert {"VR Hotspot", "Native Dashboard", "NATIVE GTK"} <= labels
+
+
+def test_web_portal_shell_has_no_token_injection_or_persistence_path():
+    from flatpak_app import app
+
+    portal_source = "\n".join(
+        inspect.getsource(value)
+        for value in (
+            app._build_locked_web_portal_view,
+            app._populate_web_portal_window,
+            app.run_web_portal_shell,
+        )
+    )
+    exposed = (
+        repr(app.WEB_PORTAL_ORIGIN)
+        + repr(app.WEB_PORTAL_URL)
+        + repr(app._WEB_PORTAL_CSP)
+        + app.render_smoke_json()
+    )
+
+    assert inspect.signature(app.run_web_portal_shell).parameters == {}
+    assert "?" not in app.WEB_PORTAL_URL
+    assert "#" not in app.WEB_PORTAL_URL
+    assert "token" not in exposed.casefold()
+    for forbidden in (
+        "X-Api-Token",
+        "Authorization",
+        "Bearer ",
+        "localStorage",
+        "sessionStorage",
+        "UserScript",
+        "add_script",
+        "set_cookie",
+        "set_http_headers",
+        "getenv",
+        "/etc/",
+        "/var/lib/",
+    ):
+        assert forbidden not in portal_source
+
+
+def test_native_dashboard_remains_the_default_fallback(monkeypatch):
+    from flatpak_app import app
+
+    calls = []
+    monkeypatch.setattr(app, "run_gui", lambda: calls.append("native") or 23)
+    monkeypatch.setattr(
+        app,
+        "run_web_portal_shell",
+        lambda: pytest.fail("the spike must remain opt-in"),
+    )
+
+    assert app.main([]) == 23
+    assert calls == ["native"]
+
+
+def test_web_portal_flag_accepts_no_url_or_other_value():
+    from flatpak_app import app
+
+    parser = app._argument_parser()
+    parsed = parser.parse_args(["--web-portal-shell"])
+    portal_action = next(
+        action
+        for action in parser._actions
+        if "--web-portal-shell" in action.option_strings
+    )
+
+    assert parsed.web_portal_shell is True
+    assert portal_action.nargs == 0
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--web-portal-shell", "https://example.com/"])
 
 
 def test_gui_activation_does_not_require_password_entry_placeholder_setter(
@@ -1050,20 +1442,19 @@ def test_native_dashboard_styles_are_bounded_and_have_no_external_assets():
     } <= set(line.strip().split(" {", 1)[0] for line in stylesheet.splitlines())
 
 
-def test_native_dashboard_does_not_embed_a_web_runtime_or_frontend_assets():
+def test_web_portal_shell_does_not_copy_or_package_frontend_assets():
     source = Path("flatpak_app/app.py").read_text(encoding="utf-8").casefold()
     manifest_text = MANIFEST_PATH.read_text(encoding="utf-8").casefold()
 
-    for forbidden in (
-        "webkit",
-        "webview",
+    assert "webkit" in source
+    assert "webview" in source
+    for copied_asset in (
         "index.html",
         "ui.js",
         "ui.css",
         "../../assets/",
     ):
-        assert forbidden not in source
-        assert forbidden not in manifest_text
+        assert copied_asset not in manifest_text
 
 
 def test_token_entry_is_cleared_before_dashboard_validation():
@@ -1431,7 +1822,6 @@ def test_app_shell_has_no_direct_host_secret_or_network_access():
         "getenv(",
         "keyring",
         "SecretService",
-        "portal",
         "/etc/",
         "/var/lib/",
         "VR_HOTSPOTD_API_TOKEN",
@@ -1458,6 +1848,7 @@ def test_shell_has_no_token_cli_argument_or_discovery_source():
     assert "--token" not in option_strings
     assert "--api-token" not in option_strings
     assert "--live-pairing-smoke-json" in option_strings
+    assert "--web-portal-shell" in option_strings
     assert "getpass.getpass" in source
     assert "isatty()" in source
     assert "FirstRunTokenEntryController" in source
