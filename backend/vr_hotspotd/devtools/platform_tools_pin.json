@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "version": "r36.0.0",
+  "url": "https://dl.google.com/android/repository/platform-tools_r36.0.0-linux.zip",
+  "archive_sha256": "BLOCKED-PLACEHOLDER-DO-NOT-IMPLEMENT-DOWNLOADER-SHA256-NOT-INDEPENDENTLY-VERIFIED",
+  "implementation_blocked": true,
+  "max_archive_bytes": 100000000,
+  "arch": "x86_64",
+  "extract_allowlist": [
+    "platform-tools/NOTICE.txt",
+    "platform-tools/adb"
+  ],
+  "license_name": "Android SDK License Agreement",
+  "license_terms_url": "https://developer.android.com/studio/terms",
+  "license_review": {
+    "reviewed_at": "2026-07-25",
+    "reviewer": "josethevrtech",
+    "terms_url": "https://developer.android.com/studio/terms",
+    "decision": "user_driven_download_with_explicit_acceptance_no_redistribution",
+    "rationale": "Option B in docs/devbridge-platform-tools-license-decision.md: the user explicitly accepts Google's Android SDK License Agreement at install time and VRhotspot acts only as that user's agent, downloading the pinned official archive directly from dl.google.com to that user's machine. VRhotspot never becomes a distributor of Platform-Tools bytes and never accepts the terms on the user's behalf.",
+    "restrictions": [
+      "No redistribution: never commit, mirror, re-host, proxy, or re-serve the archive or extracted binaries via the repository, releases, CI artifacts, the daemon API, the Web Portal, the support bundle, the Flatpak companion, or any package.",
+      "Explicit user acceptance of the Android SDK License Agreement is required before every download; acceptance is never defaulted, implied by an unrelated confirmation, or performed by VRhotspot for the user.",
+      "Download only the single pinned versioned URL over HTTPS from dl.google.com, only on explicit user action; never a latest endpoint, never pre-fetched, never in the background.",
+      "Verify the archive against the pinned SHA-256 before any extraction; delete the downloaded archive after extraction; retain no archive cache.",
+      "Extraction is allowlist-only and must include the platform-tools/NOTICE.txt notice file.",
+      "A pin version bump re-requires a dated terms re-review and re-dates this license_review block."
+    ],
+    "record": "docs/devbridge-platform-tools-license-review.md"
+  },
+  "notes": [
+    "archive_sha256 is an intentionally invalid placeholder: the SHA-256 of the pinned archive has not been independently verified, so implementation_blocked is true and downloader/install code must not be implemented against this pin.",
+    "The pinned version must be re-confirmed as the intended current release when the real SHA-256 is computed; filling the hash and flipping implementation_blocked to false happen together in one reviewed diff.",
+    "This file records reviewed metadata and policy only; it does not download, vendor, or install anything."
+  ]
+}
