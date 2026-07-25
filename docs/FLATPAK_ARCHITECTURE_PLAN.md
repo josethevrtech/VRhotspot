@@ -478,8 +478,21 @@ bounded-error, and small utility UI infrastructure. Tray controls require a
 daemon token explicitly entered for the session or explicitly saved through
 Secret Service. The companion never discovers a token from `/etc` or `/var/lib`.
 
-Daemon uninstallers do not automatically remove the user-owned companion or any
-Flatpak remote. A user may separately remove only this app with:
+The top-level `uninstall.sh` and the installer's existing-install cleanup
+perform a scoped, best-effort companion removal: they stop the running
+companion/tray, uninstall only `io.github.josethevrtech.VRhotspot` from the
+invoking desktop user's user-scoped Flatpak (and best-effort from the system
+scope), and remove only that user's companion app data
+(`~/.var/app/io.github.josethevrtech.VRhotspot`) and companion autostart entry
+(`~/.config/autostart/io.github.josethevrtech.VRhotspot.desktop`). They never
+touch Flatpak remotes, shared runtimes, other Flatpak apps, or unrelated
+autostart files, and a missing `flatpak` binary, missing app, already-stopped
+tray, or undetectable desktop user never fails the uninstall. The backend
+daemon uninstaller (`backend/scripts/uninstall.sh`) still does not touch
+Flatpak at all. Removing the app plus its app data removes all companion-local
+state; a token explicitly saved through Secret Service cannot be cleared
+without a live desktop session, so that keyring item may remain (it only held
+the daemon token, which the daemon cleanup deletes). Manual removal remains:
 
 ```bash
 flatpak uninstall --user io.github.josethevrtech.VRhotspot
