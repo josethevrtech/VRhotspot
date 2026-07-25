@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import stat
 import subprocess
@@ -302,25 +303,328 @@ def test_flatpak_builder_success_is_reported_as_user_scoped(tmp_path):
     )
 
 
-def test_installer_companion_boundary_does_not_read_or_forward_daemon_tokens():
+def installer_companion_section() -> str:
     installer = INSTALLER.read_text(encoding="utf-8")
     start = installer.index("# --- Optional Flatpak Companion ---")
     end = installer.index("\n_fix_apt_code_repo_signedby_conflict()", start)
-    companion = installer[start:end]
+    return installer[start:end]
 
-    assert "${VR_HOTSPOTD_API_TOKEN" not in companion
-    assert "$VR_HOTSPOTD_API_TOKEN" not in companion
-    assert "${API_TOKEN" not in companion
-    assert "$API_TOKEN" not in companion
+
+def test_installer_companion_token_use_is_limited_to_stdin_pairing_pipe():
+    companion = installer_companion_section()
+
+    # The daemon token variable may appear only as a value-free emptiness
+    # guard and as the single builtin expansion feeding the stdin pipe of
+    # the Flatpak stdin pairing mode.
+    expansions = [
+        line.strip()
+        for line in companion.splitlines()
+        if "$API_TOKEN" in line
+        or "${API_TOKEN" in line
+        or "$VR_HOTSPOTD_API_TOKEN" in line
+        or "${VR_HOTSPOTD_API_TOKEN" in line
+    ]
+    assert expansions == [
+        'if [ -z "${API_TOKEN:-}" ]; then',
+        """printf '%s\\n' "$API_TOKEN" |""",
+    ]
+    assert re.search(
+        r'printf \'%s\\n\' "\$API_TOKEN" \|\s*'
+        r"run_flatpak_companion_session_as_user \\\s*"
+        r'flatpak run "\$FLATPAK_COMPANION_APP_ID" \\\s*'
+        r"--pair-token-stdin --save",
+        companion,
+    )
+
+    # The token never travels through argv token flags or other channels.
+    assert "--token" not in companion
+    assert "--api-token" not in companion
+    assert "--pair-token-stdin=" not in companion
+    assert "--live-pairing-smoke-json" not in companion
     assert "/etc/" not in companion
     assert "/var/lib/" not in companion
     assert "keyring" not in companion.lower()
     assert "portal" not in companion.lower()
-    assert "--token" not in companion
-    assert "--live-pairing-smoke-json" not in companion
+    assert "localstorage" not in companion.lower()
+    assert "sessionstorage" not in companion.lower()
+    assert "indexeddb" not in companion.lower()
+
+    # Every companion command runner scrubs credential variables from the
+    # environment; the session runner appears in both UID branches, as does
+    # the build runner.
     assert companion.count(
         "env -u VR_HOTSPOTD_API_TOKEN -u API_TOKEN"
-    ) == 2
+    ) == 4
+
+
+def auto_pair_script(overrides: str = "") -> str:
+    return f"""
+    source {shlex.quote(str(INSTALLER))}
+    FLATPAK_COMPANION_INSTALLED=1
+    FLATPAK_COMPANION_USER="$(id -un)"
+    FLATPAK_COMPANION_UID="$(id -u)"
+    FLATPAK_COMPANION_GID="$(id -g)"
+    API_TOKEN=deterministic-test-pairing-token
+    export API_TOKEN
+    wait_for_daemon_health() {{ echo health-polled; }}
+    flatpak_companion_session_bus_available() {{ return 0; }}
+    {overrides}
+    pair_flatpak_companion_if_installed
+    echo "paired=$FLATPAK_COMPANION_PAIRED"
+    echo "tray=$FLATPAK_COMPANION_TRAY_LAUNCHED"
+    """
+
+
+def write_fake_pairing_flatpak(fake_bin: Path, *, pairing_body: str) -> None:
+    make_executable(
+        fake_bin / "flatpak",
+        f"""#!/bin/sh
+printf '%s\\n' "$@" >> "$FAKE_FLATPAK_ARGS"
+if [ "${{API_TOKEN+x}}" = x ] || [ "${{VR_HOTSPOTD_API_TOKEN+x}}" = x ]; then
+    echo present >> "$FAKE_FLATPAK_CREDENTIAL_STATE"
+else
+    echo absent >> "$FAKE_FLATPAK_CREDENTIAL_STATE"
+fi
+for argument in "$@"; do
+    if [ "$argument" = --pair-token-stdin ]; then
+        cat > "$FAKE_FLATPAK_STDIN"
+{pairing_body}
+    fi
+done
+exit 0
+""",
+    )
+    make_executable(
+        fake_bin / "setsid",
+        """#!/bin/sh
+if [ "$1" = --fork ]; then
+    shift
+fi
+exec "$@"
+""",
+    )
+
+
+def run_auto_pair(tmp_path: Path, *, pairing_body: str, overrides: str = ""):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_pairing_flatpak(fake_bin, pairing_body=pairing_body)
+    args_file = tmp_path / "flatpak.args"
+    stdin_file = tmp_path / "flatpak.stdin"
+    credential_file = tmp_path / "flatpak.credentials"
+    args_file.touch()
+    credential_file.touch()
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "FAKE_FLATPAK_ARGS": str(args_file),
+            "FAKE_FLATPAK_STDIN": str(stdin_file),
+            "FAKE_FLATPAK_CREDENTIAL_STATE": str(credential_file),
+        }
+    )
+    result = run_bash(auto_pair_script(overrides), env=env)
+    return result, args_file, stdin_file, credential_file
+
+
+def test_auto_pair_pipes_token_only_via_stdin_and_launches_tray(tmp_path):
+    result, args_file, stdin_file, credential_file = run_auto_pair(
+        tmp_path,
+        pairing_body=(
+            '        printf \'%s\\n\' \'{"detail_code":"saved_securely",'
+            '"message":"Saved.","ok":true,"paired":true,"saved":true}\'\n'
+            "        exit 0"
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "health-polled" in result.stdout
+    assert "paired=1" in result.stdout
+    assert "tray=1" in result.stdout
+    assert "authentication saved" in result.stdout
+    assert "tray companion launched" in result.stdout.lower()
+    assert "deterministic-test-pairing-token" not in result.stdout
+    assert "deterministic-test-pairing-token" not in result.stderr
+
+    # The token reached the pairing mode through stdin only.
+    assert stdin_file.read_text(encoding="utf-8") == (
+        "deterministic-test-pairing-token\n"
+    )
+    argv_lines = args_file.read_text(encoding="utf-8").splitlines()
+    assert "deterministic-test-pairing-token" not in argv_lines
+    assert not any("deterministic-test-pairing-token" in arg for arg in argv_lines)
+    assert "--pair-token-stdin" in argv_lines
+    assert "--save" in argv_lines
+    assert "--tray" in argv_lines
+
+    # Credential environment variables were scrubbed for every invocation.
+    states = set(credential_file.read_text(encoding="utf-8").split())
+    assert states == {"absent"}
+
+
+def test_auto_pair_nonzero_exit_falls_back_without_tray_launch(tmp_path):
+    result, args_file, stdin_file, _credential_file = run_auto_pair(
+        tmp_path,
+        pairing_body=(
+            '        printf \'%s\\n\' \'{"detail_code":"token_rejected",'
+            '"message":"Rejected.","ok":false,"paired":false,"saved":false}\'\n'
+            "        exit 1"
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "paired=0" in result.stdout
+    assert "tray=0" in result.stdout
+    assert "did not succeed (exit 1)" in result.stdout
+    assert "manual Web UI authentication steps" in result.stdout
+    assert "deterministic-test-pairing-token" not in result.stdout
+    argv_lines = args_file.read_text(encoding="utf-8").splitlines()
+    assert "--tray" not in argv_lines
+    assert stdin_file.read_text(encoding="utf-8") == (
+        "deterministic-test-pairing-token\n"
+    )
+
+
+def test_auto_pair_requires_desktop_session_bus(tmp_path):
+    result, args_file, stdin_file, _credential_file = run_auto_pair(
+        tmp_path,
+        pairing_body="        exit 0",
+        overrides="""
+        flatpak_companion_session_bus_available() { return 1; }
+        wait_for_daemon_health() { echo forbidden-health-poll; }
+        """,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "no desktop session bus" in result.stdout
+    assert "paired=0" in result.stdout
+    assert "tray=0" in result.stdout
+    assert "forbidden-health-poll" not in result.stdout
+    assert args_file.read_text(encoding="utf-8") == ""
+    assert not stdin_file.exists()
+
+
+def test_auto_pair_skips_when_companion_not_installed(tmp_path):
+    result, args_file, stdin_file, _credential_file = run_auto_pair(
+        tmp_path,
+        pairing_body="        exit 0",
+        overrides="""
+        FLATPAK_COMPANION_INSTALLED=0
+        flatpak_companion_session_bus_available() { echo forbidden-bus-check; }
+        """,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "paired=0" in result.stdout
+    assert "tray=0" in result.stdout
+    assert "forbidden-bus-check" not in result.stdout
+    assert args_file.read_text(encoding="utf-8") == ""
+    assert not stdin_file.exists()
+
+
+def test_auto_pair_daemon_health_timeout_falls_back(tmp_path):
+    result, args_file, stdin_file, _credential_file = run_auto_pair(
+        tmp_path,
+        pairing_body="        exit 0",
+        overrides="wait_for_daemon_health() { return 1; }",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "did not become healthy" in result.stdout
+    assert "paired=0" in result.stdout
+    assert args_file.read_text(encoding="utf-8") == ""
+    assert not stdin_file.exists()
+
+
+def completion_script(setup: str) -> str:
+    return f"""
+    source {shlex.quote(str(INSTALLER))}
+    clear() {{ :; }}
+    eval 'ip() {{ echo "1.1.1.1 via 192.0.2.1 dev eth0 src 192.0.2.10 uid 0"; }}'
+    ENABLE_REMOTE=n
+    API_TOKEN=completion-test-secret-token
+    {setup}
+    show_completion
+    """
+
+
+def test_completion_screen_omits_token_after_successful_auto_pair():
+    result = run_bash(
+        completion_script(
+            """
+            FLATPAK_COMPANION_PAIRED=1
+            FLATPAK_COMPANION_TRAY_LAUNCHED=1
+            """
+        )
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "completion-test-secret-token" not in result.stdout
+    assert "No token copy/paste is needed on this desktop" in result.stdout
+    assert "Your API Token" not in result.stdout
+
+
+def test_completion_screen_mentions_remote_manual_auth_after_auto_pair():
+    result = run_bash(
+        completion_script(
+            """
+            FLATPAK_COMPANION_PAIRED=1
+            FLATPAK_COMPANION_TRAY_LAUNCHED=1
+            ENABLE_REMOTE=y
+            """
+        )
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "completion-test-secret-token" not in result.stdout
+    assert "Remote browsers still require manual authentication" in result.stdout
+    assert "sudo grep VR_HOTSPOTD_API_TOKEN" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "setup",
+    (
+        "FLATPAK_COMPANION_PAIRED=0\nFLATPAK_COMPANION_TRAY_LAUNCHED=0",
+        "FLATPAK_COMPANION_PAIRED=1\nFLATPAK_COMPANION_TRAY_LAUNCHED=0",
+        "",
+    ),
+)
+def test_completion_screen_keeps_manual_token_fallback(setup):
+    result = run_bash(completion_script(setup))
+
+    assert result.returncode == 0, result.stderr
+    assert "Your API Token" in result.stdout
+    assert "completion-test-secret-token" in result.stdout
+    assert "Paste the token when prompted" in result.stdout
+
+
+def test_main_runs_auto_pair_after_companion_install():
+    result = run_bash(
+        f"""
+        source {shlex.quote(str(INSTALLER))}
+        check_root() {{ :; }}
+        cleanup_previous_install() {{ :; }}
+        detect_os() {{
+            OS_ID=ubuntu
+            OS_ID_LIKE=
+            OS_NAME=Ubuntu
+            PKG_MANAGER=apt
+        }}
+        install_dependencies() {{ :; }}
+        get_source_files() {{ TEMP_INSTALL_DIR="$PWD"; }}
+        validate_endeavouros_runtime_dependencies() {{ :; }}
+        configure_install() {{ configure_flatpak_companion_install; }}
+        install_daemon() {{ :; }}
+        install_flatpak_companion_if_requested() {{ echo install-step; }}
+        pair_flatpak_companion_if_installed() {{ echo pair-step; }}
+        show_completion() {{ echo completion-step; }}
+        main --non-interactive --install-flatpak-companion --no-clear
+        """
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.index("install-step") < result.stdout.index("pair-step")
+    assert result.stdout.index("pair-step") < result.stdout.index("completion-step")
 
 
 def test_no_installer_token_cli_argument_and_companion_flag_is_documented():
