@@ -1,687 +1,162 @@
 # VR Hotspot
 
-VR Hotspot is an open-source connectivity suite for VR headsets that turns a PC into a dedicated Wi-Fi access point using a USB Wi-Fi adapter. It enables a direct, low-latency PC ↔ headset connection optimized for VR streaming and remote access, no router required.
+VR Hotspot turns your Linux PC into a dedicated Wi-Fi access point for your VR
+headset using a USB Wi-Fi adapter. You get a direct, low-latency PC ↔ headset
+connection optimized for VR streaming and remote access — no router required.
 
-It's ideal for users who travel with a MiniPC or "headless" computer puck and want confidence they can connect to and manage their PC's hotspot, even without a monitor, so they can connect a VR headset and stream to it.
+It's ideal if you travel with a MiniPC or "headless" computer puck and want to
+connect a VR headset and stream to it, even without a monitor.
 
-Built around **lnxrouter + hostapd + dnsmasq**, with **bundled binaries** (including libnl) for consistent installs across distros, and integrates with **firewalld** on platforms like SteamOS where firewalld owns nftables.
+> **Release candidate:** VR Hotspot is currently at **v1.1.0-rc3**. Release
+> candidates are close to final but may still receive fixes before the stable
+> v1.1.0 release. Please report any issues you hit.
 
 ---
 
-## 🚀 Quick Installation
+## Install
 
-**SteamOS install**
-
-For SteamOS, download the installer first and run it as a local file. Do not
-use `curl | bash` on SteamOS.
-
-### Guided install (recommended)
-
-Use the guided installer for normal public SteamOS installs. `--interactive`
-keeps the guided installer prompts enabled.
-
-```bash
-curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
-sudo bash /tmp/vrhotspot-install.sh --interactive
-```
-
-### Unattended install
-
-Use unattended mode only for automation, support, or managed installs.
-`--non-interactive` intentionally skips prompts and uses defaults.
-
-```bash
-curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
-sudo bash /tmp/vrhotspot-install.sh --non-interactive
-```
-
-### Optional Flatpak desktop companion
-
-The guided installer asks `Install the Flatpak companion app?` and defaults to
-No while the companion and its local packaging mature. Choosing No leaves the
-existing daemon installation unchanged. Choosing Yes makes a best-effort,
-user-scoped build/install from
-`packaging/flatpak/io.github.josethevrtech.VRhotspot.json`.
-
-Unattended installs do not install the companion by default. Explicitly opt in
-with:
-
-```bash
-sudo bash /tmp/vrhotspot-install.sh --non-interactive \
-  --install-flatpak-companion
-```
-
-The optional path requires `flatpak`, `flatpak-builder`, and the GNOME 50
-runtime/SDK to already be available. It does not add Flathub or another Flatpak
-remote. Missing prerequisites or a failed build are reported clearly, temporary
-build files are removed, and the daemon install continues.
-
-After a successful companion install, the installer pairs the companion with
-the freshly installed daemon automatically. It waits for the daemon health
-endpoint, then runs `flatpak run io.github.josethevrtech.VRhotspot
---pair-token-stdin --save` as the original desktop user (never root) and feeds
-the daemon token through the stdin pipe only—never through command-line
-arguments, environment variables, or the Web UI. On success it launches
-`flatpak run io.github.josethevrtech.VRhotspot --tray` detached, and the final
-completion screen no longer asks for token copy/paste on that desktop. Remote
-browsers still require manual authentication. If the desktop session bus is
-unavailable, the daemon does not become healthy, pairing is rejected, or the
-tray cannot be launched, the installer falls back to the existing manual Web
-UI URL and token instructions unchanged.
-
-The desktop launcher starts the companion in tray mode. Its only graphical UI
-is the daemon-served Web Portal in a locked WebKitGTK window. Primary tray
-activation opens or restores that same window, and the window close action
-hides it to the tray without creating another window. Redundant Show and Hide
-menu commands are not exported. If WebKit cannot be constructed, the companion
-shows a bounded GTK error surface and does not open another interface. The tray
-keeps **Current status** visible at the top. **Hotspot Commands** groups Start,
-Stop, Restart, and Repair; **Network** contains Share Internet Connection; and
-**Advanced** contains Authentication, Refresh Status, Open Diagnostics,
-Privacy Mode, and the existing Start Hotspot Automatically setting. That
-setting controls daemon hotspot autostart, not desktop-companion login
-autostart. Launching VR Hotspot at desktop login remains deferred and is not
-shown as a tray item. Explicit Quit exits only the desktop companion and does
-not stop an already-running hotspot.
-
-The Flatpak Web Portal window and tray share saved local authentication through
-one native authentication controller and the app-specific Secret Service wallet.
-Both modes load and validate that wallet entry against the bounded loopback API
-at startup. Saving or replacing authentication in either mode is therefore
-detected by the other; clearing it returns both to needs-authentication state on
-their next prompt refresh. A rejected stale wallet entry is forgotten safely
-instead of being retried indefinitely.
-
-The locked page receives only token-free authentication readiness and
-allowlisted daemon responses through the fixed-origin native broker. The wallet
-token is never returned to JavaScript or placed in page HTML, browser storage,
-URLs, labels, tooltips, notifications, logs, exception representations, or
-smoke JSON. Selecting **Authenticate this device** in the Flatpak page opens the
-native dialog; **Save for this desktop** controls Secret Service persistence.
-If saving is not selected or the wallet is unavailable, the accepted token
-remains local to that Flatpak process and is not shared through new IPC.
-
-A normal local or remote browser is not connected to the Flatpak wallet or
-native broker. Each browser page load requires explicit login, and the
-browser-entered token is kept only in that page's memory—not Local Storage,
-Session Storage, or IndexedDB.
-
-**Authentication…** remains available for native token entry, replacement,
-testing, and clearing. The companion never uses sudo to obtain a token and
-never discovers one from `/etc/vr-hotspot/env`, `/var/lib/vr-hotspot`, daemon
-configuration, environment variables, or command arguments. Missing or
-rejected credentials are reported as **Needs Authentication**, separately from
-**Daemon Unavailable** and unexpected **Error** states. Needs Authentication is
-a static tray icon state; working/pulsing indication is reserved for active
-transitions. Every tray state uses the VR Hotspot icon family instead of a
-generic system Wi-Fi icon: Stopped has a red/off indicator, Running has a
-green/on indicator, Transitioning has an amber/working indicator, and
-authentication, daemon-unavailable, and error states retain the VR mark with a
-red error-style indicator. The WebKit host window and KDE task manager always
-use the stable base `io.github.josethevrtech.VRhotspot` application icon; that
-window/taskbar icon does not follow hotspot or tray state. Start, Stop, Restart,
-and Repair remain disabled until the shared token authenticates successfully
-and then become available according to the real daemon state. The historical
-flag remains a compatibility alias for the same default graphical behavior:
-
-```bash
-flatpak run io.github.josethevrtech.VRhotspot --web-portal-shell
-```
-
-Launching the tray companion at desktop login is not implemented and remains
-distinct from starting the hotspot automatically with the computer.
-
-**Other Linux distributions**
+Run these two commands in a terminal:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/install.sh -o /tmp/vrhotspot-install.sh
 sudo bash /tmp/vrhotspot-install.sh
 ```
 
-**Bazzite support policy**
+The installer:
 
-Bazzite is a supported target through the dedicated `rpm-ostree` installer
-path. VR Hotspot uses its bundled hostapd/dnsmasq stack on Bazzite instead of
-layering system copies. If another required base tool is missing, the installer
-first attempts live package layering; when that is unavailable, it stages the
-packages and asks you to reboot and rerun the installer. The installer does not
-reboot the system automatically.
+- Auto-detects your OS (SteamOS, Bazzite, CachyOS, Arch, EndeavourOS, Ubuntu, Fedora)
+- Installs required dependencies automatically where the platform permits it
+- Configures NetworkManager to prevent interference
+- Starts the service and shows you the web UI URL and API token
+- Is beginner-friendly — no Linux knowledge required
 
-**Features:**
-- ✅ Auto-detects your OS (SteamOS, Bazzite, CachyOS, Arch, EndeavourOS, Ubuntu, Fedora)
-- ✅ Installs required dependencies automatically where the platform permits it
-- ✅ Configures NetworkManager to prevent interference
-- ✅ Starts service and shows you the web UI URL and API token
-- ✅ Perfect for beginners - no Linux knowledge required
+For guided prompts, add `--interactive`. For automation or managed installs,
+see [Advanced installation](docs/advanced-install.md).
 
-**To uninstall:**
+### SteamOS note
+
+On SteamOS, always **download the installer first and run it as a local file**
+(exactly as shown above). Do not pipe the script straight into bash
+(`curl | bash`) on SteamOS.
+
+---
+
+## Open the Web UI
+
+Once installed, open the web UI in a browser:
+
+- **On the same PC:** `http://127.0.0.1:8732`
+- **From another device:** `http://<your-pc-ip>:8732`
+
+Then:
+
+1. Enter your **API token** (shown at the end of installation — see
+   [Retrieve your API token](#retrieve-your-api-token) if you lost it)
+2. Select your Wi-Fi adapter (wlan1 recommended over wlan0)
+3. Click **Start** to create your hotspot
+4. Connect your VR headset to the new network
+
+---
+
+## Flatpak desktop companion (optional)
+
+The installer can also set up an optional desktop tray app (Flatpak) for
+starting, stopping, and monitoring the hotspot without opening a browser. The
+guided installer asks whether to install it (default: No), and pairs it with
+the daemon automatically when you say Yes.
+
+See [Flatpak desktop companion](docs/flatpak-companion.md) for requirements,
+pairing details, tray behavior, and how authentication is stored.
+
+---
+
+## Retrieve your API token
+
+The installer generates a secure API token and shows it when installation
+finishes. To see it again later:
+
+```bash
+sudo cat /etc/vr-hotspot/env
+```
+
+Look for the line:
+
+```bash
+VR_HOTSPOTD_API_TOKEN=<your-token>
+```
+
+Treat this token like a password — anyone with it can control your hotspot.
+
+---
+
+## Uninstall
+
+```bash
+sudo bash /var/lib/vr-hotspot/app/uninstall.sh
+```
+
+This runs the uninstaller that was installed with VRhotspot (the same command
+shown on the installer completion screen). It removes the daemon and, if
+present, the optional Flatpak companion and its app data. Shared Flatpak
+runtimes and unrelated apps are never touched.
+Details: [Flatpak desktop companion](docs/flatpak-companion.md).
+
+**Fallback:** if `/var/lib/vr-hotspot/app/uninstall.sh` is missing or your
+install is broken, download and run the uninstaller directly:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/uninstall.sh -o /tmp/vrhotspot-uninstall.sh
 sudo bash /tmp/vrhotspot-uninstall.sh
 ```
 
-The uninstaller (and the installer's existing-install cleanup) also removes the
-optional Flatpak companion when present: it stops the running companion/tray,
-uninstalls `io.github.josethevrtech.VRhotspot` from the invoking desktop user's
-user-scoped Flatpak (and best-effort from the system scope), and deletes only
-that user's companion app data
-(`~/.var/app/io.github.josethevrtech.VRhotspot`) and companion autostart entry
-(`~/.config/autostart/io.github.josethevrtech.VRhotspot.desktop`). Every
-companion step is best-effort: a missing `flatpak` binary, a missing app, an
-already-stopped tray, or an undetectable desktop user never fails the
-uninstall. Shared Flatpak runtimes, Flatpak remotes, unrelated Flatpak apps,
-and unrelated autostart files are never touched.
+---
 
-Removing the app plus its app data removes all companion-local state. A token
-the companion explicitly saved through the desktop keyring (Secret Service)
-cannot be cleared without a live desktop session, so that keyring item may
-remain; it only held the daemon API token, which the uninstall deletes and a
-reinstall regenerates. Remove it from your keyring manager if desired.
+## Supported distros
+
+- **SteamOS** (validated on 3.8.12 stable — see the
+  [SteamOS note](#steamos-note) above)
+- **Bazzite** — Bazzite is a supported target through the dedicated
+  `rpm-ostree` installer path. VR Hotspot uses its
+  bundled hostapd/dnsmasq stack on Bazzite instead of layering system copies.
+  If another required base tool is missing, the installer first attempts live
+  package layering; when that is unavailable, it stages the packages and asks
+  you to reboot and rerun the installer.
+  The installer never reboots your system automatically.
+- **CachyOS, Arch, EndeavourOS**
+- **Ubuntu**
+- **Fedora**
+
+More detail: [Platform compatibility guide](docs/PLATFORM_COMPATIBILITY.md).
+
+You'll also need a Wi-Fi adapter that supports AP mode — see
+[Supported Wi-Fi adapters](docs/wifi-adapters.md) for tested recommendations.
 
 ---
 
-## Quick Start
-
-Once installed, open the web UI:
-
-- **Local Portal:** `http://127.0.0.1:8732`
-- **From Another Device:** `http://<your-pc-ip>:8732`
-- **Health Check:** `http://127.0.0.1:8732/healthz`
-
-Enter the **API token** shown during installation to access the interface.
-
-**Basic Usage:**
-1. Open the web UI
-2. Enter your API token
-3. Select your Wi-Fi adapter (wlan1 recommended over wlan0)
-4. Click **Start** to create your hotspot
-5. Connect your VR headset to the new network
-
----
-
-## Supported Wi-Fi Adapters
-
-### ✅ Recommended (Tested & Working)
-- **BrosTrend AXE3000 Tri-Band** (Best Choice) - https://www.amazon.com/dp/B0F6MY7H62
-- **EDUP EP-AX1672** - https://www.amazon.com/EDUP-Wireless-802-11AX-Tri-Band-Compatible/dp/B0CVVWNSH2
-- **Panda Wireless PAU0F AXE3000** - https://www.amazon.com/Panda-Wireless%C2%AE-PAU0F-AXE3000-Adapter/dp/B0D972VY9B
-
-### ℹ️ Should Work (Untested)
-- See compatible adapters list: https://github.com/morrownr/USB-WiFi/blob/main/home/USB_WiFi_Adapters_that_are_supported_with_Linux_in-kernel_drivers.md#axe3000---usb30---24-ghz-5-ghz-and-6-ghz-wifi-6e
-
-### ⚠️ Known Issues
-- **(wlan0)**: Built-in adapters often have AP mode limitations. Use wlan1+ (USB adapters) for better reliability.
-
----
-
-## What It Does
-
-- Creates a Wi-Fi hotspot (AP) from a selected Wi-Fi adapter
-- Provides DHCP + DNS via bundled **dnsmasq**
-- Enables NAT/forwarding so clients can reach the internet
-- Exposes a web UI for easy configuration and management
-- Includes **Repair** workflow to recover from stuck states
-- Automatically prioritizes wlan1+ over wlan0 for better compatibility
-
----
-
-## Key Features
-
-### 🎮 VR-Optimized
-
-- **Low-latency optimized** for VR streaming
-- **QoS profiles**: Ultra Low Latency, High Throughput, Balanced, Stability (VR default)
-- **Band preference**: 6 GHz → 5 GHz → 2.4 GHz with automatic fallback
-- **Wi-Fi 6/6E support** with auto-detection
-- **System tuning options**: CPU governor, power management, interrupt coalescing
-
-### 🔧 Smart Adapter Management
-
-- Auto-detects Wi-Fi adapters and recommends the best one
-- **Prioritizes wlan1+** over wlan0 (avoids Intel AX200 issues)
-- Hides problematic adapters in Basic Mode
-- Supports multiple bands: 2.4 GHz, 5 GHz, 6 GHz (Wi-Fi 6E)
-
-### 🌐 Web UI & API
-
-**Lifecycle Controls:**
-- Start / Stop / Repair / Restart
-- `POST /v1/start`, `POST /v1/stop`, `POST /v1/repair`, `POST /v1/restart`
-- `POST /v1/autostart` - Coordinate the existing hotspot boot-autostart unit
-  and canonical `autostart` setting
-
-**Status & Monitoring:**
-- `GET /v1/status` - Current hotspot status
-- `GET /v1/config` - Current canonical configuration, including
-  `enable_internet` and `autostart`
-- `GET /v1/status?include_logs=1` - Status with logs
-- `GET /v1/adapters` - List available Wi-Fi adapters
-- `GET /v1/adapters/readiness` - Adapter Intelligence v2 readiness model
-
-**Diagnostics:**
-- `GET /v1/diagnostics/clients` - Connected clients
-- `GET /v1/diagnostics/preflight` - Canonical read-only host readiness report
-- `vr-hotspot preflight` - Print or export that same canonical report through the authenticated API
-- `POST /v1/diagnostics/ping` - Ping test
-- `POST /v1/diagnostics/ping_under_load` - Performance under load
-- `GET /v1/diagnostics/support_bundle` - Download a sanitized support bundle
-
-**ADB Dev Bridge (read-only, for standalone headset development):**
-- `GET /v1/devbridge/status` - Hotspot/subnet state, host adb presence, and
-  detected device counts
-- `GET /v1/devbridge/devices` - Devices on the hotspot with an optional ADB
-  TCP (port 5555) reachability check (`?probe=0` to skip)
-- `GET /v1/devbridge/adb` - Copyable `adb connect`/pairing/logcat commands
-  (`?ip=`, `?kind=connect|logcat|all`); the daemon never executes adb
-- `GET /v1/devbridge/readiness` - Unity Build & Run readiness checks; every
-  failed check includes a copyable next step
-- `vr-hotspot devbridge status|scan|adb-command|logcat-command` - The same
-  data through the authenticated CLI; see `docs/dev-bridge.md`
-
-### 🔥 Firewalld Integration (SteamOS-Friendly)
-
-When `firewalld` is running, the daemon uses `firewall-cmd` (not raw nftables/iptables):
-- Adds AP interface to trusted zone
-- Enables masquerade/forwarding
-- Optional cleanup on stop
-- No conflicts with firewalld-managed systems
-
-### 📦 Bundled Dependencies
-
-- **hostapd** (v2.11) - AP management
-- **dnsmasq** - DHCP/DNS server
-- **lnxrouter** - Wrapper script
-- **libnl** (v3.10) - Netlink library (no system packages needed!)
-
-All binaries are bundled for consistent, portable installations.
-
----
-
-## Performance Tuning (Optional)
-
-Enable in the web UI under Advanced Mode:
-
-**System Tuning:**
-- `wifi_power_save_disable` - Disable power saving on Wi-Fi
-- `cpu_governor_performance` - Set CPU to performance mode
-- `usb_autosuspend_disable` - Prevent USB adapter suspension
-- `sysctl_tuning` - Kernel network stack optimizations
-- `interrupt_coalescing` - Optimize network interrupts
-- `cpu_affinity` - Pin processes to specific CPU cores
-
-**QoS Presets:**
-- **Ultra Low Latency** - Strict priority + UDP optimization
-- **Stability (VR)** - DSCP CS5 + cake qdisc (recommended for VR)
-- **High Throughput** - DSCP AF42 + cake qdisc
-- **Balanced** - DSCP AF41 + fq_codel
-
----
-
-## Advanced Installation (Manual)
-
-### For Developers or Custom Setups
-
-**1. Clone the repository:**
-
-```bash
-git clone https://github.com/josethevrtech/VRhotspot.git
-cd VRhotspot
-```
-
-**2. Copy to system location:**
-
-```bash
-sudo mkdir -p /var/lib/vr-hotspot/app
-sudo rsync -a ./ /var/lib/vr-hotspot/app/
-```
-
-Note: Installed deployments serve WebUI assets from `/var/lib/vr-hotspot/app/assets`.
-When running from the repo, the backend prefers `./assets` first.
-
-**3. Run the install script:**
-
-```bash
-cd /var/lib/vr-hotspot/app/backend/scripts
-sudo ./install.sh
-```
-
-**Optional flags:**
-- `--bind 0.0.0.0` - Allow access from other devices
-- `--enable-autostart` - Start hotspot automatically on boot
-- `--api-token <token>` - Use a specific API token
-
-**4. Verify installation:**
-
-```bash
-curl -fsS http://127.0.0.1:8732/healthz && echo OK
-sudo systemctl status vr-hotspotd.service
-```
-
----
-
-## Configuration
-
-### API Token
-
-The install script generates a secure API token. To retrieve it:
-
-```bash
-sudo cat /etc/vr-hotspot/env
-```
-
-Look for:
-```bash
-VR_HOTSPOTD_API_TOKEN=<your-token>
-```
-
-### Firewall Ports
-
-VR Hotspot listens on **TCP 8732**. The installer automatically opens this port in:
-- firewalld (if active)
-- ufw (if installed)
-
-**Manual firewall configuration:**
-
-```bash
-# firewalld
-sudo firewall-cmd --permanent --add-port=8732/tcp
-sudo firewall-cmd --reload
-
-# ufw
-sudo ufw allow 8732/tcp
-```
-
-### Autostart on Boot
-
-This means **Start Hotspot Automatically** with the computer. It is separate
-from launching the desktop tray companion at login. The setting coordinates
-the canonical `autostart` config value with the existing
-`vr-hotspot-autostart.service`.
-
-After installing the Flatpak companion, use the tray toggle. During daemon
-installation or repair, use the existing installer options:
-
-```bash
-cd /var/lib/vr-hotspot/app/backend/scripts
-sudo ./install.sh --enable-autostart
-```
-
-Disable autostart:
-
-```bash
-cd /var/lib/vr-hotspot/app/backend/scripts
-sudo ./install.sh --disable-autostart
-```
-
----
-
-## Troubleshooting
-
-### SteamOS Validation
-
-SteamOS 3.8.12 stable has been validated working with this hotfix branch.
-
-Validated result:
-- SteamOS 3.8.12 stable
-- bundled hostapd/dnsmasq/lnxrouter stack
-- AP interface x0wlan1
-- 5 GHz channel 36
-- 80 MHz width
-- client association and WPA handshake confirmed
-- internet and streaming confirmed working
-
-Validation checklist:
-
-```bash
-systemctl status vr-hotspotd.service --no-pager
-ls -lah /var/lib/vr-hotspot/app/backend/vendor/bin
-sudo grep -E 'VR_HOTSPOT.*VENDOR|VR_HOTSPOT_FORCE_VENDOR_BIN|VR_HOTSPOTD_HOST|VR_HOTSPOTD_PORT' /etc/vr-hotspot/env
-curl -fsS http://127.0.0.1:8732/healthz && echo OK
-iw dev
-iw dev x0wlan1 station dump
-```
-
-### Check Service Status
-
-```bash
-sudo systemctl status vr-hotspotd.service
-```
-
-### View Logs
-
-```bash
-# Recent logs
-sudo journalctl -u vr-hotspotd.service -n 100
-
-# Follow logs in real-time
-sudo journalctl -u vr-hotspotd.service -f
-```
-
-### Check API Status
-
-```bash
-# Get API token
-TOKEN=$(sudo awk -F= '/VR_HOTSPOTD_API_TOKEN/{print $2}' /etc/vr-hotspot/env)
-
-# Check status
-curl -s "http://127.0.0.1:8732/v1/status?include_logs=1" -H "X-Api-Token: $TOKEN" | python3 -m json.tool
-```
-
-### Preflight Diagnostics
-
-Installed systems provide a read-only CLI that calls the existing authenticated
-preflight endpoint. Running it with `sudo` lets it read the protected daemon
-token from `/etc/vr-hotspot/env` without putting the token in shell history or
-process arguments:
-
-```bash
-# Print the canonical report as formatted JSON
-sudo /var/lib/vr-hotspot/bin/vr-hotspot preflight
-
-# Export through stdout into a new private, user-owned directory and file
-report_dir="$(mktemp -d "${TMPDIR:-/tmp}/vr-hotspot-preflight.XXXXXX")"
-(umask 077; sudo /var/lib/vr-hotspot/bin/vr-hotspot preflight \
-  > "$report_dir/preflight.json")
-```
-
-`--output PATH` is also available when the CLI should create the file directly.
-It creates a new file with mode `0600` and refuses existing paths and symlinks;
-choose a private destination rather than a predictable shared `/tmp` filename.
-
-For development or custom API locations, use `--api-url` and provide the token
-through `VR_HOTSPOTD_API_TOKEN` or stdin. For a one-off prompt that does not echo
-the token or store it in shell history:
-
-```bash
-read -rsp 'VR Hotspot API token: ' API_TOKEN && echo
-printf '%s\n' "$API_TOKEN" | vr-hotspot preflight \
-  --api-url http://127.0.0.1:8732 --token-stdin
-unset API_TOKEN
-```
-
-The `--token` option is available for automation compatibility, but its value is
-visible in process arguments and may be retained in shell history; prefer the
-protected env file, environment variable, or `--token-stdin`. The CLI rejects
-redirects and only performs `GET /v1/diagnostics/preflight`; it does not probe
-the host directly or mutate hotspot state.
-
-### Common Issues
-
-**1. No Wi-Fi adapters found:**
-- Check: `iw dev`
-- Ensure adapter supports AP mode: `iw list | grep -A10 "Supported interface modes"`
-
-2. Hotspot times out (ap_ready_timeout):
-
-- Check if NetworkManager is interfering: `nmcli device status | grep wlan`
-- Try using `wlan1` instead of `wlan0`
-- Check logs: `sudo journalctl -u vr-hotspotd.service -n 50`
-
-3. Can't access web UI:
-- Check firewall: `sudo firewall-cmd --list-ports` or `sudo ufw status`
-- Verify service is running: `curl http://127.0.0.1:8732/healthz`
-
-**4. Intel AX200 (wlan0) not working:**
-- This is a known hardware limitation
-- Use wlan1 (USB adapter) instead
-- See: `docs/troubleshooting/BUNDLED_LIBNL_SETUP.md`
-
-### Repair Function
-
-If the hotspot gets stuck, use the **Repair** button in the web UI or:
-
-```bash
-TOKEN=$(sudo awk -F= '/VR_HOTSPOTD_API_TOKEN/{print $2}' /etc/vr-hotspot/env)
-curl -X POST "http://127.0.0.1:8732/v1/repair" -H "X-Api-Token: $TOKEN"
-```
-
-### Support Bundle
-
-For bug reports, use **Download support bundle** in Pro mode or call the
-authenticated endpoint directly:
-
-```bash
-TOKEN=$(sudo awk -F= '/VR_HOTSPOTD_API_TOKEN/{print $2}' /etc/vr-hotspot/env)
-curl -OJ "http://127.0.0.1:8732/v1/diagnostics/support_bundle" -H "X-Api-Token: $TOKEN"
-```
-
-The bundle is a sanitized `.zip` with version, status, adapter inventory, and
-readiness data. Review it before attaching it to a public issue.
-
----
-
-## Security & Privacy
-
-### Privileged API Threat Model
-
-The portal shell, static assets, favicon, and `/healthz` are public. Every
-`/v1/*` route controls or exposes privileged daemon state and requires both a
-configured `VR_HOTSPOTD_API_TOKEN` and a matching `X-Api-Token` or Bearer token.
-If the daemon token is absent or blank, privileged requests fail closed with
-HTTP 503 and `result_code: api_token_missing`; supplying a token in the browser
-cannot repair a missing daemon configuration. Configure the token in the daemon
-environment (normally `/etc/vr-hotspot/env`) and restart the service.
-
-The daemon runs as root, so the token protects network mutation, diagnostics,
-configuration, and passphrase-reveal operations from other local processes as
-well as network clients. Tokenless non-loopback binds are refused. Remote access
-still uses plain HTTP and is trusted-network-only: use it only on a network where
-traffic cannot be observed or modified. This project does not currently provide
-built-in TLS termination.
-
-### API Token Protection
-
-- **Treat the token like a password** - don't share it publicly
-- **Token enforcement** prevents unauthorized access
-- Regenerate token if compromised: Edit `/etc/vr-hotspot/env` and restart service
-
-### Privacy Mode
-
-- Enable **Privacy Mode** in the web UI when:
-  - Screen sharing
-  - Taking screenshots
-  - Collecting logs for support
-- Hides sensitive information (logs, client details, etc.)
-
-### Remote Access
-
-- By default, the web UI only listens on `127.0.0.1` (local only)
-- To allow remote access: `sudo ./install.sh --bind 0.0.0.0`
-- **Important**: A strong token is mandatory, but remote HTTP is still suitable
-  only for a trusted network
-
----
-
-## Project Layout
-
-```text
-.
-├── install.sh                          # One-command installer
-├── uninstall.sh                        # One-command uninstaller
-├── backend/
-│   ├── scripts/
-│   │   ├── install.sh                  # System installation script
-│   │   ├── uninstall.sh                # System uninstallation script
-│   │   └── vr-hotspot-autostart.sh     # Autostart helper
-│   ├── systemd/
-│   │   ├── vr-hotspotd.service         # Main daemon
-│   │   └── vr-hotspot-autostart.service # Autostart service
-│   ├── vendor/
-│   │   ├── bin/                        # Bundled binaries
-│   │   │   ├── hostapd
-│   │   │   ├── dnsmasq
-│   │   │   ├── hostapd_cli
-│   │   │   └── lnxrouter
-│   │   ├── lib/                        # Bundled libraries
-│   │   │   ├── libnl-3.so.200
-│   │   │   ├── libnl-genl-3.so.200
-│   │   │   ├── libnl-route-3.so.200
-│   │   │   └── libnl-cli-3.so.200
-│   │   └── licenses/                   # Third-party licenses
-│   └── vr_hotspotd/
-│       ├── adapters/                   # Adapter detection & scoring
-│       ├── engine/                     # AP engines (lnxrouter, hostapd6, bridge)
-│       ├── diagnostics/                # Network diagnostics
-│       ├── api.py                      # REST API
-│       ├── lifecycle.py                # Start/stop/repair logic
-│       ├── server.py                   # HTTP server
-│       └── main.py                     # Entry point
-├── assets/
-│   ├── ui.js                           # Web UI JavaScript
-│   ├── ui.css                          # Web UI styles
-│   └── field_visibility.js             # UI field management
-├── tests/                              # Test suite
-└── pyproject.toml                      # Python package config
-```
-
----
-
-## Contributing
-
-Issues and pull requests are welcome!
-
-**When filing a bug, please include:**
-- OS/distro + kernel version
-- Wi-Fi adapter chipset/model
-- A sanitized support bundle from Pro mode or
-  `GET /v1/diagnostics/support_bundle`
-- If you cannot generate a support bundle, include
-  `sudo journalctl -u vr-hotspotd.service -n 200` and
-  `curl http://127.0.0.1:8732/v1/status?include_logs=1`
-- Redact any API tokens or passwords from manually collected output
-
-See `CONTRIBUTING.md` for more details.
+## Troubleshooting & advanced docs
+
+Something not working? Start with the
+[Troubleshooting guide](docs/troubleshooting.md) (service status, logs, common
+issues, the Repair function, and support bundles).
+
+Full documentation index: [docs/README.md](docs/README.md). Highlights:
+
+- [Advanced installation & configuration](docs/advanced-install.md) — manual
+  install, firewall ports, autostart, performance tuning
+- [Supported Wi-Fi adapters](docs/wifi-adapters.md)
+- [Security & privacy](docs/security.md)
+- [Architecture overview](docs/architecture.md) — API surface, bundled vendor
+  stack, project layout
+- [Dev Bridge](docs/dev-bridge.md) — ADB helpers for headset developers
+- [Contributing guide](CONTRIBUTING.md)
 
 ---
 
 ## License
 
-MIT License. See `LICENSE.md`.
+MIT License. See `LICENSE.md`. Bundled third-party components are listed in
+`THIRD_PARTY_NOTICES.md`.
 
----
-
-## Third-Party Notices
-
-VR Hotspot bundles third-party binaries and libraries. See:
-- `THIRD_PARTY_NOTICES.md` - License attributions
-- `backend/vendor/README.md` - Version information
-- `backend/vendor/licenses/` - Full license texts
-- `docs/VENDOR_PROVENANCE_SBOM_PLAN.md` - Staged provenance, SBOM, and checksum-manifest plan
-
-Bundled components:
-- **hostapd** (BSD) - https://w1.fi/hostapd/
-- **dnsmasq** (GPL-2.0+) - https://thekelleys.org.uk/dnsmasq/
-- **lnxrouter** (LGPL-2.1+) - https://github.com/garywill/linux-router
-- **libnl** (LGPL-2.1) - https://github.com/thom311/libnl
-
----
-
-## Acknowledgments
-
-Built with ❤️ for the VR community.
-
-Special thanks to:
-- The hostapd, dnsmasq, and linux-router projects
-- All contributors and testers
-- The SteamOS and CachyOS communities
+Built with ❤️ for the VR community. Special thanks to the hostapd, dnsmasq,
+and linux-router projects, all contributors and testers, and the SteamOS and
+CachyOS communities.
