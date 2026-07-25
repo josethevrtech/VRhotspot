@@ -88,6 +88,27 @@ def _stub_bundle_sources(monkeypatch):
     )
     monkeypatch.setattr(
         api,
+        "collect_devbridge_tools_status",
+        lambda: {
+            "schema_version": 1,
+            "mode": "read_only",
+            "platform_tools_pin": {
+                "available": True,
+                "version": "r36.0.0",
+                "url_host": "dl.google.com",
+                "implementation_blocked": True,
+                "blocked_reason": "archive_sha256_placeholder",
+            },
+            "adb": {
+                "managed": {"present": False, "installed": False, "verified": None},
+                "system": {"present": False, "path": None},
+                "source": "missing",
+                "path": None,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        api,
         "collect_vendor_provenance",
         lambda **kwargs: {
             "report_schema_version": 1,
@@ -158,6 +179,14 @@ def test_support_bundle_returns_zip_headers_and_required_members(monkeypatch):
     assert "vr-hotspot/devbridge.json" in members
     devbridge_member = json.loads(members["vr-hotspot/devbridge.json"].decode("utf-8"))
     assert devbridge_member["mode"] == "read_only"
+    assert "vr-hotspot/devbridge_tools.json" in members
+    tools_member = json.loads(
+        members["vr-hotspot/devbridge_tools.json"].decode("utf-8")
+    )
+    assert tools_member["mode"] == "read_only"
+    assert tools_member["platform_tools_pin"]["implementation_blocked"] is True
+    assert tools_member["platform_tools_pin"]["url_host"] == "dl.google.com"
+    assert b"https://dl.google.com" not in members["vr-hotspot/devbridge_tools.json"]
     bundle_manifest = json.loads(members["manifest.json"].decode("utf-8"))
     vendor_provenance = json.loads(
         members["vr-hotspot/vendor_provenance.json"].decode("utf-8")
