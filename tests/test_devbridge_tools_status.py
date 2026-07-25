@@ -55,14 +55,14 @@ def test_packaged_pin_file_exists_next_to_module():
     assert default_pin_path().is_file()
 
 
-def test_repo_pin_loads_and_reports_blocked_placeholder():
+def test_repo_pin_loads_verified_and_unblocked():
     pin = load_platform_tools_pin()
 
     assert pin["schema_version"] == 1
-    assert pin["archive_sha256"] == BLOCKED_SHA256_PLACEHOLDER
-    assert pin["implementation_blocked"] is True
-    assert pin_is_blocked(pin) is True
-    assert pin_blocked_reason(pin) == BLOCKED_REASON_PLACEHOLDER_SHA256
+    assert pin["archive_sha256"] != BLOCKED_SHA256_PLACEHOLDER
+    assert pin["implementation_blocked"] is False
+    assert pin_is_blocked(pin) is False
+    assert pin_blocked_reason(pin) is None
 
 
 def test_load_valid_pin(tmp_path):
@@ -238,10 +238,10 @@ def test_status_model_reports_pin_and_blocked_reason():
     assert status["mode"] == "read_only"
     pin_view = status["platform_tools_pin"]
     assert pin_view["available"] is True
-    assert pin_view["version"] == "r36.0.0"
+    assert pin_view["version"] == "r37.0.0"
     assert pin_view["url_host"] == "dl.google.com"
-    assert pin_view["implementation_blocked"] is True
-    assert pin_view["blocked_reason"] == BLOCKED_REASON_PLACEHOLDER_SHA256
+    assert pin_view["implementation_blocked"] is False
+    assert pin_view["blocked_reason"] is None
     assert status["host"]["arch_supported"] is True
     assert "unsupported_arch" not in status["warnings"]
 
@@ -319,7 +319,7 @@ def test_collect_makes_no_network_calls_and_executes_nothing(monkeypatch):
 
     assert status["schema_version"] == 1
     assert status["platform_tools_pin"]["available"] is True
-    assert status["platform_tools_pin"]["implementation_blocked"] is True
+    assert status["platform_tools_pin"]["implementation_blocked"] is False
     assert status["adb"]["source"] in (
         ADB_SOURCE_MANAGED,
         ADB_SOURCE_SYSTEM,

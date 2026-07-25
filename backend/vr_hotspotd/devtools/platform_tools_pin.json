@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "version": "r36.0.0",
-  "url": "https://dl.google.com/android/repository/platform-tools_r36.0.0-linux.zip",
-  "archive_sha256": "BLOCKED-PLACEHOLDER-DO-NOT-IMPLEMENT-DOWNLOADER-SHA256-NOT-INDEPENDENTLY-VERIFIED",
-  "implementation_blocked": true,
+  "version": "r37.0.0",
+  "url": "https://dl.google.com/android/repository/platform-tools_r37.0.0-linux.zip",
+  "archive_sha256": "198ae156ab285fa555987219af237b31102fefe8b9d2bc274708a8d4f2865a07",
+  "implementation_blocked": false,
   "max_archive_bytes": 100000000,
   "arch": "x86_64",
   "extract_allowlist": [
@@ -29,8 +29,8 @@
     "record": "docs/devbridge-platform-tools-license-review.md"
   },
   "notes": [
-    "archive_sha256 is an intentionally invalid placeholder: the SHA-256 of the pinned archive has not been independently verified, so implementation_blocked is true and downloader/install code must not be implemented against this pin.",
-    "The pinned version must be re-confirmed as the intended current release when the real SHA-256 is computed; filling the hash and flipping implementation_blocked to false happen together in one reviewed diff.",
-    "This file records reviewed metadata and policy only; it does not download, vendor, or install anything."
+    "archive_sha256 was computed on 2026-07-25 from the official archive downloaded from the pinned URL, hashed twice from independent fetches (byte-identical), and cross-checked against Google's SDK repository manifest (repository2-3.xml), whose linux entry for r37.0.0 publishes SHA-1 bcf323933980a59dccc3f14c339aed5fb2171163 and size 9167924 bytes, both of which matched. The archive was deleted after hashing; no archive or binary bytes entered the repository.",
+    "The pin was re-confirmed against Google's SDK repository manifest on 2026-07-25: the prior placeholder pin's r36.0.0 has been removed from the manifest entirely, and r37.0.1 is a dev-channel release under the android-sdk-preview-license, so r37.0.0 — the stable-channel release governed by the reviewed android-sdk-license (Android SDK License Agreement) — is the pinned version.",
+    "This file records reviewed metadata and policy only; it does not download, vendor, or install anything. Downloader, install/remove endpoints, and UI remain unimplemented and are gated on their own reviewed PRs per docs/devbridge-platform-tools-license-decision.md."
   ]
 }

@@ -11,8 +11,8 @@ This is the review record referenced by
 `backend/vr_hotspotd/devtools/platform_tools_pin.json` (`license_review.record`).
 It records the dated maintainer review that
 `docs/devbridge-platform-tools-license-decision.md` requires before any
-Platform-Tools download path may be implemented, and it states exactly what
-remains blocked after this record lands.
+Platform-Tools download path may be implemented, and it records the verified
+pin values that unblock the future downloader implementation PR.
 
 ## What was reviewed
 
@@ -55,37 +55,70 @@ downloaded, vendored, or installed by this change, and
 `backend/vendor/VENDOR_MANIFEST.json` scope is unchanged — no Platform-Tools
 bytes are ever repo-vendored.
 
-## What remains blocked
+## Verified pin (2026-07-25)
 
-**Downloader implementation remains blocked.** The pin's `archive_sha256` is
-an intentionally invalid, obvious placeholder
-(`BLOCKED-PLACEHOLDER-DO-NOT-IMPLEMENT-DOWNLOADER-SHA256-NOT-INDEPENDENTLY-VERIFIED`)
-because the SHA-256 of the pinned archive has not been independently
-verified, and per vendor-policy rule 8 CI must never fetch the archive and
-trust the response. Accordingly the pin sets `implementation_blocked: true`,
-and `tools/ci/platform_tools_pin_check.py` rejects a pin whose hash is the
-placeholder without that flag.
+| Field | Value |
+| --- | --- |
+| Version | `r37.0.0` |
+| URL | `https://dl.google.com/android/repository/platform-tools_r37.0.0-linux.zip` |
+| SHA-256 | `198ae156ab285fa555987219af237b31102fefe8b9d2bc274708a8d4f2865a07` |
+| Size | 9,167,924 bytes |
+| Verified at | 2026-07-25 |
+| Verified by | josethevrtech (VRhotspot maintainer) |
 
-Until the real hash is recorded, all of the following stay unimplemented:
-downloader code, `/v1/devbridge/tools` install/remove endpoints, installer
-and CLI opt-ins, and any Web Portal / Flatpak UI for tools install.
+How the hash was verified, per this record's cross-check requirement:
 
-To unblock, one reviewed diff must:
+- The archive was downloaded from the exact versioned URL above (never a
+  `latest` endpoint) to a temporary directory outside the repository, hashed
+  with SHA-256, downloaded a second time, and the two fetches compared
+  byte-for-byte (identical).
+- The digest was cross-checked against a second Google-published artifact:
+  the official SDK repository manifest
+  (`https://dl.google.com/android/repository/repository2-3.xml`) — the same
+  metadata `sdkmanager` itself trusts — whose linux `r37.0.0` entry publishes
+  SHA-1 `bcf323933980a59dccc3f14c339aed5fb2171163` and size `9167924`; both
+  matched the downloaded archive exactly.
+- Archive integrity was verified (`unzip -t`) and the listing confirmed the
+  allowlisted paths `platform-tools/adb` and `platform-tools/NOTICE.txt`
+  exist in the archive.
+- The downloaded archives were **deleted after hashing**. No archive, binary,
+  or extracted bytes entered the repository; only this metadata was recorded.
 
-1. Record the real lowercase SHA-256 of the exact pinned archive,
-   independently computed (download the pinned URL after personally accepting
-   the Android SDK License Agreement, hash it, and cross-check the digest
-   from a second independent host/network path — never from a single fetch
-   treated as truth).
-2. Re-confirm that the pinned `version`/`url` is the intended current
-   release, and re-read the then-current terms text, re-dating the pin's
-   `license_review` if the pin version changes.
-3. Flip `implementation_blocked` to `false` in the same diff.
+### Version re-confirmation
 
-Everything else the decision document gates on (acceptance UX and API
-enforcement, `docs/security.md` egress-honesty section, `docs/dev-bridge.md`
-read-only wording update, SELinux verification, `unsupported_arch` handling)
-remains binding on the implementation PRs and is not resolved here.
+The placeholder pin named `r36.0.0`. On 2026-07-25 Google's SDK repository
+manifest no longer lists `r36.0.0` at all (superseded), and `r37.0.1` is a
+**dev-channel** release governed by the `android-sdk-preview-license`, not
+the reviewed Android SDK License Agreement. `r37.0.0` is the current
+**stable-channel** release governed by `android-sdk-license` (the Android SDK
+License Agreement this record reviews), so the pin was re-confirmed as
+`r37.0.0`. This version change is part of the same dated review recorded
+here, satisfying the "version bump re-requires a dated terms re-review"
+restriction.
+
+## What this unblocks — and what it does not
+
+With the real SHA-256 recorded and this dated maintainer review in place,
+the pin sets `implementation_blocked: false`: the future downloader
+implementation PR now has an auditable source of truth to build against.
+
+Nothing else changes in this diff. All of the following remain
+**unimplemented** and gated on their own reviewed PRs, exactly as the
+decision document specifies: downloader code, extraction code,
+`/v1/devbridge/tools` install/remove endpoints, installer and CLI opt-ins,
+and any Web Portal / Flatpak UI for tools install. The implementation PRs
+remain bound by the decision document in full, including:
+
+- **No redistribution**, ever, in any form.
+- **Explicit user acceptance** of the Android SDK License Agreement is still
+  required at install time, before every download, on every surface;
+  acceptance is never defaulted or implied.
+- The implementation must verify the archive against this pin's SHA-256
+  **before extraction**, **delete the archive after extraction**, and retain
+  **no archive cache**.
+- `docs/security.md` egress-honesty section, `docs/dev-bridge.md` read-only
+  wording update, SELinux verification, and `unsupported_arch` handling
+  remain binding on the implementation PRs and are not resolved here.
 
 ## CI check
 
