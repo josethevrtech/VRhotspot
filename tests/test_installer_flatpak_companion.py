@@ -669,9 +669,24 @@ def test_flatpak_manifest_permissions_remain_minimal_and_unchanged():
     }
 
 
-def test_daemon_uninstallers_do_not_remove_user_flatpaks_or_remotes():
-    for path in (TOP_UNINSTALLER, BACKEND_UNINSTALLER):
-        uninstaller = path.read_text(encoding="utf-8")
-        assert "flatpak uninstall" not in uninstaller
-        assert "flatpak remote" not in uninstaller
-        assert "io.github.josethevrtech.VRhotspot" not in uninstaller
+def test_backend_daemon_uninstaller_does_not_touch_flatpak():
+    uninstaller = BACKEND_UNINSTALLER.read_text(encoding="utf-8")
+    assert "flatpak" not in uninstaller
+    assert "io.github.josethevrtech.VRhotspot" not in uninstaller
+
+
+def test_companion_cleanup_flatpak_use_is_scoped_to_the_app_id():
+    for path in (TOP_UNINSTALLER, INSTALLER):
+        text = path.read_text(encoding="utf-8")
+        assert "flatpak remote" not in text
+        assert "--unused" not in text
+        assert "--delete-data" not in text
+        for line in text.splitlines():
+            if "flatpak uninstall" not in line:
+                continue
+            assert (
+                "$FLATPAK_COMPANION_APP_ID" in line
+                or "io.github.josethevrtech.VRhotspot" in line
+            ), line
+            assert "--all" not in line
+            assert "runtime" not in line

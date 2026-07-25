@@ -161,12 +161,23 @@ curl -sSL https://raw.githubusercontent.com/josethevrtech/VRhotspot/main/uninsta
 sudo bash /tmp/vrhotspot-uninstall.sh
 ```
 
-The daemon uninstaller leaves any user-scoped Flatpak companion and configured
-Flatpak remotes untouched. Remove only this companion explicitly, if desired:
+The uninstaller (and the installer's existing-install cleanup) also removes the
+optional Flatpak companion when present: it stops the running companion/tray,
+uninstalls `io.github.josethevrtech.VRhotspot` from the invoking desktop user's
+user-scoped Flatpak (and best-effort from the system scope), and deletes only
+that user's companion app data
+(`~/.var/app/io.github.josethevrtech.VRhotspot`) and companion autostart entry
+(`~/.config/autostart/io.github.josethevrtech.VRhotspot.desktop`). Every
+companion step is best-effort: a missing `flatpak` binary, a missing app, an
+already-stopped tray, or an undetectable desktop user never fails the
+uninstall. Shared Flatpak runtimes, Flatpak remotes, unrelated Flatpak apps,
+and unrelated autostart files are never touched.
 
-```bash
-flatpak uninstall --user io.github.josethevrtech.VRhotspot
-```
+Removing the app plus its app data removes all companion-local state. A token
+the companion explicitly saved through the desktop keyring (Secret Service)
+cannot be cleared without a live desktop session, so that keyring item may
+remain; it only held the daemon API token, which the uninstall deletes and a
+reinstall regenerates. Remove it from your keyring manager if desired.
 
 ---
 

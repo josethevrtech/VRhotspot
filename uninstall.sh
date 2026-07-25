@@ -13,6 +13,7 @@ INSTALL_ROOT="/var/lib/vr-hotspot"
 FIREWALL_LEDGER="$INSTALL_ROOT/firewall-rules.json"
 CONFIG_DIR="/etc/vr-hotspot"
 SYSTEMD_DIR="/etc/systemd/system"
+FLATPAK_COMPANION_APP_ID="io.github.josethevrtech.VRhotspot"
 
 # --- Colors and Formatting ---
 RED='\033[0;31m'
@@ -154,6 +155,113 @@ rollback_owned_firewall_rules() {
     done <<< "$records"
 }
 
+# --- Flatpak Companion Cleanup ---
+# Best-effort removal of the optional user-scoped Flatpak companion app.
+# Every step tolerates a missing flatpak binary, a missing app, a missing
+# desktop user/session, and an already-stopped tray. Only the VRhotspot app
+# ID, its per-user app data, and its own autostart entry are ever touched;
+# shared runtimes, other Flatpak apps, Flatpak remotes, and unrelated
+# autostart files are left alone. Any token the companion saved through the
+# desktop keyring (Secret Service) cannot be cleared without a live user
+# session, so it may remain; it only held the daemon token, which the
+# daemon cleanup deletes.
+resolve_flatpak_cleanup_user() {
+    FLATPAK_CLEANUP_USER=""
+    FLATPAK_CLEANUP_UID=""
+    FLATPAK_CLEANUP_HOME=""
+
+    local candidate uid home
+    if [ "$(id -u)" -eq 0 ]; then
+        candidate="${SUDO_USER:-}"
+        if [ -z "$candidate" ] || [ "$candidate" = "root" ]; then
+            return 1
+        fi
+    else
+        candidate="$(id -un)"
+    fi
+
+    if ! uid="$(id -u "$candidate" 2>/dev/null)" || [ "$uid" -eq 0 ]; then
+        return 1
+    fi
+    if ! command -v getent >/dev/null 2>&1; then
+        return 1
+    fi
+    home="$(getent passwd "$candidate" 2>/dev/null | cut -d: -f6)"
+    if [ -z "$home" ] || [ "$home" = "/" ] || [ ! -d "$home" ]; then
+        return 1
+    fi
+
+    FLATPAK_CLEANUP_USER="$candidate"
+    FLATPAK_CLEANUP_UID="$uid"
+    FLATPAK_CLEANUP_HOME="$home"
+}
+
+run_as_flatpak_cleanup_user() {
+    if [ "$(id -u)" -eq "$FLATPAK_CLEANUP_UID" ]; then
+        "$@"
+    elif command -v runuser >/dev/null 2>&1; then
+        runuser -u "$FLATPAK_CLEANUP_USER" -- "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo -H -u "$FLATPAK_CLEANUP_USER" -- "$@"
+    else
+        return 127
+    fi
+}
+
+cleanup_flatpak_companion() {
+    local have_flatpak=0 have_user=0
+    if command -v flatpak >/dev/null 2>&1; then
+        have_flatpak=1
+    else
+        print_info "flatpak is not installed; skipping Flatpak companion uninstall."
+    fi
+    if resolve_flatpak_cleanup_user; then
+        have_user=1
+    else
+        print_info "No non-root desktop user found; skipping user-scoped Flatpak companion cleanup."
+    fi
+
+    if [ "$have_flatpak" -eq 1 ] && [ "$have_user" -eq 1 ]; then
+        # Stop a running companion/tray instance; an already-stopped tray
+        # simply makes this a harmless no-op failure.
+        if run_as_flatpak_cleanup_user env "XDG_RUNTIME_DIR=/run/user/$FLATPAK_CLEANUP_UID" \
+            flatpak kill "$FLATPAK_COMPANION_APP_ID" >/dev/null 2>&1; then
+            print_info "Stopped the running Flatpak companion for $FLATPAK_CLEANUP_USER."
+        fi
+        if run_as_flatpak_cleanup_user flatpak info --user "$FLATPAK_COMPANION_APP_ID" >/dev/null 2>&1; then
+            if run_as_flatpak_cleanup_user flatpak uninstall --user -y "$FLATPAK_COMPANION_APP_ID" >/dev/null 2>&1; then
+                print_success "Removed the user-scoped Flatpak companion for $FLATPAK_CLEANUP_USER."
+            else
+                print_warning "Could not remove the user-scoped Flatpak companion; run: flatpak uninstall --user $FLATPAK_COMPANION_APP_ID"
+            fi
+        fi
+    fi
+
+    if [ "$have_flatpak" -eq 1 ]; then
+        if flatpak info --system "$FLATPAK_COMPANION_APP_ID" >/dev/null 2>&1; then
+            if flatpak uninstall --system -y "$FLATPAK_COMPANION_APP_ID" >/dev/null 2>&1; then
+                print_success "Removed the system-scoped Flatpak companion."
+            else
+                print_warning "Could not remove the system-scoped Flatpak companion; run: flatpak uninstall --system $FLATPAK_COMPANION_APP_ID"
+            fi
+        fi
+    fi
+
+    if [ "$have_user" -eq 1 ]; then
+        local app_data="$FLATPAK_CLEANUP_HOME/.var/app/$FLATPAK_COMPANION_APP_ID"
+        if [ -d "$app_data" ]; then
+            rm -rf -- "$app_data"
+            print_info "Removed Flatpak companion app data at $app_data."
+        fi
+        local autostart_entry="$FLATPAK_CLEANUP_HOME/.config/autostart/$FLATPAK_COMPANION_APP_ID.desktop"
+        if [ -f "$autostart_entry" ]; then
+            rm -f -- "$autostart_entry"
+            print_info "Removed Flatpak companion autostart entry at $autostart_entry."
+        fi
+    fi
+    return 0
+}
+
 # --- Main Uninstallation Logic ---
 check_root() {
     if [ "$EUID" -ne 0 ]; then
@@ -205,6 +313,10 @@ main() {
         systemctl disable "$unit" &>/dev/null || true
     done
     print_success "Services stopped and disabled."
+
+    print_step "Removing the Flatpak companion app (if present)..."
+    cleanup_flatpak_companion
+    print_success "Flatpak companion cleanup complete."
 
     print_step "Rolling back recorded firewall rules..."
     rollback_owned_firewall_rules
