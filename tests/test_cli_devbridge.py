@@ -98,6 +98,42 @@ def test_devbridge_scan_no_probe_disables_probing(monkeypatch, tmp_path, capsys)
     assert seen["url"] == "http://127.0.0.1:9900/v1/devbridge/devices?probe=0"
 
 
+def test_devbridge_tools_status_fetches_tools_status_endpoint(
+    monkeypatch, tmp_path, capsys
+):
+    secret = "devbridge-tools-status-token"
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", secret)
+    data = {
+        "schema_version": 1,
+        "mode": "read_only",
+        "platform_tools_pin": {"implementation_blocked": True},
+        "adb": {"source": "missing"},
+    }
+
+    result, seen = _run(monkeypatch, tmp_path, data, ["tools", "status"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert json.loads(captured.out) == data
+    assert seen["method"] == "GET"
+    assert seen["url"] == "http://127.0.0.1:9900/v1/devbridge/tools/status"
+    assert seen["headers"]["x-api-token"] == secret
+    assert seen["headers"]["x-correlation-id"].startswith("cli-devbridge-tools-status-")
+    assert secret not in captured.out
+
+
+def test_devbridge_tools_requires_a_subcommand(monkeypatch, tmp_path, capsys):
+    def must_not_open(_request, *, timeout):
+        raise AssertionError("no request may be sent without a tools subcommand")
+
+    monkeypatch.setattr(cli, "_open_preflight_request", must_not_open)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["devbridge", "tools", *_missing_env_args(tmp_path)])
+
+    assert excinfo.value.code == 2
+
+
 def test_devbridge_adb_command_targets_ip(monkeypatch, tmp_path, capsys):
     data = {"kind": "connect", "devices": []}
 

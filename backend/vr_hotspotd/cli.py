@@ -24,6 +24,7 @@ DEVBRIDGE_STATUS_PATH = "/v1/devbridge/status"
 DEVBRIDGE_DEVICES_PATH = "/v1/devbridge/devices"
 DEVBRIDGE_ADB_PATH = "/v1/devbridge/adb"
 DEVBRIDGE_READINESS_PATH = "/v1/devbridge/readiness"
+DEVBRIDGE_TOOLS_STATUS_PATH = "/v1/devbridge/tools/status"
 
 _ENV_KEYS = {
     "VR_HOTSPOTD_API_TOKEN",
@@ -446,6 +447,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target headset IPv4 address to generate commands for.",
     )
 
+    devbridge_tools_parser = devbridge_commands.add_parser(
+        "tools",
+        help=(
+            "Read-only Dev Bridge developer-tools helpers. Nothing is downloaded, "
+            "installed, or executed."
+        ),
+    )
+    devbridge_tools_commands = devbridge_tools_parser.add_subparsers(
+        dest="devbridge_tools_command",
+        required=True,
+    )
+    devbridge_tools_status_parser = devbridge_tools_commands.add_parser(
+        "status",
+        help=(
+            "Print the Dev Bridge tools status: Platform-Tools pin metadata, "
+            "managed/system adb discovery, and the effective adb source."
+        ),
+    )
+    _add_client_arguments(devbridge_tools_status_parser)
+
     devbridge_logcat_parser = devbridge_commands.add_parser(
         "logcat-command",
         help="Print copyable logcat helper commands; logcat is never collected for you.",
@@ -569,6 +590,15 @@ def _devbridge_request(args: argparse.Namespace) -> Tuple[str, str, str]:
         if args.no_probe:
             path += "?" + urlencode({"probe": "0"})
         return path, "cli-devbridge-scan", "a Dev Bridge device scan"
+    if subcommand == "tools":
+        tools_subcommand = getattr(args, "devbridge_tools_command", None)
+        if tools_subcommand == "status":
+            return (
+                DEVBRIDGE_TOOLS_STATUS_PATH,
+                "cli-devbridge-tools-status",
+                "a Dev Bridge tools status report",
+            )
+        raise CLIError(f"unknown devbridge tools command: {tools_subcommand}")
     if subcommand in ("adb-command", "logcat-command"):
         kind = "connect" if subcommand == "adb-command" else "logcat"
         query = {"kind": kind}

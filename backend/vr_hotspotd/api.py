@@ -45,6 +45,7 @@ from vr_hotspotd.diagnostics.devbridge import (
     collect_devbridge_status,
     is_valid_ipv4,
 )
+from vr_hotspotd.devtools.platform_tools import collect_devbridge_tools_status
 from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator, validate_curl_url, validate_network_host
 from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
@@ -1108,6 +1109,26 @@ class APIHandler(BaseHTTPRequestHandler):
         try:
             files.append(
                 self._support_bundle_json_file(
+                    "vr-hotspot/devbridge_tools.json",
+                    "vr hotspot dev bridge tools",
+                    collect_devbridge_tools_status(),
+                )
+            )
+        except Exception as exc:
+            warnings.append("devbridge_tools_unavailable")
+            files.append(
+                self._support_bundle_json_file(
+                    "vr-hotspot/devbridge_tools.json",
+                    "vr hotspot dev bridge tools",
+                    {},
+                    status=CollectorStatus.FAILED,
+                    error_summary=f"dev bridge tools status unavailable: {exc}",
+                )
+            )
+
+        try:
+            files.append(
+                self._support_bundle_json_file(
                     "vr-hotspot/vendor_provenance.json",
                     "vendor provenance",
                     collect_vendor_provenance(generated_at=generated_at),
@@ -1412,6 +1433,16 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._envelope(
                     correlation_id=cid,
                     data=collect_devbridge_readiness(probe_adb=probe),
+                ),
+            )
+            return
+
+        if path == "/v1/devbridge/tools/status":
+            self._respond(
+                200,
+                self._envelope(
+                    correlation_id=cid,
+                    data=collect_devbridge_tools_status(),
                 ),
             )
             return

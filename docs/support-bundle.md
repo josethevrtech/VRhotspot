@@ -35,9 +35,12 @@ The implemented web support bundle is intentionally limited but useful:
   and a timestamped `vr-hotspot-support-bundle-YYYYMMDD-HHMMSS.zip` filename.
 - Current archive content includes `manifest.json`, `README.txt`,
   `vr-hotspot/version.json`, `vr-hotspot/status.json`,
-  `vr-hotspot/adapters.json`, `vr-hotspot/readiness.json`, and
+  `vr-hotspot/adapters.json`, `vr-hotspot/readiness.json`,
   `vr-hotspot/devbridge.json` (read-only ADB Dev Bridge status; no logcat
-  content, no pairing codes).
+  content, no pairing codes), and `vr-hotspot/devbridge_tools.json`
+  (read-only Dev Bridge tools status: Platform-Tools pin version and URL
+  host only, managed/system adb discovery; never the full pinned URL and
+  never any tool bytes).
 - API tokens, passphrases, private keys, PSKs, emails, usernames, public IPs,
   and MAC addresses are redacted before files enter the archive.
 - The Pro web UI includes a "Download support bundle" action.
@@ -194,6 +197,7 @@ vr-hotspot/
   adapters.json
   readiness.json
   devbridge.json
+  devbridge_tools.json
   config.redacted.json
 wireless/
   iw-dev.txt

@@ -168,6 +168,23 @@ def test_devbridge_readiness_endpoint(monkeypatch):
     assert _response_json(handler)["data"] == {"overall": "ready"}
 
 
+def test_devbridge_tools_status_endpoint(monkeypatch):
+    sentinel = {
+        "schema_version": 1,
+        "mode": "read_only",
+        "platform_tools_pin": {"implementation_blocked": True},
+    }
+    monkeypatch.setattr(api, "collect_devbridge_tools_status", lambda: sentinel)
+
+    handler = _authed_get(monkeypatch, "/v1/devbridge/tools/status")
+    payload = _response_json(handler)
+
+    assert handler._last_code == 200
+    assert set(payload) == {"correlation_id", "result_code", "warnings", "data"}
+    assert payload["result_code"] == "ok"
+    assert payload["data"] == sentinel
+
+
 def test_devbridge_endpoints_require_auth(monkeypatch):
     monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
     for name in (
@@ -175,6 +192,7 @@ def test_devbridge_endpoints_require_auth(monkeypatch):
         "collect_devbridge_devices",
         "collect_adb_command_report",
         "collect_devbridge_readiness",
+        "collect_devbridge_tools_status",
     ):
         monkeypatch.setattr(
             api,
@@ -189,6 +207,7 @@ def test_devbridge_endpoints_require_auth(monkeypatch):
         "/v1/devbridge/devices",
         "/v1/devbridge/adb",
         "/v1/devbridge/readiness",
+        "/v1/devbridge/tools/status",
     ):
         handler = _make_handler(path)
         handler.do_GET()
