@@ -56,6 +56,19 @@ runtime/SDK to already be available. It does not add Flathub or another Flatpak
 remote. Missing prerequisites or a failed build are reported clearly, temporary
 build files are removed, and the daemon install continues.
 
+After a successful companion install, the installer pairs the companion with
+the freshly installed daemon automatically. It waits for the daemon health
+endpoint, then runs `flatpak run io.github.josethevrtech.VRhotspot
+--pair-token-stdin --save` as the original desktop user (never root) and feeds
+the daemon token through the stdin pipe only—never through command-line
+arguments, environment variables, or the Web UI. On success it launches
+`flatpak run io.github.josethevrtech.VRhotspot --tray` detached, and the final
+completion screen no longer asks for token copy/paste on that desktop. Remote
+browsers still require manual authentication. If the desktop session bus is
+unavailable, the daemon does not become healthy, pairing is rejected, or the
+tray cannot be launched, the installer falls back to the existing manual Web
+UI URL and token instructions unchanged.
+
 The desktop launcher starts the companion in tray mode. Its only graphical UI
 is the daemon-served Web Portal in a locked WebKitGTK window. Primary tray
 activation opens or restores that same window, and the window close action

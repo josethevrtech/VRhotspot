@@ -624,6 +624,7 @@ build_and_install_flatpak_companion() {
         --state-dir="$state_dir" \
         "$build_dir" \
         "$FLATPAK_COMPANION_MANIFEST" >"$build_log" 2>&1; then
+        FLATPAK_COMPANION_INSTALLED=1
         print_success "Flatpak companion app ($FLATPAK_COMPANION_APP_ID) installed for $FLATPAK_COMPANION_USER."
     else
         build_status=$?
@@ -653,6 +654,111 @@ install_flatpak_companion_if_requested() {
     fi
     if ! build_and_install_flatpak_companion; then
         print_warning "Continuing without the optional Flatpak companion app."
+    fi
+    return 0
+}
+
+run_flatpak_companion_session_as_user() {
+    local runtime_dir="/run/user/$FLATPAK_COMPANION_UID"
+    local current_uid
+    current_uid="$(id -u)"
+
+    # Remove daemon credential variables without inspecting their values.
+    if [ "$current_uid" -eq "$FLATPAK_COMPANION_UID" ]; then
+        env -u VR_HOTSPOTD_API_TOKEN -u API_TOKEN \
+            XDG_RUNTIME_DIR="$runtime_dir" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+            "$@"
+    else
+        sudo -H -u "$FLATPAK_COMPANION_USER" -- \
+            env -u VR_HOTSPOTD_API_TOKEN -u API_TOKEN \
+            XDG_RUNTIME_DIR="$runtime_dir" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus" \
+            "$@"
+    fi
+}
+
+flatpak_companion_session_bus_available() {
+    [ -S "/run/user/$FLATPAK_COMPANION_UID/bus" ]
+}
+
+wait_for_daemon_health() {
+    local attempts="${1:-15}"
+    local attempt
+    for attempt in $(seq 1 "$attempts"); do
+        if [ "$attempt" -gt 1 ]; then
+            sleep 1
+        fi
+        if python3 - <<'PY' >/dev/null 2>&1
+import urllib.request
+
+with urllib.request.urlopen("http://127.0.0.1:8732/healthz", timeout=2) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+        then
+            return 0
+        fi
+    done
+    return 1
+}
+
+launch_flatpak_companion_tray() {
+    run_flatpak_companion_session_as_user \
+        setsid --fork flatpak run "$FLATPAK_COMPANION_APP_ID" --tray \
+        </dev/null >/dev/null 2>&1
+}
+
+pair_flatpak_companion_if_installed() {
+    FLATPAK_COMPANION_PAIRED=0
+    FLATPAK_COMPANION_TRAY_LAUNCHED=0
+
+    if [ "${FLATPAK_COMPANION_INSTALLED:-0}" -ne 1 ]; then
+        return 0
+    fi
+    if [ -z "${FLATPAK_COMPANION_UID:-}" ] || [ -z "${FLATPAK_COMPANION_USER:-}" ]; then
+        return 0
+    fi
+    if [ -z "${API_TOKEN:-}" ]; then
+        print_info "Skipping Flatpak companion auto-pairing; this run did not generate a daemon credential."
+        return 0
+    fi
+    if ! flatpak_companion_session_bus_available; then
+        print_info "Skipping Flatpak companion auto-pairing; no desktop session bus was found for $FLATPAK_COMPANION_USER."
+        print_info "Pair later from the companion's Authentication dialog."
+        return 0
+    fi
+    if ! wait_for_daemon_health; then
+        print_warning "The daemon API did not become healthy in time; skipping Flatpak companion auto-pairing."
+        return 0
+    fi
+
+    print_step "Pairing the Flatpak companion for $FLATPAK_COMPANION_USER..."
+    local pair_output pair_status
+    pair_status=0
+    pair_output="$(
+        printf '%s\n' "$API_TOKEN" |
+            run_flatpak_companion_session_as_user \
+                flatpak run "$FLATPAK_COMPANION_APP_ID" \
+                --pair-token-stdin --save 2>/dev/null
+    )" || pair_status=$?
+
+    if [ "$pair_status" -ne 0 ] || ! printf '%s' "$pair_output" | grep -Fq '"ok":true'; then
+        print_warning "Flatpak companion auto-pairing did not succeed (exit $pair_status)."
+        if [ -n "$pair_output" ]; then
+            print_info "Pairing result: ${pair_output:0:300}"
+        fi
+        print_info "Use the manual Web UI authentication steps shown below."
+        return 0
+    fi
+
+    FLATPAK_COMPANION_PAIRED=1
+    print_success "Flatpak companion authentication saved for $FLATPAK_COMPANION_USER."
+
+    if launch_flatpak_companion_tray; then
+        FLATPAK_COMPANION_TRAY_LAUNCHED=1
+        print_success "Flatpak tray companion launched."
+    else
+        print_warning "The Flatpak tray companion could not be launched; use the manual Web UI steps shown below."
     fi
     return 0
 }
@@ -1198,14 +1304,29 @@ show_completion() {
         echo -e "   - On this device:  ${BOLD}http://localhost:8732${NC}"
     fi
     echo
-    echo -e "${CYAN}🔑 ${BOLD}Your API Token:${NC}"
-    echo -e "   Copy and paste this token into the Web UI to authenticate:"
-    echo -e "   ${YELLOW}${BOLD}$API_TOKEN${NC}"
-    echo
-    echo -e "${CYAN}💡 ${BOLD}Next Steps:${NC}"
-    echo -e "   1. Open the URL above in a browser."
-    echo -e "   2. Paste the token when prompted."
-    echo -e "   3. Configure and start your hotspot!"
+    if [ "${FLATPAK_COMPANION_PAIRED:-0}" -eq 1 ] && \
+       [ "${FLATPAK_COMPANION_TRAY_LAUNCHED:-0}" -eq 1 ]; then
+        echo -e "${CYAN}🖥️ ${BOLD}Flatpak Companion:${NC}"
+        echo -e "   The desktop companion is already paired with this daemon and its"
+        echo -e "   tray app is running. No token copy/paste is needed on this desktop."
+        if [ "$ENABLE_REMOTE" == "y" ]; then
+            echo -e "   Remote browsers still require manual authentication. Read the token with:"
+            echo -e "   ${BOLD}sudo grep VR_HOTSPOTD_API_TOKEN $ENV_FILE${NC}"
+        fi
+        echo
+        echo -e "${CYAN}💡 ${BOLD}Next Steps:${NC}"
+        echo -e "   1. Open the VR Hotspot tray icon or its window."
+        echo -e "   2. Configure and start your hotspot!"
+    else
+        echo -e "${CYAN}🔑 ${BOLD}Your API Token:${NC}"
+        echo -e "   Copy and paste this token into the Web UI to authenticate:"
+        echo -e "   ${YELLOW}${BOLD}$API_TOKEN${NC}"
+        echo
+        echo -e "${CYAN}💡 ${BOLD}Next Steps:${NC}"
+        echo -e "   1. Open the URL above in a browser."
+        echo -e "   2. Paste the token when prompted."
+        echo -e "   3. Configure and start your hotspot!"
+    fi
     echo
     echo -e "${CYAN}🔧 ${BOLD}Useful Commands:${NC}"
     echo -e "   - Status:      ${BOLD}sudo systemctl status $DAEMON_UNIT${NC}"
@@ -1222,6 +1343,9 @@ main() {
     REQUESTED_INTERACTIVE_MODE="auto"
     FLATPAK_COMPANION_OPT_IN=0
     INSTALL_FLATPAK_COMPANION="n"
+    FLATPAK_COMPANION_INSTALLED=0
+    FLATPAK_COMPANION_PAIRED=0
+    FLATPAK_COMPANION_TRAY_LAUNCHED=0
 
     for arg in "$@"; do
         case "$arg" in
@@ -1286,7 +1410,8 @@ main() {
         enable_firewalld_uplink_forwarding
     fi
     install_flatpak_companion_if_requested
-    
+    pair_flatpak_companion_if_installed
+
     show_completion
 
     # Clean up cloned repo if necessary
