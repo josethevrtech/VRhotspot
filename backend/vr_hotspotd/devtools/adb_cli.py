@@ -1,9 +1,4 @@
-"""Direct command-line client for typed Developer Hub ADB operations.
-
-The daemon owns ADB execution. This client only sends structured, authenticated
-requests to the allowlisted Developer Hub API endpoints; it never accepts an
-arbitrary adb command line.
-"""
+"""Command-line client for VRhotspot Developer Hub operations."""
 
 from __future__ import annotations
 
@@ -21,6 +16,9 @@ import uuid
 from vr_hotspotd import cli as base_cli
 
 
+TOOLS_STATUS_PATH = "/v1/devbridge/tools/status"
+TOOLS_INSTALL_PATH = "/v1/devbridge/tools/install"
+TOOLS_REMOVE_PATH = "/v1/devbridge/tools/remove"
 ADB_VERSION_PATH = "/v1/devbridge/adb/version"
 ADB_DEVICES_PATH = "/v1/devbridge/adb/devices"
 ADB_PAIR_PATH = "/v1/devbridge/adb/pair"
@@ -215,11 +213,38 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vr-hotspot-adb",
         description=(
-            "Run explicit ADB device and application operations through the authenticated "
-            "VRhotspot Developer Hub daemon."
+            "Set up Android developer tools and control standalone XR headsets through "
+            "the authenticated VRhotspot Developer Hub daemon."
         ),
     )
     commands = parser.add_subparsers(dest="operation", required=True)
+
+    tools_parser = commands.add_parser(
+        "tools",
+        help="Inspect, install, or remove VRhotspot-managed Android Platform-Tools.",
+    )
+    tools_commands = tools_parser.add_subparsers(dest="tools_operation", required=True)
+    tools_status_parser = tools_commands.add_parser(
+        "status",
+        help="Show the effective ADB source and managed-tools verification state.",
+    )
+    _add_common_arguments(tools_status_parser)
+    tools_install_parser = tools_commands.add_parser(
+        "install",
+        help="Download and install the reviewed Android Platform-Tools pin.",
+    )
+    _add_common_arguments(tools_install_parser)
+    tools_install_parser.set_defaults(timeout=180.0)
+    tools_install_parser.add_argument(
+        "--accept-license",
+        action="store_true",
+        help="Accept the Android SDK License Agreement for this download.",
+    )
+    tools_remove_parser = tools_commands.add_parser(
+        "remove",
+        help="Remove only the VRhotspot-managed Platform-Tools installation.",
+    )
+    _add_common_arguments(tools_remove_parser)
 
     version_parser = commands.add_parser("version", help="Show the effective adb version.")
     _add_common_arguments(version_parser)
@@ -309,7 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument(
         "--no-reinstall",
         action="store_true",
-        help="Do not pass adb install -r; fail if the package is already installed.",
+        help="Fail if the package is already installed instead of updating it.",
     )
     install_parser.add_argument(
         "--grant-permissions",
@@ -355,6 +380,32 @@ def _operation_request(
     args: argparse.Namespace,
 ) -> tuple[str, str, str, Optional[Dict[str, Any]], tuple[str, ...]]:
     operation = args.operation
+    if operation == "tools":
+        tools_operation = args.tools_operation
+        if tools_operation == "status":
+            return TOOLS_STATUS_PATH, "GET", "a Developer Hub tools status", None, ()
+        if tools_operation == "install":
+            if not args.accept_license:
+                raise ADBCLIError(
+                    "tools install requires --accept-license after reviewing the "
+                    "Android SDK License Agreement."
+                )
+            return (
+                TOOLS_INSTALL_PATH,
+                "POST",
+                "a managed Platform-Tools installation result",
+                {"license_accepted": True},
+                (),
+            )
+        if tools_operation == "remove":
+            return (
+                TOOLS_REMOVE_PATH,
+                "POST",
+                "a managed Platform-Tools removal result",
+                {},
+                (),
+            )
+        raise ADBCLIError(f"unknown tools operation: {tools_operation}")
     if operation == "version":
         return ADB_VERSION_PATH, "GET", "an ADB version result", None, ()
     if operation == "devices":
@@ -453,7 +504,7 @@ def _operation_request(
             },
             (),
         )
-    raise ADBCLIError(f"unknown ADB operation: {operation}")
+    raise ADBCLIError(f"unknown Developer Hub operation: {operation}")
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -465,7 +516,7 @@ def _run(args: argparse.Namespace) -> int:
         method=method,
         token=token,
         timeout=args.timeout,
-        correlation_prefix=f"cli-devhub-adb-{args.operation}",
+        correlation_prefix=f"cli-devhub-{args.operation}",
         payload_description=description,
         body=body,
         sensitive_values=sensitive_values,
