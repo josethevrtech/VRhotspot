@@ -49,3 +49,15 @@ window.UI_FIELD_VISIBILITY = {
   firewalld_zone: "advanced",
   debug: "advanced"
 };
+
+(function loadDeveloperHubAssets() {
+  const stylesheet = document.createElement('link');
+  stylesheet.rel = 'stylesheet';
+  stylesheet.href = '/assets/devhub.css';
+  document.head.appendChild(stylesheet);
+
+  const script = document.createElement('script');
+  script.src = '/assets/devhub.js';
+  script.async = false;
+  document.head.appendChild(script);
+})();
