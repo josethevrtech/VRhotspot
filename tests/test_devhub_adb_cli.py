@@ -82,7 +82,7 @@ def test_version_uses_authenticated_get(monkeypatch, tmp_path, capsys):
     assert seen["url"] == "http://127.0.0.1:9900/v1/devbridge/adb/version"
     assert seen["body"] is None
     assert seen["headers"]["x-api-token"] == secret
-    assert seen["headers"]["x-correlation-id"].startswith("cli-devhub-adb-version-")
+    assert seen["headers"]["x-correlation-id"].startswith("cli-devhub-version-")
     assert secret not in captured.out
 
 
