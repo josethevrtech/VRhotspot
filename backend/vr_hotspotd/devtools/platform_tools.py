@@ -91,7 +91,9 @@ def _validate_pin(pin: Mapping[str, Any]) -> List[str]:
         errors.append("arch must be a non-empty string")
 
     maximum = pin.get("max_archive_bytes")
-    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum <= 0:
+    if maximum is not None and (
+        isinstance(maximum, bool) or not isinstance(maximum, int) or maximum <= 0
+    ):
         errors.append("max_archive_bytes must be a positive integer")
 
     allowlist = pin.get("extract_allowlist")
@@ -102,15 +104,17 @@ def _validate_pin(pin: Mapping[str, Any]) -> List[str]:
     ):
         errors.append("extract_allowlist must be a non-empty array of non-empty strings")
 
-    if not _is_nonempty_string(pin.get("license_name")):
-        errors.append("license_name must be a non-empty string")
+    license_name = pin.get("license_name")
+    if license_name is not None and not _is_nonempty_string(license_name):
+        errors.append("license_name must be a non-empty string when present")
     terms_url = pin.get("license_terms_url")
-    if not _is_nonempty_string(terms_url):
-        errors.append("license_terms_url must be a non-empty string")
-    else:
-        parsed_terms = urlsplit(terms_url)
-        if parsed_terms.scheme != "https" or parsed_terms.hostname != "developer.android.com":
-            errors.append("license_terms_url must use developer.android.com over https")
+    if terms_url is not None:
+        if not _is_nonempty_string(terms_url):
+            errors.append("license_terms_url must be a non-empty string when present")
+        else:
+            parsed_terms = urlsplit(terms_url)
+            if parsed_terms.scheme != "https" or parsed_terms.hostname != "developer.android.com":
+                errors.append("license_terms_url must use developer.android.com over https")
 
     return errors
 
