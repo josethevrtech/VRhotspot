@@ -271,7 +271,9 @@ def test_pair_rejects_invalid_code_before_request(
     captured = capsys.readouterr()
     assert excinfo.value.code == 1
     assert "exactly six digits" in captured.err
-    assert code not in captured.out
+    if code:
+        assert code not in captured.out
+        assert code not in captured.err
 
 
 def test_pair_refuses_reflected_pairing_code(monkeypatch, tmp_path, capsys):
