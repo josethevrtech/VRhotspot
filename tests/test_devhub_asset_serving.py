@@ -12,6 +12,16 @@ from vr_hotspotd.devtools.devhub_api import DevHubAPIHandler
     (
         ("/assets/devhub.js", "application/javascript; charset=utf-8", b"console.log('hub');"),
         ("/assets/devhub.css", "text/css; charset=utf-8", b".devhub-page{}"),
+        (
+            "/assets/devhub_upload.js",
+            "application/javascript; charset=utf-8",
+            b"console.log('upload');",
+        ),
+        (
+            "/assets/devhub_upload.css",
+            "text/css; charset=utf-8",
+            b".devhub-file-drop{}",
+        ),
     ),
 )
 def test_developer_hub_assets_are_served_without_api_auth(

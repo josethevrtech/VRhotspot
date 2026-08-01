@@ -1,0 +1,73 @@
+.devhub-upload-field {
+  display: grid;
+  gap: 8px;
+}
+
+.devhub-file-drop {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  padding: 14px;
+  border: 1px dashed rgba(0, 243, 255, .38);
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(135deg, rgba(0, 243, 255, .055), transparent 48%),
+    var(--bg-input);
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+.devhub-file-drop:hover,
+.devhub-file-drop.is-dragging {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 18px rgba(0, 243, 255, .1);
+}
+
+.devhub-file-copy {
+  min-width: 0;
+}
+
+.devhub-file-name {
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.devhub-file-meta {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.devhub-host-path {
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.devhub-host-path summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.devhub-host-path[open] summary {
+  margin-bottom: 12px;
+}
+
+.devhub-host-path-help {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 920px) {
+  .devhub-file-drop {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
