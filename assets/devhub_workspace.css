@@ -25,33 +25,17 @@
 }
 
 .devhub-device-identity {
-  display: flex;
-  align-items: center;
-  gap: 13px;
   min-width: 0;
 }
 
-.devhub-device-state {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 auto;
-  border-radius: 999px;
-  background: var(--text-muted);
-  box-shadow: 0 0 12px currentColor;
-}
-
-.devhub-device-state.online {
-  color: var(--success);
-  background: var(--success);
-}
-
-.devhub-device-state.offline,
-.devhub-device-state.unauthorized {
-  color: var(--danger);
-  background: var(--danger);
-}
-
 .devhub-device-copy {
+  min-width: 0;
+}
+
+.devhub-device-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -78,6 +62,10 @@
   flex-wrap: wrap;
 }
 
+.devhub-device-badges[hidden] {
+  display: none !important;
+}
+
 .devhub-device-badge {
   display: inline-flex;
   align-items: center;
@@ -96,6 +84,10 @@
 .devhub-device-badge.accent {
   border-color: rgba(0, 243, 255, .38);
   color: var(--accent-primary);
+}
+
+.devhub-info-tip {
+  flex: 0 0 auto;
 }
 
 .devhub-workspace-tabs {
@@ -155,32 +147,41 @@
 }
 
 .devhub-quick-action {
-  display: grid;
-  gap: 5px;
-  min-height: 82px;
-  padding: 13px;
+  display: flex;
+  align-items: center;
+  min-height: 58px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-input);
   color: var(--text-main);
-  cursor: pointer;
-  text-align: left;
 }
 
-.devhub-quick-action:hover {
+.devhub-quick-action:hover,
+.devhub-quick-action:focus-within {
   border-color: rgba(0, 243, 255, .38);
   box-shadow: 0 0 16px rgba(0, 243, 255, .08);
 }
 
-.devhub-quick-action strong {
+.devhub-quick-action-button {
+  min-width: 0;
+  min-height: 56px;
+  flex: 1 1 auto;
+  padding: 13px;
+  border: 0;
+  background: transparent;
+  color: var(--text-main);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.devhub-quick-action-button strong {
   color: var(--accent-primary);
   font-size: 13px;
 }
 
-.devhub-quick-action span {
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.4;
+.devhub-quick-action-tip {
+  margin: 0 13px 0 6px;
 }
 
 .devhub-activity {
@@ -219,10 +220,15 @@
 
 .devhub-workspace-meta {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
+  align-items: center;
   gap: 12px;
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.devhub-refresh-help {
+  margin-right: auto;
 }
 
 .devhub-section-note {
