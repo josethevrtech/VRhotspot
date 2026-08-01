@@ -14,7 +14,7 @@
   gap: 18px;
   padding: 16px 18px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background:
     linear-gradient(120deg, rgba(0, 243, 255, .08), transparent 42%),
     var(--bg-card);
@@ -99,7 +99,7 @@
   gap: 6px;
   padding: 4px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--bg-card);
   overflow-x: auto;
 }
