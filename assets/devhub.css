@@ -1,0 +1,228 @@
+.devhub-page {
+  display: grid;
+  gap: 20px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.devhub-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.devhub-heading h2 {
+  font-size: 24px;
+  color: var(--text-main);
+}
+
+.devhub-heading-copy {
+  max-width: 720px;
+}
+
+.devhub-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.devhub-grid .devhub-span {
+  grid-column: 1 / -1;
+}
+
+.devhub-card-status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.devhub-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 0 8px currentColor;
+}
+
+.devhub-status-dot.ready {
+  background: var(--success);
+  color: var(--success);
+}
+
+.devhub-status-dot.error {
+  background: var(--danger);
+  color: var(--danger);
+}
+
+.devhub-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.devhub-form-grid .devhub-wide {
+  grid-column: 1 / -1;
+}
+
+.devhub-form-grid label,
+.devhub-field label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.devhub-form-grid input,
+.devhub-form-grid select,
+.devhub-field input,
+.devhub-field select {
+  width: 100%;
+}
+
+.devhub-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.devhub-feedback {
+  min-height: 20px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.devhub-feedback[data-state="success"] {
+  border-color: rgba(0, 255, 157, .45);
+  color: var(--success);
+}
+
+.devhub-feedback[data-state="error"] {
+  border-color: rgba(255, 0, 85, .55);
+  color: var(--danger);
+}
+
+.devhub-feedback[data-state="loading"] {
+  border-color: rgba(0, 243, 255, .45);
+  color: var(--accent-primary);
+}
+
+.devhub-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.devhub-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+
+.devhub-list-item.selected {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 12px rgba(0, 243, 255, .12);
+}
+
+.devhub-list-main {
+  min-width: 0;
+}
+
+.devhub-list-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.devhub-list-meta {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.devhub-empty {
+  padding: 18px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.devhub-tools-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.devhub-tool-value {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.devhub-selected {
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent-primary);
+  background: var(--accent-subtle);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.devhub-checks {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.devhub-checks label {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.devhub-checks input {
+  width: auto;
+}
+
+.devhub-nav-icon {
+  min-width: 22px;
+  font-family: var(--font-mono);
+  font-size: 11px !important;
+  font-weight: 700;
+}
+
+@media (max-width: 920px) {
+  .devhub-grid,
+  .devhub-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .devhub-grid .devhub-span,
+  .devhub-form-grid .devhub-wide {
+    grid-column: auto;
+  }
+
+  .devhub-tools-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
