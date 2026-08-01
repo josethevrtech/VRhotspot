@@ -13,12 +13,13 @@ def _pin():
     return checker.load_pin(PIN_FILE)
 
 
-def test_repository_pin_is_valid_and_implementation_remains_blocked():
+def test_repository_pin_is_valid_verified_and_unblocked():
     pin = _pin()
 
     assert checker.validate_pin(pin) == []
-    assert pin["archive_sha256"] == checker.BLOCKED_SHA256_PLACEHOLDER
-    assert pin["implementation_blocked"] is True
+    assert checker.SHA256_RE.fullmatch(pin["archive_sha256"]) is not None
+    assert pin["archive_sha256"] != checker.BLOCKED_SHA256_PLACEHOLDER
+    assert pin["implementation_blocked"] is False
     assert pin["license_review"]["record"] == "docs/devbridge-platform-tools-license-review.md"
 
 
@@ -49,7 +50,7 @@ def test_pin_rejects_http_wrong_host_latest_and_unversioned_urls():
     assert any("must use https" in error for error in checker.validate_pin(http_pin))
 
     host_pin = _pin()
-    host_pin["url"] = "https://example.com/android/repository/platform-tools_r36.0.0-linux.zip"
+    host_pin["url"] = f"https://example.com/android/repository/platform-tools_{host_pin['version']}-linux.zip"
     assert any("host must be exactly 'dl.google.com'" in error for error in checker.validate_pin(host_pin))
 
     latest_pin = _pin()
@@ -64,12 +65,18 @@ def test_pin_rejects_http_wrong_host_latest_and_unversioned_urls():
 
 
 def test_pin_couples_placeholder_sha256_to_implementation_blocked():
-    unblocked_pin = _pin()
-    unblocked_pin["implementation_blocked"] = False
+    unblocked_placeholder_pin = _pin()
+    unblocked_placeholder_pin["archive_sha256"] = checker.BLOCKED_SHA256_PLACEHOLDER
+    unblocked_placeholder_pin["implementation_blocked"] = False
     assert (
         "implementation_blocked must be true while archive_sha256 is the blocked placeholder"
-        in checker.validate_pin(unblocked_pin)
+        in checker.validate_pin(unblocked_placeholder_pin)
     )
+
+    blocked_placeholder_pin = _pin()
+    blocked_placeholder_pin["archive_sha256"] = checker.BLOCKED_SHA256_PLACEHOLDER
+    blocked_placeholder_pin["implementation_blocked"] = True
+    assert checker.validate_pin(blocked_placeholder_pin) == []
 
     malformed_pin = _pin()
     malformed_pin["archive_sha256"] = "A" * 64
