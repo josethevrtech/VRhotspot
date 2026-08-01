@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+from pathlib import Path
 import re
 import sys
 from typing import Any, Dict, Mapping, Optional, Sequence
+from urllib.parse import urlencode
 from urllib.request import Request
 import uuid
 
@@ -24,9 +26,18 @@ ADB_DEVICES_PATH = "/v1/devbridge/adb/devices"
 ADB_PAIR_PATH = "/v1/devbridge/adb/pair"
 ADB_CONNECT_PATH = "/v1/devbridge/adb/connect"
 ADB_DISCONNECT_PATH = "/v1/devbridge/adb/disconnect"
+ADB_PACKAGES_PATH = "/v1/devbridge/adb/packages"
+ADB_INSTALL_PATH = "/v1/devbridge/adb/install"
+ADB_LAUNCH_PATH = "/v1/devbridge/adb/launch"
+ADB_STOP_PATH = "/v1/devbridge/adb/stop"
+ADB_CLEAR_DATA_PATH = "/v1/devbridge/adb/clear-data"
+ADB_UNINSTALL_PATH = "/v1/devbridge/adb/uninstall"
 ADB_DEFAULT_PORT = 5555
 _PAIRING_CODE_RE = re.compile(r"^[0-9]{6}$")
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
+_PACKAGE_NAME_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$"
+)
 
 
 class ADBCLIError(base_cli.CLIError):
@@ -50,6 +61,23 @@ def _validated_serial_argument(value: str) -> str:
             "192.168.68.23:5555"
         )
     return value
+
+
+def _validated_package_argument(value: str) -> str:
+    if not _PACKAGE_NAME_RE.fullmatch(value or ""):
+        raise argparse.ArgumentTypeError(
+            "must be an Android package name such as com.example.application"
+        )
+    return value
+
+
+def _validated_apk_path_argument(value: str) -> str:
+    if not value or len(value) > 4096 or "\x00" in value:
+        raise argparse.ArgumentTypeError("must be an absolute path ending in .apk")
+    path = Path(value)
+    if not path.is_absolute() or path.suffix.lower() != ".apk":
+        raise argparse.ArgumentTypeError("must be an absolute path ending in .apk")
+    return str(path)
 
 
 def _read_pairing_code() -> str:
@@ -163,11 +191,31 @@ def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
     base_cli._add_client_arguments(parser)
 
 
+def _add_serial_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--serial",
+        required=True,
+        type=_validated_serial_argument,
+        metavar="SERIAL",
+        help="Exact adb device serial, usually IPV4:PORT.",
+    )
+
+
+def _add_package_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--package",
+        required=True,
+        type=_validated_package_argument,
+        metavar="PACKAGE",
+        help="Android application package name.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vr-hotspot-adb",
         description=(
-            "Run explicit, allowlisted ADB operations through the authenticated "
+            "Run explicit ADB device and application operations through the authenticated "
             "VRhotspot Developer Hub daemon."
         ),
     )
@@ -230,18 +278,82 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disconnect one adb serial without affecting other devices.",
     )
     _add_common_arguments(disconnect_parser)
-    disconnect_parser.add_argument(
-        "--serial",
+    _add_serial_argument(disconnect_parser)
+
+    packages_parser = commands.add_parser(
+        "packages",
+        help="List installed application packages on one headset.",
+    )
+    _add_common_arguments(packages_parser)
+    _add_serial_argument(packages_parser)
+    packages_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Include system packages instead of listing third-party apps only.",
+    )
+
+    install_parser = commands.add_parser(
+        "install",
+        help="Install or update an APK on one headset.",
+    )
+    _add_common_arguments(install_parser)
+    install_parser.set_defaults(timeout=300.0)
+    _add_serial_argument(install_parser)
+    install_parser.add_argument(
+        "--apk",
         required=True,
-        type=_validated_serial_argument,
-        metavar="SERIAL",
-        help="Exact adb serial, usually IPV4:PORT.",
+        type=_validated_apk_path_argument,
+        metavar="PATH",
+        help="Absolute host path to the APK file.",
+    )
+    install_parser.add_argument(
+        "--no-reinstall",
+        action="store_true",
+        help="Do not pass adb install -r; fail if the package is already installed.",
+    )
+    install_parser.add_argument(
+        "--grant-permissions",
+        action="store_true",
+        help="Grant runtime permissions requested by the APK during installation.",
+    )
+
+    launch_parser = commands.add_parser("launch", help="Launch an installed application.")
+    _add_common_arguments(launch_parser)
+    _add_serial_argument(launch_parser)
+    _add_package_argument(launch_parser)
+
+    stop_parser = commands.add_parser("stop", help="Force-stop an installed application.")
+    _add_common_arguments(stop_parser)
+    _add_serial_argument(stop_parser)
+    _add_package_argument(stop_parser)
+
+    clear_parser = commands.add_parser(
+        "clear-data",
+        help="Clear an application's local data on the selected headset.",
+    )
+    _add_common_arguments(clear_parser)
+    _add_serial_argument(clear_parser)
+    _add_package_argument(clear_parser)
+
+    uninstall_parser = commands.add_parser(
+        "uninstall",
+        help="Uninstall an application from one headset.",
+    )
+    _add_common_arguments(uninstall_parser)
+    _add_serial_argument(uninstall_parser)
+    _add_package_argument(uninstall_parser)
+    uninstall_parser.add_argument(
+        "--keep-data",
+        action="store_true",
+        help="Keep application data and cache directories during uninstall.",
     )
 
     return parser
 
 
-def _operation_request(args: argparse.Namespace) -> tuple[str, str, str, Optional[Dict[str, Any]], tuple[str, ...]]:
+def _operation_request(
+    args: argparse.Namespace,
+) -> tuple[str, str, str, Optional[Dict[str, Any]], tuple[str, ...]]:
     operation = args.operation
     if operation == "version":
         return ADB_VERSION_PATH, "GET", "an ADB version result", None, ()
@@ -276,6 +388,69 @@ def _operation_request(args: argparse.Namespace) -> tuple[str, str, str, Optiona
             "POST",
             "an ADB disconnection result",
             {"serial": args.serial},
+            (),
+        )
+    if operation == "packages":
+        query = urlencode(
+            {
+                "serial": args.serial,
+                "third_party_only": "0" if args.all else "1",
+            }
+        )
+        return (
+            ADB_PACKAGES_PATH + "?" + query,
+            "GET",
+            "an installed package result",
+            None,
+            (),
+        )
+    if operation == "install":
+        return (
+            ADB_INSTALL_PATH,
+            "POST",
+            "an APK installation result",
+            {
+                "serial": args.serial,
+                "apk_path": args.apk,
+                "reinstall": not args.no_reinstall,
+                "grant_permissions": args.grant_permissions,
+            },
+            (),
+        )
+    if operation == "launch":
+        return (
+            ADB_LAUNCH_PATH,
+            "POST",
+            "an application launch result",
+            {"serial": args.serial, "package": args.package},
+            (),
+        )
+    if operation == "stop":
+        return (
+            ADB_STOP_PATH,
+            "POST",
+            "an application stop result",
+            {"serial": args.serial, "package": args.package},
+            (),
+        )
+    if operation == "clear-data":
+        return (
+            ADB_CLEAR_DATA_PATH,
+            "POST",
+            "an application data-clear result",
+            {"serial": args.serial, "package": args.package},
+            (),
+        )
+    if operation == "uninstall":
+        return (
+            ADB_UNINSTALL_PATH,
+            "POST",
+            "an application uninstall result",
+            {
+                "serial": args.serial,
+                "package": args.package,
+                "keep_data": args.keep_data,
+            },
             (),
         )
     raise ADBCLIError(f"unknown ADB operation: {operation}")
