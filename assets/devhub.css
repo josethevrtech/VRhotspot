@@ -1,16 +1,22 @@
 .devhub-page {
   display: grid;
-  gap: 20px;
-  max-width: 1180px;
-  margin: 0 auto;
+  gap: 16px;
+  width: 100%;
+  max-width: 1680px;
+  margin: 0;
+  font-size: 14px;
 }
 
 .devhub-heading {
   display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 12px;
+  align-items: center;
   flex-wrap: wrap;
+}
+
+.devhub-heading-copy {
+  display: none;
 }
 
 .devhub-heading h2 {
@@ -18,14 +24,14 @@
   color: var(--text-main);
 }
 
-.devhub-heading-copy {
-  max-width: 720px;
-}
-
 .devhub-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
+  gap: 16px;
+}
+
+.devhub-grid > .card {
+  min-width: 0;
 }
 
 .devhub-grid .devhub-span {
@@ -70,9 +76,9 @@
 .devhub-form-grid label,
 .devhub-field label {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: 7px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -83,6 +89,8 @@
 .devhub-field input,
 .devhub-field select {
   width: 100%;
+  min-height: 38px;
+  font-size: 14px;
 }
 
 .devhub-actions {
@@ -93,12 +101,13 @@
 }
 
 .devhub-feedback {
-  min-height: 20px;
-  padding: 10px 12px;
+  min-height: 22px;
+  padding: 11px 13px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-input);
   font-family: var(--font-mono);
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
@@ -120,7 +129,7 @@
 .devhub-list {
   display: grid;
   gap: 8px;
-  max-height: 360px;
+  max-height: 390px;
   overflow: auto;
 }
 
@@ -146,14 +155,14 @@
 
 .devhub-list-title {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 
 .devhub-list-meta {
   margin-top: 4px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -162,19 +171,20 @@
   border: 1px dashed var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
+  font-size: 13px;
   text-align: center;
 }
 
 .devhub-tools-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .devhub-tool-value {
   margin-top: 4px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 
@@ -183,6 +193,7 @@
   border-left: 3px solid var(--accent-primary);
   background: var(--accent-subtle);
   font-family: var(--font-mono);
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 
@@ -197,11 +208,12 @@
   gap: 7px;
   align-items: center;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .devhub-checks input {
   width: auto;
+  min-height: auto;
 }
 
 .devhub-nav-icon {
