@@ -61,6 +61,11 @@ window.UI_FIELD_VISIBILITY = {
   uploadStylesheet.href = '/assets/devhub_upload.css';
   document.head.appendChild(uploadStylesheet);
 
+  const workspaceStylesheet = document.createElement('link');
+  workspaceStylesheet.rel = 'stylesheet';
+  workspaceStylesheet.href = '/assets/devhub_workspace.css';
+  document.head.appendChild(workspaceStylesheet);
+
   const script = document.createElement('script');
   script.src = '/assets/devhub.js';
   script.async = false;
@@ -70,6 +75,11 @@ window.UI_FIELD_VISIBILITY = {
   uploadScript.src = '/assets/devhub_upload.js';
   uploadScript.async = false;
   document.head.appendChild(uploadScript);
+
+  const workspaceScript = document.createElement('script');
+  workspaceScript.src = '/assets/devhub_workspace.js';
+  workspaceScript.async = false;
+  document.head.appendChild(workspaceScript);
 })();
 
 (function addManagedPlatformToolsControls() {

@@ -42,6 +42,8 @@ _DEVHUB_ASSET_TYPES = {
     "/assets/devhub.js": "application/javascript; charset=utf-8",
     "/assets/devhub_upload.css": "text/css; charset=utf-8",
     "/assets/devhub_upload.js": "application/javascript; charset=utf-8",
+    "/assets/devhub_workspace.css": "text/css; charset=utf-8",
+    "/assets/devhub_workspace.js": "application/javascript; charset=utf-8",
 }
 
 _GET_OPERATIONS = {
