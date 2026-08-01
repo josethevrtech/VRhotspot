@@ -43,6 +43,16 @@ def test_host_path_install_is_preserved_as_advanced_fallback():
     assert "pathInput.required = false" in source
 
 
+def test_picker_is_inserted_before_host_path_moves_into_advanced_section():
+    source = UPLOAD_JS.read_text(encoding="utf-8")
+
+    insert_picker = source.index("form.insertBefore(uploadField, pathField)")
+    move_host_path = source.index("advanced.append(summary, pathField, help)")
+    insert_advanced = source.index("form.insertBefore(advanced, checks)")
+
+    assert insert_picker < move_host_path < insert_advanced
+
+
 def test_developer_hub_desktop_layout_uses_available_space():
     source = DEVHUB_CSS.read_text(encoding="utf-8")
     upload_source = UPLOAD_CSS.read_text(encoding="utf-8")

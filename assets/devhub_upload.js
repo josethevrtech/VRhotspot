@@ -98,9 +98,9 @@
     const help = document.createElement('div');
     help.className = 'devhub-host-path-help';
     help.textContent = 'Use this only when the APK already exists on the Linux machine running VRhotspot.';
-    advanced.append(summary, pathField, help);
 
     form.insertBefore(uploadField, pathField);
+    advanced.append(summary, pathField, help);
     form.insertBefore(advanced, checks);
     submit.textContent = 'Install on headset';
 
