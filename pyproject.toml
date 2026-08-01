@@ -10,6 +10,7 @@ requires-python = ">=3.9"
 
 [project.scripts]
 vr-hotspot = "vr_hotspotd.cli:main"
+vr-hotspot-adb = "vr_hotspotd.devtools.adb_cli:main"
 vr-hotspotd = "vr_hotspotd.main:main"
 
 [tool.setuptools]
