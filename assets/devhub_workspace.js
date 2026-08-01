@@ -6,8 +6,6 @@
   const VIEW_NAMES = ['device', 'apps', 'connection', 'tools'];
   let refreshTimer = null;
   let activityTimer = null;
-  let observer = null;
-  let currentView = 'device';
   let syncQueued = false;
 
   function el(id) {
@@ -42,7 +40,9 @@
     const state = (meta.split('·')[0] || '').trim().toLowerCase();
     const modelMatch = meta.match(/(?:^|·)\s*model\s+([^·]+)/i);
     const model = normalizedModel(modelMatch ? modelMatch[1] : '');
-    const transport = serial && serial.includes(':') ? 'Wireless ADB' : (serial ? 'USB ADB' : 'No transport');
+    const transport = serial && serial.includes(':')
+      ? 'Wireless ADB'
+      : (serial ? 'USB ADB' : 'No transport');
     const connected = state === 'device';
     return {
       serial: serial && serial !== 'No device selected' ? serial : '',
@@ -50,13 +50,14 @@
       state: state || (serial ? 'unknown' : 'offline'),
       transport,
       connected,
-      meta,
     };
   }
 
   function setText(id, value) {
     const node = el(id);
-    if (node) node.textContent = String(value || '');
+    if (!node) return;
+    const rendered = String(value || '');
+    if (node.textContent !== rendered) node.textContent = rendered;
   }
 
   function updateDeviceBar() {
@@ -70,9 +71,15 @@
     }
 
     setText('devhubWorkspaceDeviceName', device.model);
-    setText('devhubWorkspaceDeviceSerial', device.serial || 'Connect or select a headset to begin');
+    setText(
+      'devhubWorkspaceDeviceSerial',
+      device.serial || 'Connect or select a headset to begin',
+    );
     setText('devhubWorkspaceTransport', device.transport);
-    setText('devhubWorkspaceState', device.connected ? 'Connected' : (device.state || 'Offline'));
+    setText(
+      'devhubWorkspaceState',
+      device.connected ? 'Connected' : (device.state || 'Offline'),
+    );
 
     const source = String((el('devhubToolSource') || {}).textContent || '').trim();
     const runtime = source && source !== '--' ? `${source} ADB` : 'ADB unavailable';
@@ -95,7 +102,7 @@
 
     const message = source.textContent.trim();
     const state = source.dataset.state || 'idle';
-    activity.textContent = message;
+    if (activity.textContent !== message) activity.textContent = message;
     activity.dataset.state = state;
 
     if (shouldSuppressActivity(message)) {
@@ -106,7 +113,10 @@
     activity.classList.add('visible');
     if (activityTimer) window.clearTimeout(activityTimer);
     if (state === 'success') {
-      activityTimer = window.setTimeout(() => activity.classList.remove('visible'), 4500);
+      activityTimer = window.setTimeout(
+        () => activity.classList.remove('visible'),
+        4500,
+      );
     }
   }
 
@@ -140,7 +150,6 @@
 
   function setView(name, options = {}) {
     const next = VIEW_NAMES.includes(name) ? name : 'device';
-    currentView = next;
     saveView(next);
 
     document.querySelectorAll('.devhub-workspace-tab').forEach((button) => {
@@ -201,10 +210,26 @@
     const actions = document.createElement('div');
     actions.className = 'devhub-quick-actions';
     actions.append(
-      quickAction('Install APK', 'Choose a local build and send it directly to the selected headset.', () => setView('apps', { focusPicker: true })),
-      quickAction('Manage Apps', 'Inspect installed packages, launch builds, stop them, or uninstall them.', () => setView('apps')),
-      quickAction('Connection', 'Manage wireless ADB, pairing, discovery, and connected devices.', () => setView('connection')),
-      quickAction('Developer Tools', 'Inspect the ADB runtime and managed Android Platform-Tools.', () => setView('tools')),
+      quickAction(
+        'Install APK',
+        'Choose a local build and send it directly to the selected headset.',
+        () => setView('apps', { focusPicker: true }),
+      ),
+      quickAction(
+        'Manage Apps',
+        'Inspect installed packages, launch builds, stop them, or uninstall them.',
+        () => setView('apps'),
+      ),
+      quickAction(
+        'Connection',
+        'Manage wireless ADB, pairing, discovery, and connected devices.',
+        () => setView('connection'),
+      ),
+      quickAction(
+        'Developer Tools',
+        'Inspect the ADB runtime and managed Android Platform-Tools.',
+        () => setView('tools'),
+      ),
     );
     body.appendChild(actions);
     section.append(header, body);
@@ -220,6 +245,36 @@
     grid.className = 'devhub-workspace-grid';
     node.appendChild(grid);
     return { node, grid };
+  }
+
+  function scheduleSourceSync() {
+    if (syncQueued) return;
+    syncQueued = true;
+    window.requestAnimationFrame(() => {
+      syncQueued = false;
+      updateDeviceBar();
+      syncActivity();
+    });
+  }
+
+  function observeSources(feedback) {
+    const observer = new MutationObserver(scheduleSourceSync);
+    const sources = [
+      el('devhubSelectedDevice'),
+      el('devhubDeviceList'),
+      el('devhubToolSource'),
+      feedback,
+    ].filter(Boolean);
+
+    for (const source of sources) {
+      observer.observe(source, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['class', 'data-state'],
+      });
+    }
   }
 
   function inject() {
@@ -331,27 +386,10 @@
       refreshButton.tabIndex = -1;
     }
 
-    currentView = readView();
-    setView(currentView);
+    setView(readView());
     updateDeviceBar();
     syncActivity();
-
-    observer = new MutationObserver(() => {
-      if (syncQueued) return;
-      syncQueued = true;
-      window.requestAnimationFrame(() => {
-        syncQueued = false;
-        updateDeviceBar();
-        syncActivity();
-      });
-    });
-    observer.observe(page, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      attributes: true,
-      attributeFilter: ['class', 'data-state'],
-    });
+    observeSources(feedback);
 
     if (refreshTimer) window.clearInterval(refreshTimer);
     refreshTimer = window.setInterval(requestRefresh, AUTO_REFRESH_MS);
