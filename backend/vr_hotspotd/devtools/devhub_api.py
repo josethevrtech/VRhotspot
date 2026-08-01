@@ -1,16 +1,17 @@
 """Authenticated Developer Hub API routes for typed ADB operations.
 
 The main VRhotspot API remains the base handler. This subclass intercepts only
-Developer Hub ADB routes and delegates every other request to the established
-APIHandler implementation.
+Developer Hub assets and ADB routes and delegates every other request to the
+established APIHandler implementation.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from vr_hotspotd.api import APIHandler
+from vr_hotspotd.api import APIHandler, _resolve_asset_path
 from vr_hotspotd.devtools.adb_operations import (
     RESULT_FAILED,
     RESULT_INVALID_REQUEST,
@@ -23,6 +24,11 @@ from vr_hotspotd.devtools.adb_operations import (
 
 
 log = logging.getLogger("vr_hotspotd.devhub_api")
+
+_DEVHUB_ASSET_TYPES = {
+    "/assets/devhub.css": "text/css; charset=utf-8",
+    "/assets/devhub.js": "application/javascript; charset=utf-8",
+}
 
 _GET_OPERATIONS = {
     "/v1/devbridge/adb/version": "version",
@@ -59,7 +65,24 @@ _BODY_ERROR_WARNINGS = {
 
 
 class DevHubAPIHandler(APIHandler):
-    """Extend the daemon API with executable Developer Hub operations."""
+    """Extend the daemon API with Developer Hub assets and operations."""
+
+    def _serve_devhub_asset(self, path: str) -> bool:
+        content_type = _DEVHUB_ASSET_TYPES.get(path)
+        if content_type is None:
+            return False
+        asset_name = path.rsplit("/", 1)[-1]
+        asset_path = _resolve_asset_path(asset_name)
+        if not asset_path:
+            self._respond_raw(404, b"Not Found", "text/plain; charset=utf-8")
+            return True
+        try:
+            payload = Path(asset_path).read_bytes()
+        except OSError:
+            self._respond_raw(404, b"Not Found", "text/plain; charset=utf-8")
+            return True
+        self._respond_raw(200, payload, content_type)
+        return True
 
     def _respond_adb_operation(
         self,
@@ -97,6 +120,8 @@ class DevHubAPIHandler(APIHandler):
     def do_GET(self):
         cid = self._cid()
         path, qs = self._parse_url()
+        if self._serve_devhub_asset(path):
+            return
         operation = _GET_OPERATIONS.get(path)
         if operation is None:
             super().do_GET()
