@@ -3,7 +3,7 @@ import logging
 import os
 from http.server import ThreadingHTTPServer
 
-from vr_hotspotd.api import APIHandler
+from vr_hotspotd.devtools.devhub_api import DevHubAPIHandler
 
 log = logging.getLogger("vr_hotspotd.server")
 
@@ -30,7 +30,7 @@ def build_server() -> ThreadingHTTPServer:
         log.error("refusing to bind non-loopback without VR_HOTSPOTD_API_TOKEN")
         raise SystemExit(1)
 
-    server = ThreadingHTTPServer((host, port), APIHandler)
+    server = ThreadingHTTPServer((host, port), DevHubAPIHandler)
     server.daemon_threads = True
     log.info("listening", extra={"bind": f"http://{host}:{port}"})
     return server
