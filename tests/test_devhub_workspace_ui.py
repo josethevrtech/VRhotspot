@@ -69,9 +69,21 @@ def test_workspace_suppresses_polling_noise_but_preserves_operation_feedback():
     assert "state === 'success'" in source
 
 
+def test_workspace_observes_source_fields_without_observing_its_own_summary():
+    source = WORKSPACE_JS.read_text(encoding="utf-8")
+
+    assert "observeSources(feedback)" in source
+    assert "el('devhubSelectedDevice')" in source
+    assert "el('devhubDeviceList')" in source
+    assert "el('devhubToolSource')" in source
+    assert "observer.observe(page" not in source
+
+
 def test_workspace_styles_are_responsive_and_use_device_status_chips():
     source = WORKSPACE_CSS.read_text(encoding="utf-8")
 
+    assert ".devhub-page" in source
+    assert "max-width: none" in source
     assert ".devhub-device-bar" in source
     assert ".devhub-workspace-tabs" in source
     assert ".devhub-device-state.online" in source
