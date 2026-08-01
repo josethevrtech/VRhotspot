@@ -9,8 +9,6 @@ from pathlib import Path
 import stat
 import zipfile
 
-import pytest
-
 from vr_hotspotd.devtools.platform_tools_manager import (
     inspect_managed_platform_tools,
     install_managed_platform_tools,
