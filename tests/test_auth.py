@@ -6,6 +6,7 @@ import pytest
 
 import vr_hotspotd.server as api_server
 from vr_hotspotd.api import APIHandler
+from vr_hotspotd.devtools.devhub_api import DevHubAPIHandler
 
 
 def _handler_with_headers(headers, *, path="/v1/info", method="GET", body=b"{}"):
@@ -244,6 +245,6 @@ def test_loopback_bind_without_token_still_starts_for_public_routes(monkeypatch)
 
     assert seen == {
         "address": ("127.0.0.1", 9876),
-        "handler_class": APIHandler,
+        "handler_class": DevHubAPIHandler,
     }
     assert built.daemon_threads is True
