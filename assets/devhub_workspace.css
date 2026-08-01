@@ -1,3 +1,7 @@
+.devhub-page {
+  max-width: none;
+}
+
 .devhub-heading {
   display: none !important;
 }
