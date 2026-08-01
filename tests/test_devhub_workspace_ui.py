@@ -37,7 +37,6 @@ def test_workspace_is_device_first_and_removes_manual_refresh_ui():
 
     assert "devhub-device-bar" in source
     assert "No headset selected" in source
-    assert "Device state refreshes automatically while this tab is open." in source
     assert "refreshButton.hidden = true" in source
     assert "window.setInterval(requestRefresh, AUTO_REFRESH_MS)" in source
     assert "document.addEventListener('visibilitychange'" in source
@@ -60,6 +59,38 @@ def test_workspace_groups_existing_features_into_clear_views():
     assert "cards.control" in source
 
 
+def test_workspace_uses_shared_info_tips_instead_of_visible_subtext():
+    source = WORKSPACE_JS.read_text(encoding="utf-8")
+
+    assert "function infoTip(" in source
+    assert "tip.className = ['tip', 'devhub-info-tip'" in source
+    assert "tip.textContent = 'ⓘ'" in source
+    assert "tip.setAttribute('data-tip', text)" in source
+    assert "devhub-quick-action-tip" in source
+    assert "devhub-device-help" in source
+    assert "devhub-refresh-help" in source
+    assert "copy.textContent = detail" not in source
+    assert "refreshNote.textContent" not in source
+
+
+def test_workspace_has_no_decorative_device_status_light():
+    javascript = WORKSPACE_JS.read_text(encoding="utf-8")
+    stylesheet = WORKSPACE_CSS.read_text(encoding="utf-8")
+
+    assert "devhubWorkspaceDeviceState" not in javascript
+    assert "devhub-device-state" not in javascript
+    assert ".devhub-device-state" not in stylesheet
+
+
+def test_workspace_handles_empty_device_labels_without_fake_usb_status():
+    source = WORKSPACE_JS.read_text(encoding="utf-8")
+
+    assert "EMPTY_DEVICE_LABELS" in source
+    assert "'no device selected'" in source
+    assert "normalizedSerial" in source
+    assert "badges.hidden = !device.serial" in source
+
+
 def test_workspace_suppresses_polling_noise_but_preserves_operation_feedback():
     source = WORKSPACE_JS.read_text(encoding="utf-8")
 
@@ -79,14 +110,15 @@ def test_workspace_observes_source_fields_without_observing_its_own_summary():
     assert "observer.observe(page" not in source
 
 
-def test_workspace_styles_are_responsive_and_use_device_status_chips():
+def test_workspace_styles_are_responsive_and_compact():
     source = WORKSPACE_CSS.read_text(encoding="utf-8")
 
     assert ".devhub-page" in source
     assert "max-width: none" in source
     assert ".devhub-device-bar" in source
     assert ".devhub-workspace-tabs" in source
-    assert ".devhub-device-state.online" in source
+    assert ".devhub-quick-action-button" in source
+    assert ".devhub-info-tip" in source
     assert ".devhub-workspace-panel[hidden]" in source
     assert "@media (max-width: 920px)" in source
 
