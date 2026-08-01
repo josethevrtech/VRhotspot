@@ -70,7 +70,8 @@ def test_developer_hub_has_no_free_form_adb_command_surface():
 
     assert "eval(" not in source
     assert "new Function" not in source
-    assert "adb command" not in source.lower()
+    assert 'id="devhubCommand"' not in source
+    assert "command_argv" not in source
     assert "shell:" not in source
 
 
