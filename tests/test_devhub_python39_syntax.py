@@ -9,6 +9,7 @@ FILES = (
     ROOT / "backend" / "vr_hotspotd" / "devtools" / "platform_tools.py",
     ROOT / "backend" / "vr_hotspotd" / "devtools" / "platform_tools_manager.py",
     ROOT / "backend" / "vr_hotspotd" / "devtools" / "devhub_api.py",
+    ROOT / "backend" / "vr_hotspotd" / "devtools" / "apk_upload.py",
     ROOT / "backend" / "vr_hotspotd" / "devtools" / "adb_cli.py",
 )
 
