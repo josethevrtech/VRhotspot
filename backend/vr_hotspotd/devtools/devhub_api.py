@@ -1,9 +1,4 @@
-"""Authenticated Developer Hub API routes for typed ADB operations.
-
-The main VRhotspot API remains the base handler. This subclass intercepts only
-Developer Hub assets and ADB routes and delegates every other request to the
-established APIHandler implementation.
-"""
+"""Authenticated Developer Hub routes for assets, tools, and ADB operations."""
 
 from __future__ import annotations
 
@@ -20,6 +15,22 @@ from vr_hotspotd.devtools.adb_operations import (
     RESULT_TIMEOUT,
     RESULT_TOOLS_UNAVAILABLE,
     execute_adb_operation,
+)
+from vr_hotspotd.devtools.platform_tools_manager import (
+    RESULT_ARCHIVE_INVALID,
+    RESULT_ARCHIVE_TOO_LARGE,
+    RESULT_CHECKSUM_MISMATCH,
+    RESULT_DOWNLOAD_FAILED,
+    RESULT_IMPLEMENTATION_BLOCKED,
+    RESULT_INSTALL_BUSY,
+    RESULT_INSTALL_FAILED,
+    RESULT_LICENSE_REQUIRED,
+    RESULT_MANIFEST_INVALID,
+    RESULT_PIN_UNAVAILABLE,
+    RESULT_REMOVE_FAILED,
+    RESULT_UNSUPPORTED_ARCH,
+    install_managed_platform_tools,
+    remove_managed_platform_tools,
 )
 
 
@@ -47,6 +58,11 @@ _POST_OPERATIONS = {
     "/v1/devbridge/adb/uninstall": "uninstall",
 }
 
+_TOOLS_POST_OPERATIONS = {
+    "/v1/devbridge/tools/install": "install",
+    "/v1/devbridge/tools/remove": "remove",
+}
+
 _RESULT_HTTP_STATUS = {
     RESULT_OK: 200,
     RESULT_INVALID_REQUEST: 400,
@@ -54,6 +70,22 @@ _RESULT_HTTP_STATUS = {
     RESULT_TIMEOUT: 504,
     RESULT_OUTPUT_LIMIT: 502,
     RESULT_FAILED: 409,
+}
+
+_TOOLS_RESULT_HTTP_STATUS = {
+    RESULT_OK: 200,
+    RESULT_LICENSE_REQUIRED: 400,
+    RESULT_PIN_UNAVAILABLE: 503,
+    RESULT_IMPLEMENTATION_BLOCKED: 503,
+    RESULT_UNSUPPORTED_ARCH: 422,
+    RESULT_INSTALL_BUSY: 409,
+    RESULT_DOWNLOAD_FAILED: 502,
+    RESULT_ARCHIVE_TOO_LARGE: 502,
+    RESULT_CHECKSUM_MISMATCH: 502,
+    RESULT_ARCHIVE_INVALID: 502,
+    RESULT_MANIFEST_INVALID: 409,
+    RESULT_INSTALL_FAILED: 500,
+    RESULT_REMOVE_FAILED: 500,
 }
 
 _BODY_ERROR_WARNINGS = {
@@ -105,6 +137,32 @@ class DevHubAPIHandler(APIHandler):
             ),
         )
 
+    def _respond_tools_operation(
+        self,
+        *,
+        cid: str,
+        operation: str,
+        request: Mapping[str, Any],
+        warnings: Optional[list[str]] = None,
+    ) -> None:
+        if operation == "install":
+            result = install_managed_platform_tools(
+                license_accepted=request.get("license_accepted")
+            )
+        else:
+            result = remove_managed_platform_tools()
+        result_code = str(result.get("result_code") or RESULT_INSTALL_FAILED)
+        status = _TOOLS_RESULT_HTTP_STATUS.get(result_code, 500)
+        self._respond(
+            status,
+            self._envelope(
+                correlation_id=cid,
+                result_code=result_code,
+                data=result,
+                warnings=list(warnings or []),
+            ),
+        )
+
     def _respond_invalid_body(self, cid: str, warnings: list[str]) -> None:
         status = 413 if "body_too_large" in warnings else 400
         self._respond(
@@ -146,7 +204,8 @@ class DevHubAPIHandler(APIHandler):
         cid = self._cid()
         path, _qs = self._parse_url()
         operation = _POST_OPERATIONS.get(path)
-        if operation is None:
+        tools_operation = _TOOLS_POST_OPERATIONS.get(path)
+        if operation is None and tools_operation is None:
             super().do_POST()
             return
 
@@ -162,9 +221,18 @@ class DevHubAPIHandler(APIHandler):
             self._respond_invalid_body(cid, warnings)
             return
 
+        if tools_operation is not None:
+            self._respond_tools_operation(
+                cid=cid,
+                operation=tools_operation,
+                request=body,
+                warnings=warnings,
+            )
+            return
+
         self._respond_adb_operation(
             cid=cid,
-            operation=operation,
+            operation=operation or "",
             request=body,
             warnings=warnings,
         )

@@ -1,18 +1,4 @@
-"""Read-only Platform-Tools pin loading, adb discovery, and tools status.
-
-This module reads the reviewed pin metadata shipped with the package,
-discovers whether a VRhotspot-managed or system ``adb`` exists on the host,
-and builds the Dev Bridge tools status model.
-
-Hard boundaries, enforced by construction:
-
-- No network access of any kind. The pinned URL is parsed for its host name
-  only and is never fetched.
-- ``adb`` is never executed; discovery is filesystem/PATH inspection only.
-- Nothing is installed, removed, or modified anywhere on the host.
-- While the pin's ``archive_sha256`` is the review placeholder, the status
-  always reports ``implementation_blocked`` true regardless of the flag.
-"""
+"""Platform-Tools pin loading, adb discovery, and tools status."""
 
 from __future__ import annotations
 
@@ -51,10 +37,8 @@ _ARCH_ALIASES = {
 }
 
 _TOOLS_STATUS_NOTES = (
-    "Dev Bridge tools status is read-only: nothing is downloaded, installed, "
-    "removed, or executed.",
-    "The Platform-Tools pin is reviewed metadata only; downloader/installer "
-    "code is intentionally not implemented while implementation_blocked is true.",
+    "VRhotspot can install the reviewed Android Platform-Tools pin into writable host state.",
+    "A system adb remains supported; a verified managed install is preferred when present.",
 )
 
 
@@ -106,6 +90,12 @@ def _validate_pin(pin: Mapping[str, Any]) -> List[str]:
     if not _is_nonempty_string(pin.get("arch")):
         errors.append("arch must be a non-empty string")
 
+    maximum = pin.get("max_archive_bytes")
+    if maximum is not None and (
+        isinstance(maximum, bool) or not isinstance(maximum, int) or maximum <= 0
+    ):
+        errors.append("max_archive_bytes must be a positive integer")
+
     allowlist = pin.get("extract_allowlist")
     if (
         not isinstance(allowlist, list)
@@ -114,11 +104,23 @@ def _validate_pin(pin: Mapping[str, Any]) -> List[str]:
     ):
         errors.append("extract_allowlist must be a non-empty array of non-empty strings")
 
+    license_name = pin.get("license_name")
+    if license_name is not None and not _is_nonempty_string(license_name):
+        errors.append("license_name must be a non-empty string when present")
+    terms_url = pin.get("license_terms_url")
+    if terms_url is not None:
+        if not _is_nonempty_string(terms_url):
+            errors.append("license_terms_url must be a non-empty string when present")
+        else:
+            parsed_terms = urlsplit(terms_url)
+            if parsed_terms.scheme != "https" or parsed_terms.hostname != "developer.android.com":
+                errors.append("license_terms_url must use developer.android.com over https")
+
     return errors
 
 
 def load_platform_tools_pin(path: Optional[Path] = None) -> Dict[str, Any]:
-    """Load and validate the pin metadata. Raises PinError; never touches the network."""
+    """Load and validate the reviewed pin metadata."""
 
     pin_path = Path(path) if path is not None else default_pin_path()
     try:
@@ -142,7 +144,7 @@ def load_platform_tools_pin(path: Optional[Path] = None) -> Dict[str, Any]:
 
 
 def pin_is_blocked(pin: Mapping[str, Any]) -> bool:
-    """Fail safe: the placeholder hash blocks implementation regardless of the flag."""
+    """The placeholder hash blocks implementation regardless of the flag."""
 
     if pin.get("archive_sha256") == BLOCKED_SHA256_PLACEHOLDER:
         return True
@@ -158,7 +160,7 @@ def pin_blocked_reason(pin: Mapping[str, Any]) -> Optional[str]:
 
 
 def pin_url_host(pin: Mapping[str, Any]) -> Optional[str]:
-    """Host name of the pinned URL only; the full URL is never reported."""
+    """Host name of the pinned archive URL; the full download URL is not reported."""
 
     url = pin.get("url")
     if not _is_nonempty_string(url):
@@ -176,12 +178,33 @@ def normalize_arch(machine: Optional[str]) -> Optional[str]:
     return _ARCH_ALIASES.get(normalized, normalized)
 
 
+def _managed_manifest_state(managed_path: str) -> Dict[str, Any]:
+    managed = Path(managed_path)
+    root = managed.parent.parent
+    manifest = root / "manifest.json"
+    if not manifest.exists() and not manifest.is_symlink():
+        return {"verified": None, "version": None, "error": None}
+    try:
+        from vr_hotspotd.devtools.platform_tools_manager import (
+            inspect_managed_platform_tools,
+        )
+
+        inspected = inspect_managed_platform_tools(root)
+    except Exception:
+        return {"verified": False, "version": None, "error": "manifest_invalid"}
+    return {
+        "verified": inspected.get("verified"),
+        "version": inspected.get("version"),
+        "error": inspected.get("error"),
+    }
+
+
 def discover_adb(
     *,
     managed_path: str = MANAGED_ADB_PATH,
     which=shutil.which,
 ) -> Dict[str, Any]:
-    """Filesystem/PATH discovery of adb. Never executes anything."""
+    """Discover a verified managed adb first, then a system adb."""
 
     managed = Path(managed_path)
     try:
@@ -193,6 +216,10 @@ def discover_adb(
         )
     except OSError:
         managed_present = False
+        managed_installed = False
+
+    managed_state = _managed_manifest_state(managed_path)
+    if managed_state["verified"] is False:
         managed_installed = False
 
     try:
@@ -215,9 +242,9 @@ def discover_adb(
             "path": managed_path,
             "present": managed_present,
             "installed": managed_installed,
-            # No managed install exists in the status foundation, so there is
-            # no installed-tools ledger to verify bytes against yet.
-            "verified": None,
+            "verified": managed_state["verified"],
+            "version": managed_state["version"],
+            "error": managed_state["error"],
         },
         "system": {
             "present": bool(system_path),
@@ -235,7 +262,7 @@ def build_devbridge_tools_status(
     discovery: Mapping[str, Any],
     host_machine: Optional[str],
 ) -> Dict[str, Any]:
-    """Pure read-only tools status model shared by API, CLI, and support bundle."""
+    """Pure tools status model shared by API, CLI, UI, and support bundle."""
 
     warnings: List[str] = []
     host_arch = normalize_arch(host_machine)
@@ -248,6 +275,8 @@ def build_devbridge_tools_status(
             "arch": pin.get("arch"),
             "implementation_blocked": pin_is_blocked(pin),
             "blocked_reason": pin_blocked_reason(pin),
+            "license_name": pin.get("license_name"),
+            "license_terms_url": pin.get("license_terms_url"),
             "error": None,
         }
         arch_supported: Optional[bool] = host_arch == normalize_arch(pin.get("arch"))
@@ -259,13 +288,18 @@ def build_devbridge_tools_status(
             "version": None,
             "url_host": None,
             "arch": None,
-            # Fail safe: without a readable pin nothing may be implemented.
             "implementation_blocked": True,
             "blocked_reason": BLOCKED_REASON_PIN_UNAVAILABLE,
+            "license_name": None,
+            "license_terms_url": None,
             "error": pin_error or "pin unavailable",
         }
         arch_supported = None
         warnings.append("platform_tools_pin_unavailable")
+
+    managed = discovery.get("managed")
+    if isinstance(managed, Mapping) and managed.get("present") and managed.get("verified") is False:
+        warnings.append("managed_tools_verification_failed")
 
     return {
         "schema_version": TOOLS_STATUS_SCHEMA_VERSION,
@@ -283,7 +317,7 @@ def build_devbridge_tools_status(
 
 
 def collect_devbridge_tools_status() -> Dict[str, Any]:
-    """Gather the read-only Dev Bridge tools status. Never raises."""
+    """Gather the Dev Bridge tools status. Never raises."""
 
     pin: Optional[Dict[str, Any]] = None
     pin_error: Optional[str] = None
@@ -291,7 +325,7 @@ def collect_devbridge_tools_status() -> Dict[str, Any]:
         pin = load_platform_tools_pin()
     except PinError as exc:
         pin_error = str(exc)
-    except Exception as exc:  # defensive: status must never fail the caller
+    except Exception as exc:
         pin_error = f"unexpected pin load failure: {type(exc).__name__}"
 
     try:
@@ -303,6 +337,8 @@ def collect_devbridge_tools_status() -> Dict[str, Any]:
                 "present": False,
                 "installed": False,
                 "verified": None,
+                "version": None,
+                "error": None,
             },
             "system": {"present": False, "path": None},
             "source": ADB_SOURCE_MISSING,
