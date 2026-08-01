@@ -4,6 +4,12 @@
   const AUTO_REFRESH_MS = 5000;
   const VIEW_KEY = 'vrhs_devhub_workspace_view';
   const VIEW_NAMES = ['device', 'apps', 'connection', 'tools'];
+  const EMPTY_DEVICE_LABELS = new Set([
+    '',
+    '--',
+    'no device selected',
+    'no headset selected',
+  ]);
   let refreshTimer = null;
   let activityTimer = null;
   let syncQueued = false;
@@ -31,8 +37,23 @@
       .trim();
   }
 
+  function normalizedSerial(value) {
+    const serial = String(value || '').trim();
+    return EMPTY_DEVICE_LABELS.has(serial.toLowerCase()) ? '' : serial;
+  }
+
+  function infoTip(text, extraClass = '') {
+    const tip = document.createElement('span');
+    tip.className = ['tip', 'devhub-info-tip', extraClass].filter(Boolean).join(' ');
+    tip.textContent = 'ⓘ';
+    tip.setAttribute('data-tip', text);
+    tip.setAttribute('aria-label', text);
+    tip.setAttribute('tabindex', '0');
+    return tip;
+  }
+
   function selectedDeviceSnapshot() {
-    const serial = String((el('devhubSelectedDevice') || {}).textContent || '').trim();
+    const serial = normalizedSerial((el('devhubSelectedDevice') || {}).textContent);
     const selectedRow = document.querySelector('#devhubDeviceList .devhub-list-item.selected');
     const meta = selectedRow
       ? String((selectedRow.querySelector('.devhub-list-meta') || {}).textContent || '').trim()
@@ -43,9 +64,9 @@
     const transport = serial && serial.includes(':')
       ? 'Wireless ADB'
       : (serial ? 'USB ADB' : 'No transport');
-    const connected = state === 'device';
+    const connected = !!serial && state === 'device';
     return {
-      serial: serial && serial !== 'No device selected' ? serial : '',
+      serial,
       model: model || (serial ? 'Android XR headset' : 'No headset selected'),
       state: state || (serial ? 'unknown' : 'offline'),
       transport,
@@ -62,19 +83,8 @@
 
   function updateDeviceBar() {
     const device = selectedDeviceSnapshot();
-    const stateDot = el('devhubWorkspaceDeviceState');
-    if (stateDot) {
-      stateDot.classList.remove('online', 'offline', 'unauthorized');
-      if (device.connected) stateDot.classList.add('online');
-      else if (device.state === 'unauthorized') stateDot.classList.add('unauthorized');
-      else stateDot.classList.add('offline');
-    }
-
     setText('devhubWorkspaceDeviceName', device.model);
-    setText(
-      'devhubWorkspaceDeviceSerial',
-      device.serial || 'Connect or select a headset to begin',
-    );
+    setText('devhubWorkspaceDeviceSerial', device.serial || 'No device selected');
     setText('devhubWorkspaceTransport', device.transport);
     setText(
       'devhubWorkspaceState',
@@ -84,6 +94,9 @@
     const source = String((el('devhubToolSource') || {}).textContent || '').trim();
     const runtime = source && source !== '--' ? `${source} ADB` : 'ADB unavailable';
     setText('devhubWorkspaceRuntime', runtime);
+
+    const badges = el('devhubWorkspaceBadges');
+    if (badges) badges.hidden = !device.serial;
     setText('devhubWorkspaceUpdated', `Updated ${new Date().toLocaleTimeString()}`);
   }
 
@@ -184,16 +197,19 @@
   }
 
   function quickAction(title, detail, action) {
+    const item = document.createElement('div');
+    item.className = 'devhub-quick-action';
+
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'devhub-quick-action';
+    button.className = 'devhub-quick-action-button';
     const heading = document.createElement('strong');
     heading.textContent = title;
-    const copy = document.createElement('span');
-    copy.textContent = detail;
-    button.append(heading, copy);
+    button.appendChild(heading);
     button.addEventListener('click', action);
-    return button;
+
+    item.append(button, infoTip(detail, 'devhub-quick-action-tip'));
+    return item;
   }
 
   function buildOverviewCard() {
@@ -305,24 +321,30 @@
     deviceBar.className = 'devhub-device-bar';
     const identity = document.createElement('div');
     identity.className = 'devhub-device-identity';
-    const state = document.createElement('span');
-    state.id = 'devhubWorkspaceDeviceState';
-    state.className = 'devhub-device-state offline';
     const copy = document.createElement('div');
     copy.className = 'devhub-device-copy';
+    const nameRow = document.createElement('div');
+    nameRow.className = 'devhub-device-name-row';
     const name = document.createElement('div');
     name.id = 'devhubWorkspaceDeviceName';
     name.className = 'devhub-device-name';
     name.textContent = 'No headset selected';
+    const deviceHelp = infoTip(
+      'This workspace follows the selected ADB headset and refreshes its state automatically.',
+      'devhub-device-help',
+    );
+    nameRow.append(name, deviceHelp);
     const serial = document.createElement('div');
     serial.id = 'devhubWorkspaceDeviceSerial';
     serial.className = 'devhub-device-serial';
-    serial.textContent = 'Connect or select a headset to begin';
-    copy.append(name, serial);
-    identity.append(state, copy);
+    serial.textContent = 'No device selected';
+    copy.append(nameRow, serial);
+    identity.appendChild(copy);
 
     const badges = document.createElement('div');
+    badges.id = 'devhubWorkspaceBadges';
     badges.className = 'devhub-device-badges';
+    badges.hidden = true;
     badges.innerHTML = `
       <span id="devhubWorkspaceState" class="devhub-device-badge accent">Offline</span>
       <span id="devhubWorkspaceTransport" class="devhub-device-badge">No transport</span>
@@ -359,12 +381,14 @@
 
     const meta = document.createElement('div');
     meta.className = 'devhub-workspace-meta';
-    const refreshNote = document.createElement('span');
-    refreshNote.textContent = 'Device state refreshes automatically while this tab is open.';
+    const refreshHelp = infoTip(
+      'Device state refreshes automatically every five seconds while this tab is open.',
+      'devhub-refresh-help',
+    );
     const updated = document.createElement('span');
     updated.id = 'devhubWorkspaceUpdated';
     updated.textContent = 'Waiting for device state';
-    meta.append(refreshNote, updated);
+    meta.append(refreshHelp, updated);
 
     workspace.append(
       deviceBar,
