@@ -27,12 +27,18 @@ log = logging.getLogger("vr_hotspotd.devhub_api")
 _GET_OPERATIONS = {
     "/v1/devbridge/adb/version": "version",
     "/v1/devbridge/adb/devices": "devices",
+    "/v1/devbridge/adb/packages": "packages",
 }
 
 _POST_OPERATIONS = {
     "/v1/devbridge/adb/pair": "pair",
     "/v1/devbridge/adb/connect": "connect",
     "/v1/devbridge/adb/disconnect": "disconnect",
+    "/v1/devbridge/adb/install": "install",
+    "/v1/devbridge/adb/launch": "launch",
+    "/v1/devbridge/adb/stop": "stop",
+    "/v1/devbridge/adb/clear-data": "clear_data",
+    "/v1/devbridge/adb/uninstall": "uninstall",
 }
 
 _RESULT_HTTP_STATUS = {
@@ -90,7 +96,7 @@ class DevHubAPIHandler(APIHandler):
 
     def do_GET(self):
         cid = self._cid()
-        path, _qs = self._parse_url()
+        path, qs = self._parse_url()
         operation = _GET_OPERATIONS.get(path)
         if operation is None:
             super().do_GET()
@@ -102,7 +108,14 @@ class DevHubAPIHandler(APIHandler):
         )
         if not self._require_auth(cid):
             return
-        self._respond_adb_operation(cid=cid, operation=operation)
+
+        request: Optional[Mapping[str, Any]] = None
+        if operation == "packages":
+            request = {
+                "serial": qs.get("serial"),
+                "third_party_only": self._qbool(qs, "third_party_only", True),
+            }
+        self._respond_adb_operation(cid=cid, operation=operation, request=request)
 
     def do_POST(self):
         cid = self._cid()
