@@ -70,7 +70,7 @@ def test_packages_can_include_system_apps():
     )
 
     assert result["success"] is True
-    assert calls[0][-3:] == ["list", "packages"]
+    assert calls[0][-2:] == ["list", "packages"]
     assert "-3" not in calls[0]
     assert result["data"]["third_party_only"] is False
 
