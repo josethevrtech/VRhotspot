@@ -16,6 +16,7 @@ from vr_hotspotd.devtools.adb_operations import (
     RESULT_TOOLS_UNAVAILABLE,
     execute_adb_operation,
 )
+from vr_hotspotd.devtools.apk_upload import APK_UPLOAD_PATH, handle_apk_upload
 from vr_hotspotd.devtools.platform_tools_manager import (
     RESULT_ARCHIVE_INVALID,
     RESULT_ARCHIVE_TOO_LARGE,
@@ -39,6 +40,8 @@ log = logging.getLogger("vr_hotspotd.devhub_api")
 _DEVHUB_ASSET_TYPES = {
     "/assets/devhub.css": "text/css; charset=utf-8",
     "/assets/devhub.js": "application/javascript; charset=utf-8",
+    "/assets/devhub_upload.css": "text/css; charset=utf-8",
+    "/assets/devhub_upload.js": "application/javascript; charset=utf-8",
 }
 
 _GET_OPERATIONS = {
@@ -205,7 +208,8 @@ class DevHubAPIHandler(APIHandler):
         path, _qs = self._parse_url()
         operation = _POST_OPERATIONS.get(path)
         tools_operation = _TOOLS_POST_OPERATIONS.get(path)
-        if operation is None and tools_operation is None:
+        is_apk_upload = path == APK_UPLOAD_PATH
+        if operation is None and tools_operation is None and not is_apk_upload:
             super().do_POST()
             return
 
@@ -214,6 +218,10 @@ class DevHubAPIHandler(APIHandler):
             extra={"correlation_id": cid, "method": "POST", "path": self.path},
         )
         if not self._require_auth(cid):
+            return
+
+        if is_apk_upload:
+            handle_apk_upload(self, cid)
             return
 
         body, warnings = self._read_json_body()
