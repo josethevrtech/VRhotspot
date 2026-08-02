@@ -11,6 +11,7 @@ FILES = (
     ROOT / "backend" / "vr_hotspotd" / "devtools" / "devhub_api.py",
     ROOT / "backend" / "vr_hotspotd" / "devtools" / "apk_upload.py",
     ROOT / "backend" / "vr_hotspotd" / "devtools" / "adb_cli.py",
+    ROOT / "backend" / "vr_hotspotd" / "devtools" / "wireless_bootstrap.py",
 )
 
 

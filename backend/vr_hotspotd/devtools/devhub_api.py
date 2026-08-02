@@ -34,11 +34,13 @@ from vr_hotspotd.devtools.platform_tools_manager import (
     install_managed_platform_tools,
     remove_managed_platform_tools,
 )
+from vr_hotspotd.devtools.wireless_bootstrap import enable_wireless_adb
 
 
 log = logging.getLogger("vr_hotspotd.devhub_api")
 
 DEVICE_OVERVIEW_PATH = "/v1/devbridge/adb/device-overview"
+WIRELESS_BOOTSTRAP_PATH = "/v1/devbridge/adb/enable-wireless"
 
 _DEVHUB_ASSET_TYPES = {
     "/assets/devhub.css": "text/css; charset=utf-8",
@@ -51,6 +53,8 @@ _DEVHUB_ASSET_TYPES = {
     "/assets/devhub_device_overview.js": "application/javascript; charset=utf-8",
     "/assets/devhub_device_identity.css": "text/css; charset=utf-8",
     "/assets/devhub_device_identity.js": "application/javascript; charset=utf-8",
+    "/assets/devhub_connection_wizard.css": "text/css; charset=utf-8",
+    "/assets/devhub_connection_wizard.js": "application/javascript; charset=utf-8",
 }
 
 _GET_OPERATIONS = {
@@ -163,6 +167,29 @@ class DevHubAPIHandler(APIHandler):
             ),
         )
 
+    def _respond_wireless_bootstrap(
+        self,
+        *,
+        cid: str,
+        request: Mapping[str, Any],
+        warnings: Optional[list[str]] = None,
+    ) -> None:
+        result = enable_wireless_adb(
+            request.get("serial"),
+            request.get("port", 5555),
+        )
+        result_code = str(result.get("result_code") or RESULT_FAILED)
+        status = _RESULT_HTTP_STATUS.get(result_code, 500)
+        self._respond(
+            status,
+            self._envelope(
+                correlation_id=cid,
+                result_code=result_code,
+                data=result,
+                warnings=list(warnings or []),
+            ),
+        )
+
     def _respond_tools_operation(
         self,
         *,
@@ -237,7 +264,13 @@ class DevHubAPIHandler(APIHandler):
         operation = _POST_OPERATIONS.get(path)
         tools_operation = _TOOLS_POST_OPERATIONS.get(path)
         is_apk_upload = path == APK_UPLOAD_PATH
-        if operation is None and tools_operation is None and not is_apk_upload:
+        is_wireless_bootstrap = path == WIRELESS_BOOTSTRAP_PATH
+        if (
+            operation is None
+            and tools_operation is None
+            and not is_apk_upload
+            and not is_wireless_bootstrap
+        ):
             super().do_POST()
             return
 
@@ -255,6 +288,14 @@ class DevHubAPIHandler(APIHandler):
         body, warnings = self._read_json_body()
         if any(warning in _BODY_ERROR_WARNINGS for warning in warnings):
             self._respond_invalid_body(cid, warnings)
+            return
+
+        if is_wireless_bootstrap:
+            self._respond_wireless_bootstrap(
+                cid=cid,
+                request=body,
+                warnings=warnings,
+            )
             return
 
         if tools_operation is not None:
