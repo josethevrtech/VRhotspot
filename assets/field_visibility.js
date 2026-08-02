@@ -76,6 +76,11 @@ window.UI_FIELD_VISIBILITY = {
   identityStylesheet.href = '/assets/devhub_device_identity.css';
   document.head.appendChild(identityStylesheet);
 
+  const connectionStylesheet = document.createElement('link');
+  connectionStylesheet.rel = 'stylesheet';
+  connectionStylesheet.href = '/assets/devhub_connection_wizard.css';
+  document.head.appendChild(connectionStylesheet);
+
   const script = document.createElement('script');
   script.src = '/assets/devhub.js';
   script.async = false;
@@ -100,6 +105,11 @@ window.UI_FIELD_VISIBILITY = {
   identityScript.src = '/assets/devhub_device_identity.js';
   identityScript.async = false;
   document.head.appendChild(identityScript);
+
+  const connectionScript = document.createElement('script');
+  connectionScript.src = '/assets/devhub_connection_wizard.js';
+  connectionScript.async = false;
+  document.head.appendChild(connectionScript);
 })();
 
 (function addManagedPlatformToolsControls() {
