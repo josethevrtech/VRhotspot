@@ -14,8 +14,6 @@ def test_wide_basic_mode_reuses_two_column_grid_after_readiness_removal() -> Non
     assert '@media (min-width: 1400px)' in layout
     assert 'body[data-ui-mode="basic"] .basic-grid' in layout
     assert 'grid-template-columns: repeat(2, minmax(0, 1fr));' in layout
-    assert ".advanced-layout" not in layout
-    assert ".content-area" not in layout
 
 
 def test_basic_desktop_uses_comfortable_native_density_without_page_scaling() -> None:
@@ -32,6 +30,42 @@ def test_basic_desktop_uses_comfortable_native_density_without_page_scaling() ->
     assert 'body[data-ui-mode="basic"] [data-ui-section="basic"] .btn' in layout
     assert "height: 48px;" in layout
     assert "font-size: 17px;" in layout
+
+
+def test_pro_desktop_uses_comfortable_native_density() -> None:
+    layout = BASIC_LAYOUT.read_text(encoding="utf-8")
+
+    assert 'body[data-ui-mode="advanced"] .sidebar' in layout
+    assert "width: 300px;" in layout
+    assert 'body[data-ui-mode="advanced"] .content-area' in layout
+    assert 'body[data-ui-mode="advanced"] .card-body' in layout
+    assert "padding: 28px;" in layout
+    assert 'body[data-ui-mode="advanced"] .btn' in layout
+    assert "height: 46px;" in layout
+    assert 'body[data-ui-mode="advanced"] .grid-overview' in layout
+    assert "max-width: 1100px;" in layout
+    assert 'body[data-ui-mode="advanced"] .preflight-page' in layout
+    assert "width: min(100%, 1400px);" in layout
+
+
+def test_pro_density_covers_developer_hub_and_wireless_wizard() -> None:
+    layout = BASIC_LAYOUT.read_text(encoding="utf-8")
+
+    assert '#tab-devhub .devhub-page' in layout
+    assert '#tab-devhub .devhub-device-bar' in layout
+    assert '#tab-devhub .devhub-workspace-tab' in layout
+    assert '#tab-devhub .devhub-overview-metric' in layout
+    assert '#tab-devhub .devhub-file-drop' in layout
+    assert '#tab-devhub .devhub-target-device-display' in layout
+    assert '#tab-devhub .devhub-wizard-dialog' in layout
+    assert "width: min(980px, 100%);" in layout
+    assert '#tab-devhub .devhub-wizard-body' in layout
+    assert "min-height: 320px;" in layout
+
+
+def test_desktop_density_uses_native_component_sizing_not_page_scaling() -> None:
+    layout = BASIC_LAYOUT.read_text(encoding="utf-8")
+
     assert "zoom:" not in layout
     assert "transform: scale(" not in layout
 
@@ -44,7 +78,7 @@ def test_existing_responsive_container_and_mobile_stack_remain_intact() -> None:
     assert "grid-template-columns: minmax(0, 1fr);" in core
 
 
-def test_basic_layout_asset_is_loaded_and_served() -> None:
+def test_desktop_layout_asset_is_loaded_and_served() -> None:
     loader = FIELD_VISIBILITY.read_text(encoding="utf-8")
     api = DEVHUB_API.read_text(encoding="utf-8")
 
@@ -53,7 +87,7 @@ def test_basic_layout_asset_is_loaded_and_served() -> None:
     assert '"/assets/basic_layout.css": "text/css; charset=utf-8"' in api
 
 
-def test_adapter_readiness_removal_and_pro_layout_contracts_are_unchanged() -> None:
+def test_adapter_readiness_removal_and_core_pro_dom_contracts_remain() -> None:
     loader = FIELD_VISIBILITY.read_text(encoding="utf-8")
     core = CORE_UI.read_text(encoding="utf-8")
 
