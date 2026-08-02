@@ -1,8 +1,9 @@
-#devhubSelectedDevice.devhub-raw-device-serial {
+.devhub-raw-device-serial {
   display: none !important;
 }
 
-.devhub-selected-device-display {
+.devhub-selected-device-display,
+.devhub-target-device-display {
   display: grid;
   gap: 4px;
   min-height: 44px;
@@ -11,11 +12,13 @@
   background: var(--accent-subtle);
 }
 
-.devhub-selected-device-display.empty {
+.devhub-selected-device-display.empty,
+.devhub-target-device-display.empty {
   border-left-color: var(--border-subtle);
 }
 
-.devhub-selected-device-name {
+.devhub-selected-device-name,
+.devhub-target-device-display strong {
   color: var(--text-main);
   font-family: var(--font-mono);
   font-size: 14px;
@@ -23,7 +26,8 @@
   overflow-wrap: anywhere;
 }
 
-.devhub-selected-device-address {
+.devhub-selected-device-address,
+.devhub-target-device-display span {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -48,6 +52,69 @@
 
 .devhub-device-address {
   font-family: var(--font-mono);
+}
+
+.devhub-apps-device-context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+
+.devhub-apps-device-context span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+.devhub-apps-device-context strong {
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.devhub-install-option-hidden,
+.devhub-install-options-empty {
+  display: none !important;
+}
+
+.devhub-advanced-install-options {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+}
+
+.devhub-advanced-install-options summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.devhub-advanced-install-body {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+}
+
+.devhub-advanced-install-body label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-main);
+  font-size: 12px;
 }
 
 .devhub-privacy-active .devhub-sensitive-identifier {
