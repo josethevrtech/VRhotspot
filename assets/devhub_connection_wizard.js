@@ -539,8 +539,9 @@
   function normalizeEmptyDeviceCopy() {
     const list = el('devhubDeviceList');
     const empty = list && list.querySelector('.devhub-empty');
-    if (empty) {
-      empty.textContent = 'No headsets are connected. Use “Set up wireless headset” to add one.';
+    const message = 'No headsets are connected. Use “Set up wireless headset” to add one.';
+    if (empty && empty.textContent !== message) {
+      empty.textContent = message;
     }
   }
 
@@ -584,7 +585,7 @@
     const deviceList = el('devhubDeviceList');
     if (deviceList) {
       const observer = new MutationObserver(normalizeEmptyDeviceCopy);
-      observer.observe(deviceList, { childList: true, subtree: true });
+      observer.observe(deviceList, { childList: true });
     }
     normalizeEmptyDeviceCopy();
     return true;
