@@ -49,6 +49,8 @@ _DEVHUB_ASSET_TYPES = {
     "/assets/devhub_workspace.js": "application/javascript; charset=utf-8",
     "/assets/devhub_device_overview.css": "text/css; charset=utf-8",
     "/assets/devhub_device_overview.js": "application/javascript; charset=utf-8",
+    "/assets/devhub_device_identity.css": "text/css; charset=utf-8",
+    "/assets/devhub_device_identity.js": "application/javascript; charset=utf-8",
 }
 
 _GET_OPERATIONS = {
