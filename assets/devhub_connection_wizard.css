@@ -236,6 +236,82 @@ body.devhub-modal-open {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* The wizard is appended to document.body, outside #tab-devhub. */
+@media (min-width: 1200px) {
+  body[data-ui-mode="advanced"] .devhub-wizard-dialog {
+    width: min(980px, 100%);
+    max-height: min(900px, calc(100vh - 48px));
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-header,
+  body[data-ui-mode="advanced"] .devhub-wizard-footer {
+    padding: 20px 24px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-header h2 {
+    font-size: 22px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-steps {
+    gap: 10px;
+    padding: 20px 24px 0;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-step {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-step > span {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-step strong {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-body {
+    min-height: 320px;
+    gap: 16px;
+    padding: 36px 30px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-body h3 {
+    font-size: 26px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-body p {
+    max-width: 720px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-device {
+    width: min(700px, 100%);
+    gap: 8px;
+    padding: 18px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-device > span,
+  body[data-ui-mode="advanced"] .devhub-wizard-device label {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-device select {
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] .devhub-wizard-footer .btn,
+  body[data-ui-mode="advanced"] .devhub-wizard-header .btn {
+    min-height: 46px;
+    padding-inline: 20px;
+    font-size: 15px;
+  }
+}
+
 @media (max-width: 900px) {
   .devhub-advanced-connection-grid {
     grid-template-columns: minmax(0, 1fr);
