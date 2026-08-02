@@ -55,11 +55,15 @@
         stateNode.className = 'devhub-device-state';
         stateNode.textContent = state;
 
+        const modelSource = document.createElement('span');
+        modelSource.className = 'devhub-device-model-source';
+        modelSource.textContent = ` · model ${model}`;
+
         const addressNode = document.createElement('span');
         addressNode.className = 'devhub-device-address devhub-sensitive-identifier';
-        addressNode.textContent = serial;
+        addressNode.textContent = ` · ${serial}`;
 
-        meta.replaceChildren(stateNode, addressNode);
+        meta.replaceChildren(stateNode, modelSource, addressNode);
         meta.classList.add('devhub-device-identity-meta');
       }
     });
