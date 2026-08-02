@@ -44,7 +44,7 @@ class BootstrapRunner:
                 return subprocess.CompletedProcess(argv, 0, b"device\n", b"")
             return subprocess.CompletedProcess(argv, 1, b"", b"error: device unauthorized\n")
 
-        if command[-3:] == ("getprop", "ro.product.model"):
+        if command[-2:] == ("getprop", "ro.product.model"):
             return subprocess.CompletedProcess(argv, 0, b"Quest_3S\n", b"")
 
         if command[-2:] == ("ip", "route"):
