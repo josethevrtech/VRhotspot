@@ -138,22 +138,57 @@ def _parse_battery(text: str) -> Dict[str, Any]:
 
 
 def _parse_storage(text: str) -> Dict[str, Any]:
-    for line in reversed(text.splitlines()):
+    """Parse both normal and wrapped Android toybox ``df -k`` output."""
+
+    candidates = []
+    for line_number, line in enumerate(text.splitlines()):
         parts = line.split()
-        if len(parts) < 6 or parts[-1] != "/data":
+        if len(parts) < 4:
             continue
-        total_kib = _parse_int(parts[1])
-        used_kib = _parse_int(parts[2])
-        available_kib = _parse_int(parts[3])
+
+        # Long Android device-mapper names can wrap onto their own line. In that
+        # case the following row begins directly with the numeric block count.
+        numeric_first = _parse_int(parts[0]) is not None
+        offset = 0 if numeric_first else 1
+        if len(parts) < offset + 4:
+            continue
+
+        total_kib = _parse_int(parts[offset])
+        used_kib = _parse_int(parts[offset + 1])
+        available_kib = _parse_int(parts[offset + 2])
+        used_percent = _parse_int(parts[offset + 3].rstrip("%"))
         if total_kib is None or used_kib is None or available_kib is None:
-            break
-        return {
-            "total_bytes": total_kib * 1024,
-            "used_bytes": used_kib * 1024,
-            "available_bytes": available_kib * 1024,
-            "used_percent": _parse_int(parts[4].rstrip("%")),
-        }
-    return {}
+            continue
+
+        mount = parts[-1] if not parts[-1].endswith("%") else ""
+        if mount == "/data":
+            mount_score = 3
+        elif mount.startswith("/data/"):
+            mount_score = 2
+        elif mount.startswith("/storage/emulated"):
+            mount_score = 1
+        else:
+            mount_score = 0
+
+        candidates.append(
+            (
+                mount_score,
+                line_number,
+                {
+                    "total_bytes": total_kib * 1024,
+                    "used_bytes": used_kib * 1024,
+                    "available_bytes": available_kib * 1024,
+                    "used_percent": used_percent,
+                },
+            )
+        )
+
+    if not candidates:
+        return {}
+
+    # The command is scoped to /data, so an unlabelled wrapped numeric row is a
+    # valid fallback. Prefer an explicitly identified data mount when present.
+    return max(candidates, key=lambda candidate: (candidate[0], candidate[1]))[2]
 
 
 def _first_match(pattern: str, text: str, flags: int = re.IGNORECASE) -> Optional[str]:

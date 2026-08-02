@@ -1,4 +1,4 @@
-.devhub-raw-device-serial {
+#devhubSelectedDevice.devhub-raw-device-serial {
   display: none !important;
 }
 
@@ -117,6 +117,121 @@
   font-size: 12px;
 }
 
+/* The selected-headset card already owns device identity and transport state. */
+.devhub-device-bar {
+  display: none !important;
+}
+
+/* Keep automatic-refresh help attached to the timestamp instead of floating left. */
+.devhub-workspace-meta {
+  gap: 6px;
+}
+
+#devhubWorkspaceUpdated {
+  order: 1;
+}
+
+.devhub-refresh-help {
+  order: 2;
+  margin-right: 0 !important;
+}
+
 .devhub-privacy-active .devhub-sensitive-identifier {
   display: none !important;
+}
+
+/* SSIDs are personally identifying network data. */
+.devhub-privacy-active #devhubOverviewWifi {
+  position: relative;
+  color: transparent !important;
+  user-select: none;
+}
+
+.devhub-privacy-active #devhubOverviewWifi::after {
+  content: "Hidden by Privacy Mode";
+  position: absolute;
+  inset: 0 auto auto 0;
+  color: var(--text-main);
+}
+
+/* Keep package identifiers usable internally while masking them on screen. */
+.devhub-privacy-active #devhubPackageList .devhub-list-title {
+  position: relative;
+  color: transparent !important;
+  user-select: none;
+}
+
+.devhub-privacy-active #devhubPackageList .devhub-list-title::after {
+  content: "Installed app";
+  position: absolute;
+  inset: 0 auto auto 0;
+  color: var(--text-main);
+}
+
+.devhub-privacy-active #devhubSelectedPackage {
+  position: relative;
+  color: transparent !important;
+  user-select: none;
+}
+
+.devhub-privacy-active #devhubSelectedPackage::after {
+  content: "Hidden by Privacy Mode";
+  position: absolute;
+  inset: 0 auto auto 0;
+  color: var(--text-main);
+}
+
+.devhub-privacy-active #devhubPackageName {
+  color: transparent !important;
+  caret-color: transparent;
+}
+
+.devhub-privacy-active #devhubPackageName:focus {
+  border-color: var(--border-subtle);
+  box-shadow: none;
+}
+
+.devhub-privacy-active #devhubPackageName.closest {
+  position: relative;
+}
+
+.devhub-privacy-active .devhub-field:has(#devhubPackageName) {
+  position: relative;
+}
+
+.devhub-privacy-active .devhub-field:has(#devhubPackageName)::after {
+  content: "Hidden by Privacy Mode";
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* Operation details can include APK filenames or package identifiers. */
+.devhub-privacy-active .devhub-activity.visible {
+  position: relative;
+  color: transparent !important;
+  user-select: none;
+}
+
+.devhub-privacy-active .devhub-activity.visible::after {
+  position: absolute;
+  inset: 10px 12px auto;
+  color: var(--text-main);
+}
+
+.devhub-privacy-active .devhub-activity.visible[data-state="loading"]::after {
+  content: "Working…";
+  color: var(--accent-primary);
+}
+
+.devhub-privacy-active .devhub-activity.visible[data-state="success"]::after {
+  content: "Operation completed.";
+  color: var(--success);
+}
+
+.devhub-privacy-active .devhub-activity.visible[data-state="error"]::after {
+  content: "Operation failed. Disable Privacy Mode for details.";
+  color: var(--danger);
 }
