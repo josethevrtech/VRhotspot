@@ -63,6 +63,13 @@ window.UI_FIELD_VISIBILITY = {
   }
 })();
 
+(function loadBasicModeLayout() {
+  const stylesheet = document.createElement('link');
+  stylesheet.rel = 'stylesheet';
+  stylesheet.href = '/assets/basic_layout.css';
+  document.head.appendChild(stylesheet);
+})();
+
 (function loadDeveloperHubAssets() {
   const stylesheet = document.createElement('link');
   stylesheet.rel = 'stylesheet';
