@@ -18,6 +18,24 @@ def test_wide_basic_mode_reuses_two_column_grid_after_readiness_removal() -> Non
     assert ".content-area" not in layout
 
 
+def test_basic_desktop_uses_comfortable_native_density_without_page_scaling() -> None:
+    layout = BASIC_LAYOUT.read_text(encoding="utf-8")
+
+    assert '@media (min-width: 1200px)' in layout
+    assert 'body[data-ui-mode="basic"] .basic-container' in layout
+    assert "max-width: 2480px;" in layout
+    assert 'body[data-ui-mode="basic"] .basic-card .card-header' in layout
+    assert "padding: 24px 30px;" in layout
+    assert 'body[data-ui-mode="basic"] .basic-card .card-body' in layout
+    assert "padding: 30px;" in layout
+    assert "min-height: 50px;" in layout
+    assert 'body[data-ui-mode="basic"] [data-ui-section="basic"] .btn' in layout
+    assert "height: 48px;" in layout
+    assert "font-size: 17px;" in layout
+    assert "zoom:" not in layout
+    assert "transform: scale(" not in layout
+
+
 def test_existing_responsive_container_and_mobile_stack_remain_intact() -> None:
     core = CORE_UI.read_text(encoding="utf-8")
 
