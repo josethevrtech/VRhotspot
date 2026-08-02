@@ -33,6 +33,26 @@
     return detail ? `${code}: ${detail}` : code;
   }
 
+  function deploymentData(response) {
+    const publicResult = response && response.json && response.json.data;
+    return publicResult && publicResult.data && typeof publicResult.data === 'object'
+      ? publicResult.data
+      : {};
+  }
+
+  function deploymentVerb(action) {
+    if (action === 'installed') return 'Installed';
+    if (action === 'updated') return 'Updated';
+    return 'Installed or updated';
+  }
+
+  function selectedHeadsetLabel() {
+    const name = document.getElementById('devhubTargetDeviceName');
+    const value = String((name && name.textContent) || '').trim();
+    if (value && value !== 'No headset selected') return value;
+    return 'selected headset';
+  }
+
   function companionBridgeActive() {
     return typeof companionAuthBridgeAvailable === 'function'
       && companionAuthBridgeAvailable();
@@ -102,7 +122,7 @@
     form.insertBefore(uploadField, pathField);
     advanced.append(summary, pathField, help);
     form.insertBefore(advanced, checks);
-    submit.textContent = 'Install on headset';
+    submit.textContent = 'Install or update app';
 
     function selectedFile() {
       return fileInput.files && fileInput.files.length ? fileInput.files[0] : null;
@@ -116,7 +136,7 @@
         return;
       }
       name.textContent = file.name;
-      meta.textContent = `${formatBytes(file.size)} · Ready to install`;
+      meta.textContent = `${formatBytes(file.size)} · Ready to install or update`;
     }
 
     function useFile(file) {
@@ -194,14 +214,17 @@
         return;
       }
 
-      const reinstall = document.getElementById('devhubReinstall');
       const grant = document.getElementById('devhubGrantPermissions');
       const previousLabel = submit.textContent;
+      const headset = selectedHeadsetLabel();
       submit.disabled = true;
       choose.disabled = true;
       fileInput.disabled = true;
       submit.textContent = 'Installing...';
-      feedback(`Uploading ${file.name} (${formatBytes(file.size)}) and installing it...`, 'loading');
+      feedback(
+        `Uploading ${file.name} (${formatBytes(file.size)}) and installing it on ${headset}...`,
+        'loading',
+      );
 
       try {
         const response = await api(UPLOAD_PATH, {
@@ -210,7 +233,7 @@
             'Content-Type': 'application/vnd.android.package-archive',
             'X-VRhotspot-Serial': serial,
             'X-VRhotspot-Apk-Name': encodeURIComponent(file.name),
-            'X-VRhotspot-Reinstall': reinstall && reinstall.checked ? '1' : '0',
+            'X-VRhotspot-Reinstall': '1',
             'X-VRhotspot-Grant-Permissions': grant && grant.checked ? '1' : '0',
           },
           body: file,
@@ -221,7 +244,11 @@
           return;
         }
 
-        feedback(`Installed ${file.name} on ${serial}.`, 'success');
+        const details = deploymentData(response);
+        feedback(
+          `${deploymentVerb(details.deployment_action)} ${file.name} on ${headset}.`,
+          'success',
+        );
         fileInput.value = '';
         updateSelection();
         const loadPackages = document.getElementById('devhubLoadPackages');
