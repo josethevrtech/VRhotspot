@@ -69,6 +69,14 @@ def test_wizard_preserves_privacy_and_internal_serial_state() -> None:
     assert "target" in source
 
 
+def test_empty_state_observer_is_idempotent_and_direct_child_only() -> None:
+    source = WIZARD_JS.read_text(encoding="utf-8")
+
+    assert "empty && empty.textContent !== message" in source
+    assert "observer.observe(deviceList, { childList: true });" in source
+    assert "observer.observe(deviceList, { childList: true, subtree: true });" not in source
+
+
 def test_wizard_css_is_modal_responsive_and_has_no_status_lights() -> None:
     source = WIZARD_CSS.read_text(encoding="utf-8")
 
