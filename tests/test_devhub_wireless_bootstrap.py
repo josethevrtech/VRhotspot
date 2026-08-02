@@ -50,7 +50,7 @@ class BootstrapRunner:
         if command[-2:] == ("ip", "route"):
             return subprocess.CompletedProcess(argv, 0, self.route.encode(), b"")
 
-        if command[-7:] == ("ip", "-f", "inet", "addr", "show", "wlan0"):
+        if command[-6:] == ("ip", "-f", "inet", "addr", "show", "wlan0"):
             return subprocess.CompletedProcess(argv, 0, self.fallback_address.encode(), b"")
 
         if len(command) >= 2 and command[-2] == "tcpip":
