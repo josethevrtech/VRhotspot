@@ -50,6 +50,19 @@ window.UI_FIELD_VISIBILITY = {
   debug: "advanced"
 };
 
+(function removeBasicAdapterReadinessCard() {
+  function removeCard() {
+    const card = document.querySelector('[data-adapter-readiness-card]');
+    if (card) card.remove();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', removeCard, { once: true });
+  } else {
+    removeCard();
+  }
+})();
+
 (function loadDeveloperHubAssets() {
   const stylesheet = document.createElement('link');
   stylesheet.rel = 'stylesheet';
