@@ -61,3 +61,19 @@ def test_privacy_mode_masks_network_app_and_operation_details() -> None:
     assert ".devhub-privacy-active .devhub-activity.visible" in source
     assert "Hidden by Privacy Mode" in source
     assert "Operation completed." in source
+
+
+def test_app_install_uses_plain_language_and_never_shows_raw_target_serial() -> None:
+    source = IDENTITY_CSS.read_text(encoding="utf-8")
+
+    assert "#devhubPackageSerial.devhub-raw-device-serial" in source
+    assert '.card:has(#devhubInstallForm) .card-header h2::after' in source
+    assert 'content: "Install App"' in source
+
+
+def test_privacy_mode_explains_that_app_names_are_intentionally_hidden() -> None:
+    source = IDENTITY_CSS.read_text(encoding="utf-8")
+
+    assert ".devhub-privacy-active #devhubPackageList::before" in source
+    assert 'content: "App names hidden by Privacy Mode"' in source
+    assert 'content: "App name hidden"' in source
