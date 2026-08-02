@@ -264,6 +264,9 @@ install -d -m 755 /etc/vr-hotspot
 touch /etc/vr-hotspot/env
 chmod 600 /etc/vr-hotspot/env || true
 
+log "Stopping active VRhotspot services before file sync"
+systemctl stop "$AUTOSTART_UNIT" "$DAEMON_UNIT" &>/dev/null || true
+
 log "Copying application files -> $INSTALL_DIR"
 # Copy source code
 mkdir -p "$INSTALL_DIR"
