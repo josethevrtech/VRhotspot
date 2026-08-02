@@ -1,10 +1,193 @@
 /*
- * Basic-mode desktop layout refinement.
+ * Basic-mode desktop layout and density refinements.
  *
+ * These rules intentionally apply only to the Basic dashboard on desktop.
+ * They preserve the existing DOM, responsive mobile stack, and Pro layout
+ * while making the 100% browser view feel like the previously preferred
+ * enlarged desktop presentation.
+ */
+@media (min-width: 1200px) {
+  body[data-ui-mode="basic"] .top-header {
+    height: 112px;
+    padding-inline: clamp(28px, 2vw, 44px);
+  }
+
+  body[data-ui-mode="basic"] .brand-logo-small {
+    height: 100px;
+  }
+
+  body[data-ui-mode="basic"] .ui-mode-toggle {
+    gap: 10px;
+    padding: 6px 10px;
+  }
+
+  body[data-ui-mode="basic"] .mode-label {
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="basic"] .slider-toggle {
+    width: 42px;
+    height: 24px;
+  }
+
+  body[data-ui-mode="basic"] .slider-toggle .slider::before {
+    width: 18px;
+    height: 18px;
+  }
+
+  body[data-ui-mode="basic"] .slider-toggle input:checked + .slider::before {
+    transform: translateX(18px);
+  }
+
+  body[data-ui-mode="basic"] .basic-container {
+    max-width: 2480px;
+    padding: clamp(30px, 1.75vw, 44px);
+  }
+
+  body[data-ui-mode="basic"] .basic-grid {
+    gap: clamp(28px, 1.8vw, 40px);
+  }
+
+  body[data-ui-mode="basic"] .basic-card .card-header {
+    padding: 24px 30px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .card-header h2 {
+    font-size: 18px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .card-body {
+    padding: 30px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .form-group {
+    margin-bottom: 22px;
+  }
+
+  body[data-ui-mode="basic"] .basic-connect-inline {
+    padding-top: 22px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card label {
+    margin-bottom: 9px;
+    font-size: 15px !important;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .field-label-with-tip {
+    gap: 8px;
+    margin-bottom: 9px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .field-label-with-tip label,
+  body[data-ui-mode="basic"] .basic-card .tog {
+    margin-bottom: 0;
+  }
+
+  body[data-ui-mode="basic"] .basic-card input:not([type="checkbox"]):not([type="radio"]),
+  body[data-ui-mode="basic"] .basic-card select,
+  body[data-ui-mode="basic"] .basic-card textarea {
+    min-height: 50px;
+    padding: 12px 16px;
+    font-size: 17px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .small {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .info-banner {
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="basic"] [data-ui-section="basic"] .btn {
+    height: 48px;
+    padding: 0 22px;
+    font-size: 16px;
+    line-height: 1.2;
+  }
+
+  body[data-ui-mode="basic"] .basic-status-actions {
+    gap: 14px;
+  }
+
+  body[data-ui-mode="basic"] .basic-status-actions .btn,
+  body[data-ui-mode="basic"] .basic-connect-actions .btn {
+    height: 48px;
+    padding-inline: 18px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="basic"] .basic-passphrase-actions {
+    gap: 12px;
+  }
+
+  body[data-ui-mode="basic"] .basic-passphrase-actions .btn.icon-only {
+    width: 48px;
+    min-width: 48px;
+    flex-basis: 48px;
+    padding: 0;
+  }
+
+  body[data-ui-mode="basic"] .basic-passphrase-actions .basic-qr-toggle {
+    width: 48px;
+    font-size: 12px;
+  }
+
+  body[data-ui-mode="basic"] .qos-basic .seg span {
+    min-height: 48px;
+    padding: 10px 22px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="basic"] .segmented {
+    gap: 10px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .pill {
+    gap: 10px;
+    padding: 8px 16px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .pill .dot {
+    width: 10px;
+    height: 10px;
+  }
+
+  body[data-ui-mode="basic"] .basic-status-preferences {
+    gap: 14px;
+  }
+
+  body[data-ui-mode="basic"] .basic-status-preferences .tog {
+    min-height: 46px;
+    padding: 0 14px;
+    font-size: 14px !important;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .tog input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+  }
+
+  body[data-ui-mode="basic"] .basic-card .tip {
+    width: 19px;
+    height: 19px;
+    font-size: 12px;
+  }
+
+  body[data-ui-mode="basic"] #basicTelemetryContainer {
+    padding: 12px !important;
+    font-size: 14px !important;
+    line-height: 1.5;
+  }
+}
+
+/*
  * PR #89 introduced a three-column wide-screen grid for Connection Setup,
  * Status & Control, and Adapter Readiness. Adapter Readiness is no longer
- * rendered in Basic mode, so preserve the existing responsive grid while
- * allowing the two remaining cards to use the full desktop container.
+ * rendered in Basic mode, so the two remaining cards keep the full row.
  */
 @media (min-width: 1400px) {
   body[data-ui-mode="basic"] .basic-grid {
