@@ -203,4 +203,4 @@ def test_enable_wireless_adb_reports_missing_tools() -> None:
 
     assert result["success"] is False
     assert result["result_code"] == RESULT_TOOLS_UNAVAILABLE
-    assert result["stage"] == "validate"
+    assert result["stage"] == "tools"
