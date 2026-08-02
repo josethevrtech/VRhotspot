@@ -27,12 +27,25 @@ def test_developer_hub_exposes_browser_apk_picker():
     assert "devhubApkPicker" in source
     assert "devhubApkFile" in source
     assert "Choose APK" in source
-    assert "Install on headset" in source
+    assert "Install or update app" in source
     assert "/v1/devbridge/adb/install-upload" in source
     assert "application/vnd.android.package-archive" in source
     assert "X-VRhotspot-Serial" in source
     assert "X-VRhotspot-Apk-Name" in source
     assert "body: file" in source
+
+
+def test_upload_always_allows_update_and_reports_detected_action():
+    source = UPLOAD_JS.read_text(encoding="utf-8")
+
+    assert "'X-VRhotspot-Reinstall': '1'" in source
+    assert "deploymentData" in source
+    assert "deployment_action" in source
+    assert "deploymentVerb" in source
+    assert "Updated" in source
+    assert "Installed or updated" in source
+    assert "selectedHeadsetLabel" in source
+    assert "on ${headset}" in source
 
 
 def test_host_path_install_is_preserved_as_advanced_fallback():
