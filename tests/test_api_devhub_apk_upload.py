@@ -43,16 +43,38 @@ def _response_json(handler):
     return json.loads(handler.wfile.getvalue().decode("utf-8"))
 
 
-def test_apk_upload_streams_to_temporary_file_and_installs(monkeypatch, tmp_path):
+def test_apk_upload_streams_to_temporary_file_and_classifies_new_install(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
     monkeypatch.setattr(apk_upload, "APK_UPLOAD_DIR", tmp_path)
     apk_bytes = b"PK\x03\x04test-apk"
-    seen = {}
+    seen = {"operations": [], "package_calls": 0}
 
     def fake_execute(operation, request=None):
         payload = dict(request or {})
+        seen["operations"].append(operation)
+        if operation == "packages":
+            seen["package_calls"] += 1
+            packages = ["com.example.existing"]
+            if seen["package_calls"] == 2:
+                packages.append("com.example.training")
+            return {
+                "schema_version": 1,
+                "operation": operation,
+                "success": True,
+                "result_code": "ok",
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+                "data": {
+                    "serial": payload["serial"],
+                    "third_party_only": True,
+                    "packages": packages,
+                },
+            }
+
         upload_path = Path(payload["apk_path"])
-        seen["operation"] = operation
         seen["request"] = payload
         seen["bytes"] = upload_path.read_bytes()
         seen["temporary_path"] = upload_path
@@ -79,7 +101,7 @@ def test_apk_upload_streams_to_temporary_file_and_installs(monkeypatch, tmp_path
     payload = _response_json(handler)
 
     assert handler._last_code == 200
-    assert seen["operation"] == "install"
+    assert seen["operations"] == ["packages", "install", "packages"]
     assert seen["request"]["serial"] == SERIAL
     assert seen["request"]["reinstall"] is True
     assert seen["request"]["grant_permissions"] is True
@@ -88,6 +110,26 @@ def test_apk_upload_streams_to_temporary_file_and_installs(monkeypatch, tmp_path
     assert "apk_path" not in payload["data"]["data"]
     assert payload["data"]["data"]["apk_name"] == "training.apk"
     assert payload["data"]["data"]["apk_size_bytes"] == len(apk_bytes)
+    assert payload["data"]["data"]["deployment_action"] == "installed"
+    assert payload["data"]["data"]["deployment_package"] == "com.example.training"
+
+
+def test_deployment_details_distinguish_update_and_unknown_inventory() -> None:
+    assert apk_upload._deployment_details(
+        install_succeeded=True,
+        before_packages={"com.example.training"},
+        after_packages={"com.example.training"},
+    ) == {"deployment_action": "updated"}
+    assert apk_upload._deployment_details(
+        install_succeeded=True,
+        before_packages=None,
+        after_packages=None,
+    ) == {"deployment_action": "installed_or_updated"}
+    assert apk_upload._deployment_details(
+        install_succeeded=False,
+        before_packages={"com.example.training"},
+        after_packages={"com.example.training"},
+    ) == {}
 
 
 def test_apk_upload_requires_auth_before_reading_body(monkeypatch):

@@ -6,7 +6,7 @@ import logging
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Mapping, Optional, Set
 from urllib.parse import unquote
 
 from vr_hotspotd.devtools.adb_operations import (
@@ -60,11 +60,54 @@ def _header_bool(handler: Any, name: str, default: bool) -> bool:
     return value in {"1", "true", "yes", "on", "y"}
 
 
+def _package_inventory(serial: str) -> Optional[Set[str]]:
+    """Return the current third-party package set when ADB can report it."""
+
+    result = execute_adb_operation(
+        "packages",
+        {
+            "serial": serial,
+            "third_party_only": True,
+        },
+    )
+    if not result.get("success"):
+        return None
+    raw_data = result.get("data")
+    if not isinstance(raw_data, Mapping):
+        return None
+    packages = raw_data.get("packages")
+    if not isinstance(packages, list):
+        return None
+    return {value for value in packages if isinstance(value, str) and value}
+
+
+def _deployment_details(
+    *,
+    install_succeeded: bool,
+    before_packages: Optional[Set[str]],
+    after_packages: Optional[Set[str]],
+) -> dict[str, Any]:
+    if not install_succeeded:
+        return {}
+    if before_packages is None or after_packages is None:
+        return {"deployment_action": "installed_or_updated"}
+
+    added = sorted(after_packages - before_packages)
+    if added:
+        details: dict[str, Any] = {"deployment_action": "installed"}
+        if len(added) == 1:
+            details["deployment_package"] = added[0]
+        return details
+    return {"deployment_action": "updated"}
+
+
 def _public_result(
     result: Mapping[str, Any],
     *,
     apk_name: str,
     apk_size_bytes: int,
+    before_packages: Optional[Set[str]],
+    after_packages: Optional[Set[str]],
 ) -> dict[str, Any]:
     public = dict(result)
     raw_data = public.get("data")
@@ -72,6 +115,13 @@ def _public_result(
     data.pop("apk_path", None)
     data["apk_name"] = apk_name
     data["apk_size_bytes"] = apk_size_bytes
+    data.update(
+        _deployment_details(
+            install_succeeded=bool(public.get("success")),
+            before_packages=before_packages,
+            after_packages=after_packages,
+        )
+    )
     public["data"] = data
     return public
 
@@ -153,6 +203,7 @@ def handle_apk_upload(handler: Any, cid: str) -> None:
             upload.flush()
             os.fsync(upload.fileno())
 
+        before_packages = _package_inventory(serial)
         result = execute_adb_operation(
             "install",
             {
@@ -162,10 +213,13 @@ def handle_apk_upload(handler: Any, cid: str) -> None:
                 "grant_permissions": grant_permissions,
             },
         )
+        after_packages = _package_inventory(serial) if result.get("success") else None
         public_result = _public_result(
             result,
             apk_name=apk_name,
             apk_size_bytes=length,
+            before_packages=before_packages,
+            after_packages=after_packages,
         )
         result_code = str(public_result.get("result_code") or RESULT_FAILED)
         handler._respond(
