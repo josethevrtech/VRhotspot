@@ -150,15 +150,23 @@ def enable_wireless_adb(
     try:
         validated_serial = _valid_serial(serial)
         validated_port = _valid_port(port)
-        adb = _adb_path(tools_status)
     except WirelessBootstrapError as exc:
-        message = str(exc)
-        code = RESULT_TOOLS_UNAVAILABLE if "ADB" in message else RESULT_INVALID_REQUEST
         return _result(
             success=False,
-            result_code=code,
+            result_code=RESULT_INVALID_REQUEST,
             stage="validate",
-            message=message,
+            message=str(exc),
+            returncode=2,
+        )
+
+    try:
+        adb = _adb_path(tools_status)
+    except WirelessBootstrapError as exc:
+        return _result(
+            success=False,
+            result_code=RESULT_TOOLS_UNAVAILABLE,
+            stage="tools",
+            message=str(exc),
             returncode=2,
         )
 
