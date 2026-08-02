@@ -185,6 +185,595 @@
 }
 
 /*
+ * Pro-mode comfortable desktop density.
+ *
+ * This extends the existing Pro DOM and Developer Hub component system rather
+ * than scaling the page. The breakpoint keeps narrow browser windows and the
+ * zoomed Flatpak shell on their existing responsive presentation.
+ */
+@media (min-width: 1200px) {
+  body[data-ui-mode="advanced"] .top-header {
+    height: 112px;
+    padding-inline: clamp(28px, 2vw, 44px);
+  }
+
+  body[data-ui-mode="advanced"] .brand-logo-small {
+    height: 100px;
+  }
+
+  body[data-ui-mode="advanced"] .ui-mode-toggle {
+    gap: 10px;
+    padding: 6px 10px;
+  }
+
+  body[data-ui-mode="advanced"] .mode-label {
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] .slider-toggle {
+    width: 42px;
+    height: 24px;
+  }
+
+  body[data-ui-mode="advanced"] .slider-toggle .slider::before {
+    width: 18px;
+    height: 18px;
+  }
+
+  body[data-ui-mode="advanced"] .slider-toggle input:checked + .slider::before {
+    transform: translateX(18px);
+  }
+
+  body[data-ui-mode="advanced"] .advanced-layout {
+    min-height: 0;
+  }
+
+  body[data-ui-mode="advanced"] .sidebar {
+    width: 300px;
+  }
+
+  body[data-ui-mode="advanced"] .nav-list {
+    padding: 22px 14px;
+  }
+
+  body[data-ui-mode="advanced"] .nav-item {
+    min-height: 52px;
+    gap: 14px;
+    padding: 14px 18px;
+    margin-bottom: 7px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] .nav-item .icon {
+    font-size: 19px;
+  }
+
+  body[data-ui-mode="advanced"] .sidebar-footer {
+    padding: 20px;
+  }
+
+  body[data-ui-mode="advanced"] .sidebar-footer .block-tog {
+    gap: 10px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] .sidebar-footer .small {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  body[data-ui-mode="advanced"] .content-area {
+    padding: clamp(28px, 1.7vw, 42px);
+  }
+
+  body[data-ui-mode="advanced"] .card-header {
+    padding: 22px 28px;
+  }
+
+  body[data-ui-mode="advanced"] .card-header h2 {
+    font-size: 17px;
+  }
+
+  body[data-ui-mode="advanced"] .card-body {
+    padding: 28px;
+  }
+
+  body[data-ui-mode="advanced"] .small {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  body[data-ui-mode="advanced"] label {
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] input:not([type="checkbox"]):not([type="radio"]),
+  body[data-ui-mode="advanced"] select,
+  body[data-ui-mode="advanced"] textarea {
+    min-height: 48px;
+    padding: 12px 16px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] .btn {
+    height: 46px;
+    padding: 0 20px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] .btn.lg {
+    height: 54px;
+    padding-inline: 26px;
+    font-size: 17px;
+  }
+
+  body[data-ui-mode="advanced"] .btn.sm {
+    height: 40px;
+    padding-inline: 16px;
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] .btn.icon-only {
+    width: 46px;
+    min-width: 46px;
+    padding: 0;
+  }
+
+  body[data-ui-mode="advanced"] .form-group {
+    margin-bottom: 22px;
+  }
+
+  body[data-ui-mode="advanced"] .form-row,
+  body[data-ui-mode="advanced"] .two-col,
+  body[data-ui-mode="advanced"] .action-group,
+  body[data-ui-mode="advanced"] .control-row {
+    gap: 14px;
+  }
+
+  body[data-ui-mode="advanced"] .settings-columns {
+    gap: 28px;
+    margin-top: 28px;
+  }
+
+  body[data-ui-mode="advanced"] .settings-group {
+    padding: 30px;
+  }
+
+  body[data-ui-mode="advanced"] .settings-group h3 {
+    padding-bottom: 14px;
+    margin-bottom: 24px;
+    font-size: 19px;
+  }
+
+  body[data-ui-mode="advanced"] .grid-overview {
+    max-width: 1100px;
+    gap: 28px;
+  }
+
+  body[data-ui-mode="advanced"] .status-hero {
+    gap: 20px;
+    padding: 44px;
+  }
+
+  body[data-ui-mode="advanced"] .status-hero h2 {
+    font-size: 22px;
+  }
+
+  body[data-ui-mode="advanced"] .hero-meta {
+    font-size: 15px;
+    margin-bottom: 28px;
+  }
+
+  body[data-ui-mode="advanced"] .hero-actions,
+  body[data-ui-mode="advanced"] .hero-quick-controls {
+    gap: 14px;
+  }
+
+  body[data-ui-mode="advanced"] .hero-quick-controls .btn,
+  body[data-ui-mode="advanced"] .hero-quick-controls .tog,
+  body[data-ui-mode="advanced"] .hero-quick-controls .mini-select {
+    min-height: 46px;
+  }
+
+  body[data-ui-mode="advanced"] .pill {
+    gap: 10px;
+    padding: 7px 15px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] .pill.large {
+    padding: 10px 26px;
+    font-size: 18px;
+  }
+
+  body[data-ui-mode="advanced"] .tog input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+  }
+
+  body[data-ui-mode="advanced"] .tip {
+    width: 19px;
+    height: 19px;
+    font-size: 12px;
+  }
+
+  body[data-ui-mode="advanced"] .kv-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+  }
+
+  body[data-ui-mode="advanced"] .kv-item {
+    padding: 15px;
+  }
+
+  body[data-ui-mode="advanced"] .kv-label {
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] .kv-value {
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] .badge {
+    gap: 7px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] .preflight-page {
+    width: min(100%, 1400px);
+    gap: 24px;
+  }
+
+  body[data-ui-mode="advanced"] .preflight-header h2 {
+    font-size: 26px;
+  }
+
+  body[data-ui-mode="advanced"] .preflight-status {
+    min-height: 50px;
+    padding: 13px 15px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] .preflight-list-item {
+    padding: 14px 16px;
+  }
+
+  body[data-ui-mode="advanced"] .preflight-list-message {
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] .preflight-list-code {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] .log-viewer {
+    height: 360px;
+    padding: 16px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  body[data-ui-mode="advanced"] .log-viewer.error {
+    height: 130px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-page {
+    max-width: none;
+    gap: 22px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-workspace {
+    gap: 20px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-device-bar {
+    gap: 24px;
+    padding: 22px 24px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-device-name {
+    font-size: 22px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-device-serial {
+    margin-top: 6px;
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-device-badges {
+    gap: 10px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-device-badge {
+    min-height: 34px;
+    padding: 7px 12px;
+    font-size: 12px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-workspace-tabs {
+    gap: 8px;
+    padding: 6px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-workspace-tab {
+    min-height: 48px;
+    padding: 10px 18px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-workspace-grid,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-grid {
+    gap: 22px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-form-grid,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-tools-grid {
+    gap: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-form-grid label,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-field label {
+    margin-bottom: 9px;
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-form-grid input,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-form-grid select,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-field input,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-field select {
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-actions {
+    gap: 12px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-feedback,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-activity {
+    min-height: 48px;
+    padding: 14px 16px;
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-list {
+    gap: 10px;
+    max-height: 520px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-list-item {
+    gap: 16px;
+    padding: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-list-title {
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-list-meta {
+    margin-top: 6px;
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-empty {
+    padding: 24px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-tool-value {
+    margin-top: 6px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-selected {
+    padding: 14px 16px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-checks {
+    gap: 20px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-checks label {
+    gap: 9px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-checks input {
+    width: 18px;
+    height: 18px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-workspace-meta {
+    gap: 14px;
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-section-note {
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-content {
+    gap: 20px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-metrics {
+    gap: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-metric {
+    padding: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-label {
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-value {
+    margin-top: 9px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-controllers,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-controller-list {
+    gap: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-section-title h3 {
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-controller-row {
+    gap: 18px;
+    padding: 15px 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-controller-identity strong {
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-controller-identity span {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-controller-facts span {
+    min-height: 32px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-inline-empty,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-overview-empty {
+    padding: 20px;
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-file-drop {
+    min-height: 100px;
+    gap: 16px;
+    padding: 20px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-file-name {
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-file-meta,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-host-path summary,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-host-path-help {
+    font-size: 14px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-selected-device-display,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-target-device-display {
+    min-height: 56px;
+    gap: 6px;
+    padding: 14px 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-selected-device-name,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-target-device-display strong {
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-selected-device-address,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-target-device-display span {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-apps-device-context {
+    gap: 12px;
+    padding: 13px 15px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-apps-device-context span {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-apps-device-context strong {
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-advanced-install-options summary {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-advanced-install-body {
+    padding: 14px 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-dialog {
+    width: min(980px, 100%);
+    max-height: min(900px, calc(100vh - 48px));
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-header,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-footer {
+    padding: 20px 24px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-header h2 {
+    font-size: 22px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-steps {
+    gap: 10px;
+    padding: 20px 24px 0;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-step {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-step > span {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-step strong {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-body {
+    min-height: 320px;
+    gap: 16px;
+    padding: 36px 30px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-body h3 {
+    font-size: 26px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-body p {
+    max-width: 720px;
+    font-size: 16px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-device {
+    width: min(700px, 100%);
+    gap: 8px;
+    padding: 18px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-device > span,
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-device label {
+    font-size: 13px;
+  }
+
+  body[data-ui-mode="advanced"] #tab-devhub .devhub-wizard-device select {
+    min-height: 48px;
+  }
+}
+
+/*
  * PR #89 introduced a three-column wide-screen grid for Connection Setup,
  * Status & Control, and Adapter Readiness. Adapter Readiness is no longer
  * rendered in Basic mode, so the two remaining cards keep the full row.
