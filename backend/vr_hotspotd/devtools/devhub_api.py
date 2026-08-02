@@ -17,6 +17,7 @@ from vr_hotspotd.devtools.adb_operations import (
     execute_adb_operation,
 )
 from vr_hotspotd.devtools.apk_upload import APK_UPLOAD_PATH, handle_apk_upload
+from vr_hotspotd.devtools.device_overview import collect_device_overview
 from vr_hotspotd.devtools.platform_tools_manager import (
     RESULT_ARCHIVE_INVALID,
     RESULT_ARCHIVE_TOO_LARGE,
@@ -37,6 +38,8 @@ from vr_hotspotd.devtools.platform_tools_manager import (
 
 log = logging.getLogger("vr_hotspotd.devhub_api")
 
+DEVICE_OVERVIEW_PATH = "/v1/devbridge/adb/device-overview"
+
 _DEVHUB_ASSET_TYPES = {
     "/assets/devhub.css": "text/css; charset=utf-8",
     "/assets/devhub.js": "application/javascript; charset=utf-8",
@@ -44,6 +47,8 @@ _DEVHUB_ASSET_TYPES = {
     "/assets/devhub_upload.js": "application/javascript; charset=utf-8",
     "/assets/devhub_workspace.css": "text/css; charset=utf-8",
     "/assets/devhub_workspace.js": "application/javascript; charset=utf-8",
+    "/assets/devhub_device_overview.css": "text/css; charset=utf-8",
+    "/assets/devhub_device_overview.js": "application/javascript; charset=utf-8",
 }
 
 _GET_OPERATIONS = {
@@ -142,6 +147,20 @@ class DevHubAPIHandler(APIHandler):
             ),
         )
 
+    def _respond_device_overview(self, *, cid: str, serial: Any) -> None:
+        result = collect_device_overview(serial)
+        result_code = str(result.get("result_code") or RESULT_FAILED)
+        status = _RESULT_HTTP_STATUS.get(result_code, 500)
+        self._respond(
+            status,
+            self._envelope(
+                correlation_id=cid,
+                result_code=result_code,
+                data=result,
+                warnings=[],
+            ),
+        )
+
     def _respond_tools_operation(
         self,
         *,
@@ -186,7 +205,8 @@ class DevHubAPIHandler(APIHandler):
         if self._serve_devhub_asset(path):
             return
         operation = _GET_OPERATIONS.get(path)
-        if operation is None:
+        is_device_overview = path == DEVICE_OVERVIEW_PATH
+        if operation is None and not is_device_overview:
             super().do_GET()
             return
 
@@ -197,13 +217,17 @@ class DevHubAPIHandler(APIHandler):
         if not self._require_auth(cid):
             return
 
+        if is_device_overview:
+            self._respond_device_overview(cid=cid, serial=qs.get("serial"))
+            return
+
         request: Optional[Mapping[str, Any]] = None
         if operation == "packages":
             request = {
                 "serial": qs.get("serial"),
                 "third_party_only": self._qbool(qs, "third_party_only", True),
             }
-        self._respond_adb_operation(cid=cid, operation=operation, request=request)
+        self._respond_adb_operation(cid=cid, operation=operation or "", request=request)
 
     def do_POST(self):
         cid = self._cid()
