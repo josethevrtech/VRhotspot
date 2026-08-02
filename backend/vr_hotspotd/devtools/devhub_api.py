@@ -43,6 +43,7 @@ DEVICE_OVERVIEW_PATH = "/v1/devbridge/adb/device-overview"
 WIRELESS_BOOTSTRAP_PATH = "/v1/devbridge/adb/enable-wireless"
 
 _DEVHUB_ASSET_TYPES = {
+    "/assets/basic_layout.css": "text/css; charset=utf-8",
     "/assets/devhub.css": "text/css; charset=utf-8",
     "/assets/devhub.js": "application/javascript; charset=utf-8",
     "/assets/devhub_upload.css": "text/css; charset=utf-8",

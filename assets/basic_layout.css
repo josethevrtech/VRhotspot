@@ -1,0 +1,13 @@
+/*
+ * Basic-mode desktop layout refinement.
+ *
+ * PR #89 introduced a three-column wide-screen grid for Connection Setup,
+ * Status & Control, and Adapter Readiness. Adapter Readiness is no longer
+ * rendered in Basic mode, so preserve the existing responsive grid while
+ * allowing the two remaining cards to use the full desktop container.
+ */
+@media (min-width: 1400px) {
+  body[data-ui-mode="basic"] .basic-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
