@@ -21,7 +21,6 @@ ADB_OVERVIEW_TIMEOUT_S = 15.0
 ADB_OUTPUT_LIMIT_BYTES = 256 * 1024
 SERIAL_RE = re.compile(r"^[A-Za-z0-9._:-]{1,255}$")
 PROPERTY_RE = re.compile(r"^\[([^]]+)\]: \[(.*)\]$")
-IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
 class DeviceOverviewError(ValueError):
@@ -228,6 +227,17 @@ def _parse_controllers(text: str) -> list[Dict[str, Any]]:
     return controllers
 
 
+def _controller_service_available(text: str) -> bool:
+    if not text:
+        return False
+    missing = re.search(
+        r"(?:can't find|not found|unknown)\s+(?:service\s*:?\s*)?OVRRemoteService",
+        text,
+        re.IGNORECASE,
+    )
+    return missing is None
+
+
 def _failure(operation: str, result_code: str, message: str) -> Dict[str, Any]:
     return {
         "schema_version": 1,
@@ -293,11 +303,6 @@ def collect_device_overview(
             "dumpsys",
             "OVRRemoteService",
         )
-        controller_service_available = bool(controllers_text) and not re.search(
-            r"(?:can't find|not found|unknown)\s+(?:service\s*)?OVRRemoteService",
-            controllers_text,
-            re.IGNORECASE,
-        )
 
         data = {
             "serial": validated_serial,
@@ -316,7 +321,9 @@ def collect_device_overview(
             "storage": _parse_storage(storage_text) if storage_text else {},
             "wifi": _parse_wifi(wifi_text, route_text),
             "uptime_seconds": _parse_uptime(uptime_text),
-            "controller_service_available": controller_service_available,
+            "controller_service_available": _controller_service_available(
+                controllers_text
+            ),
             "controllers": _parse_controllers(controllers_text),
             "unavailable": unavailable,
         }
