@@ -26,6 +26,8 @@ def test_guided_interface_reuses_existing_live_control_ids() -> None:
         "basicQuickFields",
         "basicConnectFields",
         "wpa2_passphrase_basic",
+        "btnRevealPassBasic",
+        "btnShowQrBasic",
         "btnSavePassBasic",
         "btnCopySsid",
         "btnCopyPass",
@@ -91,6 +93,7 @@ def test_start_saves_pending_basic_changes_before_existing_start_handler() -> No
     assert "await waitForBasicSave();" in source
     assert "target.dataset.guidedResume = '1';" in source
     assert "target.click();" in source
+    assert "Switch to Pro mode for details." in source
 
 
 def test_status_omits_adapter_band_facts_and_decorative_notice() -> None:
@@ -132,13 +135,46 @@ def test_guided_styles_match_existing_theme_and_avoid_custom_iconography() -> No
     assert "transform: scale(" not in styles
 
 
-def test_secondary_controls_are_preserved_in_collapsed_options() -> None:
+def test_info_tips_use_one_native_circle_instead_of_a_circled_glyph() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
-    assert "make('details', 'basic-guided-options')" in source
-    assert "'Options'" in source
+    assert "make('span', 'tip basic-guided-tip', 'i')" in source
+    assert "make('span', 'tip basic-guided-tip', 'ⓘ')" not in source
+
+
+def test_pro_only_status_controls_stay_alive_but_are_hidden_in_basic() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+    styles = GUIDED_CSS.read_text(encoding="utf-8")
+
+    assert "make('details', 'basic-guided-options')" not in source
+    assert "'Options'" not in source
     assert "card.querySelector('.basic-status-preferences')" in source
-    assert "optionsBody.appendChild(preferences)" in source
     assert "basicTelemetryContainer" in source
     assert "privacyHintBasic" in source
-    assert "if (dirty) optionsBody.appendChild(dirty);" in source
+    assert "hiddenStatus.appendChild(node)" in source
+    assert ".basic-guided-options" not in styles
+    assert ".basic-guided-hidden-status" in styles
+
+
+def test_connection_profiles_fill_the_available_width() -> None:
+    styles = GUIDED_CSS.read_text(encoding="utf-8")
+
+    assert ".basic-guided-profile-field .segmented" in styles
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in styles
+    assert ".basic-guided-profile-field .seg span" in styles
+    assert "min-height: 64px;" in styles
+    assert "width: 100%;" in styles
+
+
+def test_password_field_reveal_and_qr_are_locked_to_one_row() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+    styles = GUIDED_CSS.read_text(encoding="utf-8")
+
+    assert "passActions.classList.add('basic-guided-password-row');" in source
+    assert "passActions.appendChild(passField);" in source
+    assert "passActions.appendChild(revealPass);" in source
+    assert "passActions.appendChild(showQr);" in source
+    assert ".basic-guided-password-row #wpa2_passphrase_basic" in styles
+    assert ".basic-guided-password-row #btnRevealPassBasic" in styles
+    assert ".basic-guided-password-row #btnShowQrBasic" in styles
+    assert "grid-template-columns: minmax(0, 1fr) 50px 50px !important;" in styles

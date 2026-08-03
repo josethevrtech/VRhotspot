@@ -29,7 +29,7 @@
   }
 
   function makeInfoTip(text) {
-    const tip = make('span', 'tip basic-guided-tip', 'ⓘ');
+    const tip = make('span', 'tip basic-guided-tip', 'i');
     tip.setAttribute('data-tip', text);
     tip.setAttribute('aria-label', text);
     tip.setAttribute('tabindex', '0');
@@ -139,9 +139,20 @@
     const connectStaging = el('basicConnectFields');
     if (connectStaging) staging.append(connectStaging);
 
-    const passGroup = el('wpa2_passphrase_basic')?.closest('.form-group');
+    const passField = el('wpa2_passphrase_basic');
+    const passGroup = passField?.closest('.form-group');
     const passSlot = steps.querySelector('#basicGuidedPassSlot');
     if (passGroup && passSlot) passSlot.appendChild(passGroup);
+
+    const passActions = passGroup?.querySelector('.basic-passphrase-actions');
+    const revealPass = el('btnRevealPassBasic');
+    const showQr = el('btnShowQrBasic');
+    if (passActions) {
+      passActions.classList.add('basic-guided-password-row');
+      if (passField) passActions.appendChild(passField);
+      if (revealPass) passActions.appendChild(revealPass);
+      if (showQr) passActions.appendChild(showQr);
+    }
 
     const oldConnectArea = card.querySelector('.basic-connect-inline');
     const actionGroup = oldConnectArea?.querySelector('.basic-connect-actions');
@@ -220,25 +231,23 @@
     const actions = card.querySelector('.basic-status-actions');
     if (actions) actions.classList.add('basic-guided-status-actions');
 
-    const options = make('details', 'basic-guided-options');
-    options.appendChild(make('summary', '', 'Options'));
-    const optionsBody = make('div', 'basic-guided-options-body');
+    // These controls remain connected so switching to Pro mode and the existing
+    // state synchronization keep working, but Basic mode intentionally does not
+    // expose privacy, refresh, telemetry, or technical feedback controls.
     const preferences = card.querySelector('.basic-status-preferences');
     const privacyHint = el('privacyHintBasic');
     const telemetry = el('basicTelemetryContainer');
     const message = el('msgBasic');
     const dirty = el('dirtyBasic');
-    if (statusDetails) optionsBody.appendChild(statusDetails);
-    if (preferences) optionsBody.appendChild(preferences);
-    if (privacyHint) optionsBody.appendChild(privacyHint);
-    if (telemetry) optionsBody.appendChild(telemetry);
-    if (message) optionsBody.appendChild(message);
-    if (dirty) optionsBody.appendChild(dirty);
-    options.appendChild(optionsBody);
+    for (const node of (
+      [statusDetails, preferences, privacyHint, telemetry, message, dirty]
+    )) {
+      if (node) hiddenStatus.appendChild(node);
+    }
 
     body.replaceChildren(hero, diagnosticDetails);
     if (actions) body.appendChild(actions);
-    body.append(options, hiddenStatus);
+    body.appendChild(hiddenStatus);
     return card;
   }
 
@@ -411,7 +420,7 @@
       if (!saved) {
         setTextIfChanged(
           el('basicGuidedStatusSummary'),
-          'Your changes could not be saved. Review the message under Options.',
+          'Your changes could not be saved. Switch to Pro mode for details.',
         );
         return;
       }
