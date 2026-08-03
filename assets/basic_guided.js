@@ -10,7 +10,6 @@
   ];
 
   let repositionQueued = false;
-  let guidedObserver = null;
 
   function el(id) {
     return document.getElementById(id);
@@ -21,6 +20,10 @@
     if (className) node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
+  }
+
+  function setTextIfChanged(node, text) {
+    if (node && node.textContent !== text) node.textContent = text;
   }
 
   function makeInfoTip(text) {
@@ -351,7 +354,7 @@
       const recommended = el('btnUseRecommended');
       if (recommended) recommended.hidden = true;
       const rescan = el('btnReloadAdapters');
-      if (rescan) rescan.textContent = 'Rescan adapters';
+      if (rescan) setTextIfChanged(rescan, 'Rescan adapters');
     }
 
     const profileField = fieldNode('qos_preset');
@@ -363,7 +366,8 @@
     };
     document.querySelectorAll('input[name="qos_basic"]').forEach((input) => {
       const span = input.closest('label')?.querySelector('span');
-      if (span) span.dataset.profileIcon = profileIcons[input.value] || '•';
+      const icon = profileIcons[input.value] || '•';
+      if (span && span.dataset.profileIcon !== icon) span.dataset.profileIcon = icon;
     });
 
     const ssidField = fieldNode('ssid');
@@ -385,7 +389,10 @@
       ultra_low_latency: 'Speed prioritizes low latency for VR streaming.',
       vr: 'Stable favors reliability on busy or noisy wireless networks.',
     };
-    helper.textContent = copy[selected?.value] || 'Choose the profile that matches how you use the hotspot.';
+    setTextIfChanged(
+      helper,
+      copy[selected?.value] || 'Choose the profile that matches how you use the hotspot.',
+    );
   }
 
   function selectedAdapterLabel() {
@@ -415,9 +422,9 @@
     const summary = el('basicGuidedStatusSummary');
     const facts = parseStatusMeta();
 
-    if (stateText) stateText.textContent = state;
-    if (el('basicGuidedAdapterValue')) el('basicGuidedAdapterValue').textContent = facts.adapter;
-    if (el('basicGuidedBandValue')) el('basicGuidedBandValue').textContent = facts.band;
+    setTextIfChanged(stateText, state);
+    setTextIfChanged(el('basicGuidedAdapterValue'), facts.adapter);
+    setTextIfChanged(el('basicGuidedBandValue'), facts.band);
 
     let stateName = 'loading';
     let summaryText = 'Checking the hotspot status.';
@@ -434,8 +441,10 @@
       stateName = 'stopped';
       summaryText = 'Your hotspot is not active.';
     }
-    if (card) card.dataset.hotspotState = stateName;
-    if (summary) summary.textContent = summaryText;
+    if (card && card.dataset.hotspotState !== stateName) {
+      card.dataset.hotspotState = stateName;
+    }
+    setTextIfChanged(summary, summaryText);
   }
 
   function wireGuidedInteractions() {
@@ -447,21 +456,27 @@
     });
   }
 
+  function observeStagingContainer(container) {
+    if (!container) return;
+    const observer = new MutationObserver(queueReposition);
+    observer.observe(container, { childList: true, subtree: true });
+  }
+
+  function observeStatusSource(source) {
+    if (!source) return;
+    const observer = new MutationObserver(syncStatusPresentation);
+    observer.observe(source, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  }
+
   function startObservers() {
-    const basic = document.querySelector('[data-ui-section="basic"]');
-    if (basic) {
-      guidedObserver = new MutationObserver(() => {
-        queueReposition();
-        syncStatusPresentation();
-      });
-      guidedObserver.observe(basic, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ['class', 'disabled'],
-      });
-    }
+    observeStagingContainer(el('basicQuickFields'));
+    observeStagingContainer(el('basicConnectFields'));
+    observeStatusSource(el('basicPillTxt'));
+    observeStatusSource(el('basicStatusAdapterBand'));
 
     const bodyObserver = new MutationObserver(() => {
       if (document.body.dataset.uiMode === BASIC_MODE) queueReposition();
