@@ -34,26 +34,45 @@ def test_guided_interface_reuses_existing_live_control_ids() -> None:
         "basicPillTxt",
         "basicStatusAdapterBand",
         "btnStartBasic",
+        "btnStopBasic",
+        "btnRepairBasic",
+        "btnRefreshBasic",
+        "uiModeToggle",
+        "btnRepair",
     ):
         assert control_id in source
 
-    assert "card.querySelector('.basic-status-actions')" in source
     assert "api(" not in source
     assert "fetch(" not in source
 
 
-def test_guided_setup_uses_four_plain_language_steps() -> None:
+def test_guided_setup_uses_five_plain_language_steps() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
     assert "'Set Up Hotspot'" in source
     assert "'Choose Wi-Fi adapter'" in source
-    assert "'Choose connection profile'" in source
-    assert "'Hotspot name (SSID)'" in source
-    assert "'Password (Passphrase)'" in source
+    assert "'Choose performance mode'" in source
+    assert "'Hotspot name'" in source
+    assert "'Password'" in source
+    assert "'Start hotspot'" in source
     assert "basicGuidedAdapterSlot" in source
     assert "basicGuidedProfileSlot" in source
     assert "basicGuidedSsidSlot" in source
     assert "basicGuidedPassSlot" in source
+    assert "basicGuidedActionSlot" in source
+    assert "'Choose connection profile'" not in source
+    assert "'Hotspot name (SSID)'" not in source
+    assert "'Password (Passphrase)'" not in source
+
+
+def test_standard_profile_renames_only_the_visible_label() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+
+    assert "function renameProfileOptions" in source
+    assert "off: 'Standard'" in source
+    assert "ultra_low_latency: 'Speed'" in source
+    assert "vr: 'Stable'" in source
+    assert 'input[name="qos_basic"]' in source
 
 
 def test_technical_basic_defaults_remain_live_but_hidden() -> None:
@@ -73,6 +92,20 @@ def test_technical_basic_defaults_remain_live_but_hidden() -> None:
     assert "display: none !important;" in styles
 
 
+def test_status_is_embedded_as_step_five_and_old_card_is_hidden() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+    styles = GUIDED_CSS.read_text(encoding="utf-8")
+
+    assert "function buildHotspotStep" in source
+    assert "actionSlot.appendChild(control);" in source
+    assert "statusCard.hidden = true;" in source
+    assert "basic-guided-status-source-card" in source
+    assert ".basic-guided-status-source-card" in styles
+    assert "grid-template-columns: minmax(0, 1fr);" in styles
+    assert "max-width: 1900px;" in styles
+    assert "Status & Control" not in source
+
+
 def test_status_presentation_is_idempotent_and_source_scoped() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
@@ -83,10 +116,24 @@ def test_status_presentation_is_idempotent_and_source_scoped() -> None:
     assert "observer.observe(basic" not in source
 
 
+def test_single_primary_action_maps_to_start_stop_and_problem_states() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+
+    assert "function syncPrimaryAction" in source
+    assert "action.dataset.guidedAction = 'start';" in source
+    assert "action.dataset.guidedAction = 'stop';" in source
+    assert "action.dataset.guidedAction = 'problem';" in source
+    assert "action.textContent = 'Start hotspot';" in source
+    assert "action.textContent = 'Stop hotspot';" in source
+    assert "action.textContent = 'View problem';" in source
+    assert "const stopButton = el('btnStopBasic');" in source
+    assert "stopButton.click();" in source
+
+
 def test_start_saves_pending_basic_changes_before_existing_start_handler() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
-    assert "function wireSaveBeforeStart" in source
+    assert "function wirePrimaryAction" in source
     assert "event.stopImmediatePropagation();" in source
     assert "const saveButton = el('btnSaveConfig');" in source
     assert "saveButton.click();" in source
@@ -96,16 +143,46 @@ def test_start_saves_pending_basic_changes_before_existing_start_handler() -> No
     assert "Switch to Pro mode for details." in source
 
 
-def test_status_omits_adapter_band_facts_and_decorative_notice() -> None:
+def test_basic_error_dialog_recommends_pro_repair_without_auto_repair() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+    styles = GUIDED_CSS.read_text(encoding="utf-8")
+
+    assert "function buildErrorDialog" in source
+    assert "'Hotspot could not start'" in source
+    assert "'Try Again'" in source
+    assert "'Open Pro Mode'" in source
+    assert "function openProRepair" in source
+    assert "toggle.click();" in source
+    assert "const repair = el('btnRepair');" in source
+    assert "repair.focus();" in source
+    assert "el('btnRepair').click()" not in source
+    assert ".basic-hotspot-error-overlay" in styles
+    assert ".basic-hotspot-error-dialog" in styles
+
+
+def test_pro_only_basic_controls_stay_alive_in_hidden_staging() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+    styles = GUIDED_CSS.read_text(encoding="utf-8")
+
+    assert "statusCard.querySelector('.basic-status-preferences')" in source
+    assert "basicTelemetryContainer" in source
+    assert "privacyHintBasic" in source
+    assert "hiddenStatus.appendChild(node)" in source
+    assert "make('details', 'basic-guided-options')" not in source
+    assert ".basic-guided-hidden-status" in styles
+
+
+def test_status_omits_adapter_band_facts_and_manual_basic_repair_refresh() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
     assert "makeFact(" not in source
     assert "basicGuidedAdapterValue" not in source
     assert "basicGuidedBandValue" not in source
     assert "basic-guided-status-facts" not in source
-    assert "Pending changes are saved automatically" not in source
-    assert "basic-guided-apply-notice" not in source
-    assert "if (originalMeta) hiddenStatus.appendChild(originalMeta);" in source
+    assert "if (originalMeta) hiddenStatus.appendChild(originalMeta);" not in source
+    assert "btnRepairBasic" in source
+    assert "btnRefreshBasic" in source
+    assert "basic-guided-status-actions" not in source
 
 
 def test_empty_more_actions_disclosure_is_removed_but_controls_stay_alive() -> None:
@@ -117,13 +194,12 @@ def test_empty_more_actions_disclosure_is_removed_but_controls_stay_alive() -> N
     assert "if (copyPass) staging.appendChild(copyPass);" in source
 
 
-def test_guided_styles_match_existing_theme_and_avoid_custom_iconography() -> None:
+def test_guided_styles_match_existing_theme_and_avoid_page_scaling() -> None:
     styles = GUIDED_CSS.read_text(encoding="utf-8")
     source = GUIDED_JS.read_text(encoding="utf-8")
 
     assert 'body[data-ui-mode="basic"] .basic-guided-step' in styles
-    assert 'body[data-ui-mode="basic"] .basic-guided-status-hero' in styles
-    assert 'body[data-ui-mode="basic"] .basic-guided-status-actions' in styles
+    assert 'body[data-ui-mode="basic"] .basic-guided-hotspot-control' in styles
     assert "background: var(--bg-panel);" in styles
     assert "border-color: var(--border-subtle);" in styles
     assert "basic-guided-card-icon" not in styles
@@ -140,20 +216,6 @@ def test_info_tips_use_one_native_circle_instead_of_a_circled_glyph() -> None:
 
     assert "make('span', 'tip basic-guided-tip', 'i')" in source
     assert "make('span', 'tip basic-guided-tip', 'ⓘ')" not in source
-
-
-def test_pro_only_status_controls_stay_alive_but_are_hidden_in_basic() -> None:
-    source = GUIDED_JS.read_text(encoding="utf-8")
-    styles = GUIDED_CSS.read_text(encoding="utf-8")
-
-    assert "make('details', 'basic-guided-options')" not in source
-    assert "'Options'" not in source
-    assert "card.querySelector('.basic-status-preferences')" in source
-    assert "basicTelemetryContainer" in source
-    assert "privacyHintBasic" in source
-    assert "hiddenStatus.appendChild(node)" in source
-    assert ".basic-guided-options" not in styles
-    assert ".basic-guided-hidden-status" in styles
 
 
 def test_connection_profiles_fill_the_available_width() -> None:
