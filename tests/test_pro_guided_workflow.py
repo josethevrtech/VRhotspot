@@ -75,8 +75,35 @@ def test_navigation_cleanup_runs_before_optional_dom_transforms() -> None:
     assert enforce < initialize
     assert first_call < guided_call
     assert "RETRY_LIMIT" in source
-    assert "MutationObserver(scheduleRetry)" in source
+    assert "new MutationObserver((records) =>" in source
     assert "catch (error)" in source
+
+
+def test_guided_builder_recovers_from_post_login_base_layout() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "function guidedPrerequisitesReady()" in source
+    assert "proHotspotConfiguration" in source
+    assert "pro-service-card" in source
+    assert "configuration.querySelector('.preset-bar')" in source
+    assert "requiredIds.every" in source
+    assert "oldShell" not in source
+    assert "RETRY_LIMIT = 600" in source
+    assert "resetRetryBudget" in source
+    assert "data-auth-state" in source
+    assert "data-ui-mode" in source
+    assert "pageshow" in source
+    assert "visibilitychange" in source
+
+
+def test_guided_runtime_exposes_stage_and_error_state() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "dataset.proGuidedStage" in source
+    assert "waiting-for-base" in source
+    assert "guided-ready" in source
+    assert "dataset.proGuidedError" in source
+    assert "/assets/pro_guided_workflow.css?v=141-pro-guided-recovery" in source
 
 
 def test_connection_quality_is_pro_only_and_not_a_sidebar_tab() -> None:
