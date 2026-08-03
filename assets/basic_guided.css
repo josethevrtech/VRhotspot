@@ -120,9 +120,13 @@ body[data-ui-mode="basic"] .basic-guided-step-help {
   line-height: 1.5;
 }
 
+/* The base .tip class already draws the circle. Use a plain i to avoid a
+ * second circled glyph inside it. */
 body[data-ui-mode="basic"] .basic-guided-tip {
-  border-color: var(--border-active);
+  border-color: var(--border-subtle);
   color: var(--accent-primary);
+  font-family: var(--font-sans);
+  font-style: normal;
 }
 
 body[data-ui-mode="basic"] .basic-guided-step-slot > [data-field],
@@ -170,23 +174,28 @@ body[data-ui-mode="basic"] .basic-guided-profile-field .qos-basic {
 body[data-ui-mode="basic"] .basic-guided-profile-field .segmented {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 14px;
+  width: 100%;
 }
 
 body[data-ui-mode="basic"] .basic-guided-profile-field .seg {
+  display: block;
+  width: 100%;
   min-width: 0;
 }
 
 body[data-ui-mode="basic"] .basic-guided-profile-field .seg span {
   display: flex;
-  min-height: 48px;
+  width: 100%;
+  min-height: 64px;
+  padding: 0 24px;
   align-items: center;
   justify-content: center;
   border-color: var(--border-subtle);
   background: var(--bg-subtle);
   color: var(--text-muted);
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 body[data-ui-mode="basic"] .basic-guided-profile-field .seg input:checked + span {
@@ -196,16 +205,41 @@ body[data-ui-mode="basic"] .basic-guided-profile-field .seg input:checked + span
   box-shadow: var(--shadow-glow);
 }
 
-body[data-ui-mode="basic"] .basic-guided-pass-field .input-with-action {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 50px 50px;
-  gap: 10px;
+/* Lock the existing live passphrase controls into one explicit row. This wins
+ * over older Basic flex sizing without replacing any IDs or handlers. */
+body[data-ui-mode="basic"] .basic-guided-password-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 50px 50px !important;
+  gap: 10px !important;
+  align-items: stretch;
+  width: 100%;
 }
 
-body[data-ui-mode="basic"] .basic-guided-pass-field .btn.icon-only {
-  width: 50px;
-  min-width: 50px;
-  padding: 0;
+body[data-ui-mode="basic"] .basic-guided-password-row #wpa2_passphrase_basic {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  height: 50px;
+  margin: 0 !important;
+}
+
+body[data-ui-mode="basic"] .basic-guided-password-row #btnRevealPassBasic {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+body[data-ui-mode="basic"] .basic-guided-password-row #btnShowQrBasic {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+body[data-ui-mode="basic"] .basic-guided-password-row .btn.icon-only {
+  width: 50px !important;
+  min-width: 50px !important;
+  height: 50px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  align-self: stretch;
 }
 
 body[data-ui-mode="basic"] .basic-guided-save-password {
@@ -321,44 +355,6 @@ body[data-ui-mode="basic"] .basic-guided-status-actions .btn {
   font-size: 15px !important;
 }
 
-body[data-ui-mode="basic"] .basic-guided-options {
-  margin-top: 18px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-body[data-ui-mode="basic"] .basic-guided-options > summary {
-  width: fit-content;
-  padding-top: 14px;
-  cursor: pointer;
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-body[data-ui-mode="basic"] .basic-guided-options-body {
-  display: grid;
-  gap: 10px;
-  padding-top: 14px;
-}
-
-body[data-ui-mode="basic"] .basic-guided-options .basic-status-preferences {
-  display: flex;
-  flex-wrap: wrap;
-}
-
-body[data-ui-mode="basic"] .basic-guided-options #msgBasic:empty,
-body[data-ui-mode="basic"] .basic-guided-options #privacyHintBasic:empty,
-body[data-ui-mode="basic"] .basic-guided-options #dirtyBasic:empty,
-body[data-ui-mode="basic"] .basic-guided-options #basicStatusDetails:empty {
-  display: none;
-}
-
-body[data-ui-mode="basic"] .basic-guided-options #dirtyBasic:not(:empty) {
-  margin: 0 !important;
-  color: var(--warning);
-  font-size: 12px;
-}
-
 @media (max-width: 1500px) {
   body[data-ui-mode="basic"] .basic-grid {
     grid-template-columns: minmax(0, 1.18fr) minmax(390px, .82fr);
@@ -403,8 +399,19 @@ body[data-ui-mode="basic"] .basic-guided-options #dirtyBasic:not(:empty) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body[data-ui-mode="basic"] .basic-guided-pass-field .input-with-action {
-    grid-template-columns: minmax(0, 1fr) 46px 46px;
+  body[data-ui-mode="basic"] .basic-guided-profile-field .seg span {
+    min-height: 54px;
+    font-size: 15px;
+  }
+
+  body[data-ui-mode="basic"] .basic-guided-password-row {
+    grid-template-columns: minmax(0, 1fr) 46px 46px !important;
+  }
+
+  body[data-ui-mode="basic"] .basic-guided-password-row .btn.icon-only {
+    width: 46px !important;
+    min-width: 46px !important;
+    height: 50px !important;
   }
 
   body[data-ui-mode="basic"] .basic-guided-status-hero {
