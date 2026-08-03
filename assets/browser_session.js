@@ -2,6 +2,7 @@
   'use strict';
 
   const SESSION_PATH = '/v1/auth/browser-session';
+  const SESSION_SENTINEL = 'browser-session';
   const MAX_WAIT_MS = 15000;
   let installed = false;
   let pendingCandidate = '';
@@ -15,6 +16,7 @@
         cache: 'no-store',
       });
       if (!response.ok) return false;
+      if (typeof setToken === 'function') setToken(SESSION_SENTINEL);
       if (typeof enterAuthenticatedApp === 'function') enterAuthenticatedApp();
       return true;
     } catch {
@@ -56,7 +58,13 @@
 
   function install() {
     if (installed) return true;
-    if (typeof enterAuthenticatedApp !== 'function' || !document.body) return false;
+    if (
+      typeof enterAuthenticatedApp !== 'function'
+      || typeof setToken !== 'function'
+      || !document.body
+    ) {
+      return false;
+    }
     installed = true;
 
     const form = document.getElementById('loginForm');
