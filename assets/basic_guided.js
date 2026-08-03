@@ -8,8 +8,10 @@
     'country',
     'enable_internet',
   ];
+  const SAVE_WAIT_MS = 12000;
 
   let repositionQueued = false;
+  let saveBeforeStartRunning = false;
 
   function el(id) {
     return document.getElementById(id);
@@ -250,7 +252,6 @@
     const lastError = el('basicLastError');
     const errorDetail = el('basicLastErrorDetail');
     if (originalMeta) diagnosticDetails.appendChild(originalMeta);
-    if (statusDetails) diagnosticDetails.appendChild(statusDetails);
     if (lastError) diagnosticDetails.appendChild(lastError);
     if (errorDetail) diagnosticDetails.appendChild(errorDetail);
 
@@ -273,7 +274,7 @@
     noticeIcon.setAttribute('aria-hidden', 'true');
     const noticeCopy = make('div', 'basic-guided-notice-copy');
     noticeCopy.append(
-      make('span', '', 'Changes apply when you start the hotspot.'),
+      make('span', '', 'Pending changes are saved automatically when you start the hotspot.'),
     );
     const dirty = el('dirtyBasic');
     if (dirty) noticeCopy.appendChild(dirty);
@@ -286,6 +287,7 @@
     const privacyHint = el('privacyHintBasic');
     const telemetry = el('basicTelemetryContainer');
     const message = el('msgBasic');
+    if (statusDetails) optionsBody.appendChild(statusDetails);
     if (preferences) optionsBody.appendChild(preferences);
     if (privacyHint) optionsBody.appendChild(privacyHint);
     if (telemetry) optionsBody.appendChild(telemetry);
@@ -395,22 +397,34 @@
     );
   }
 
-  function selectedAdapterLabel() {
-    const select = el('ap_adapter');
-    if (!select || select.selectedIndex < 0) return '--';
-    return (select.options[select.selectedIndex]?.textContent || '--')
+  function cleanAdapterLabel(text) {
+    return String(text || '')
       .replace(/\s*\(Recommended\)\s*/i, '')
       .trim() || '--';
+  }
+
+  function adapterLabelForValue(value) {
+    const select = el('ap_adapter');
+    if (!select) return value || '--';
+    const match = Array.from(select.options).find((option) => option.value === value);
+    if (match) return cleanAdapterLabel(match.textContent);
+    if (!value || value === '--') {
+      const selected = select.options[select.selectedIndex];
+      return cleanAdapterLabel(selected?.textContent);
+    }
+    return value;
   }
 
   function parseStatusMeta() {
     const raw = el('basicStatusAdapterBand')?.textContent || '';
     const adapterMatch = raw.match(/Adapter:\s*([^|]+)/i);
     const bandMatch = raw.match(/Band:\s*([^|]+)/i);
-    let adapter = adapterMatch ? adapterMatch[1].trim() : '--';
+    const adapterValue = adapterMatch ? adapterMatch[1].trim() : '--';
     const band = bandMatch ? bandMatch[1].trim() : '--';
-    if (!adapter || adapter === '--') adapter = selectedAdapterLabel();
-    return { adapter: adapter || '--', band: band || '--' };
+    return {
+      adapter: adapterLabelForValue(adapterValue),
+      band: band || '--',
+    };
   }
 
   function syncStatusPresentation() {
@@ -447,6 +461,67 @@
     setTextIfChanged(summary, summaryText);
   }
 
+  function pendingBasicChanges() {
+    return !!(el('dirtyBasic')?.textContent || '').trim();
+  }
+
+  function waitForBasicSave() {
+    const started = Date.now();
+    return new Promise((resolve) => {
+      function check() {
+        if (!pendingBasicChanges()) {
+          resolve(true);
+          return;
+        }
+        if ((Date.now() - started) >= SAVE_WAIT_MS) {
+          resolve(false);
+          return;
+        }
+        window.setTimeout(check, 100);
+      }
+      check();
+    });
+  }
+
+  function wireSaveBeforeStart() {
+    document.addEventListener('click', async (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest('#btnStartBasic')
+        : null;
+      if (!target) return;
+
+      if (target.dataset.guidedResume === '1') {
+        delete target.dataset.guidedResume;
+        return;
+      }
+      if (!pendingBasicChanges()) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (saveBeforeStartRunning) return;
+      saveBeforeStartRunning = true;
+      target.classList.add('is-saving');
+      setTextIfChanged(el('basicGuidedStatusSummary'), 'Saving your changes before starting…');
+
+      const saveButton = el('btnSaveConfig');
+      if (saveButton) saveButton.click();
+      const saved = !!saveButton && await waitForBasicSave();
+
+      target.classList.remove('is-saving');
+      saveBeforeStartRunning = false;
+      if (!saved) {
+        setTextIfChanged(
+          el('basicGuidedStatusSummary'),
+          'Your changes could not be saved. Review the message under Options.',
+        );
+        return;
+      }
+
+      target.dataset.guidedResume = '1';
+      target.click();
+    }, true);
+  }
+
   function wireGuidedInteractions() {
     document.addEventListener('change', (event) => {
       const target = event.target;
@@ -454,6 +529,7 @@
       if (target.matches('input[name="qos_basic"]')) updateProfileHelp();
       if (target.id === 'ap_adapter') syncStatusPresentation();
     });
+    wireSaveBeforeStart();
   }
 
   function observeStagingContainer(container) {
