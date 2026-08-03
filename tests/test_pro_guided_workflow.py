@@ -16,7 +16,7 @@ def test_pro_runtime_is_loaded_as_versioned_dedicated_assets() -> None:
     source = LOADER.read_text(encoding="utf-8")
 
     assert "/assets/browser_session.js?v=139-session-hotfix" in source
-    assert "/assets/pro_guided_workflow.js?v=139-pro-hotfix" in source
+    assert "/assets/pro_guided_workflow.js?v=141-pro-guided-recovery" in source
     assert "script.async = false" in source
 
 
