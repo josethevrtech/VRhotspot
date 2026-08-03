@@ -32,12 +32,10 @@ def test_guided_interface_reuses_existing_live_control_ids() -> None:
         "basicPillTxt",
         "basicStatusAdapterBand",
         "btnStartBasic",
-        "btnStopBasic",
-        "btnRepairBasic",
-        "btnRefreshBasic",
     ):
         assert control_id in source
 
+    assert "card.querySelector('.basic-status-actions')" in source
     assert "api(" not in source
     assert "fetch(" not in source
 
