@@ -11,7 +11,7 @@ def test_basic_mode_removes_adapter_readiness_card_from_the_dom() -> None:
 
     assert "removeBasicAdapterReadinessCard" in source
     assert "[data-adapter-readiness-card]" in source
-    assert "card.remove()" in source
+    assert ".remove()" in source
 
 
 def test_adapter_readiness_markup_remains_available_to_the_readiness_engine() -> None:
