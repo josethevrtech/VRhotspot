@@ -104,7 +104,8 @@ def test_adapter_readiness_removal_and_core_pro_dom_contracts_remain() -> None:
     core = CORE_UI.read_text(encoding="utf-8")
 
     assert "removeBasicAdapterReadinessCard" in loader
-    assert "card.remove()" in loader
+    assert "[data-adapter-readiness-card]" in loader
+    assert ".remove()" in loader
     assert ".advanced-layout" in core
     assert ".sidebar" in core
     assert ".content-area" in core
