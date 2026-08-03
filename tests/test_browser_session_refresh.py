@@ -26,7 +26,8 @@ def test_daemon_issues_opaque_http_only_same_site_cookie() -> None:
     assert 'secrets.token_urlsafe(32)' in source
     assert "HttpOnly" in source
     assert "SameSite=Strict" in source
-    assert "Max-Age=" in source
+    assert "SameSite=Strict; Max-Age=0" in source
+    assert "Max-Age={_BROWSER_SESSION_TTL_S}" not in source
     assert "super()._is_authorized()" in source
     assert "_browser_session_is_valid" in source
 
