@@ -70,6 +70,18 @@ window.UI_FIELD_VISIBILITY = {
   document.head.appendChild(stylesheet);
 })();
 
+(function loadGuidedBasicModeAssets() {
+  const stylesheet = document.createElement('link');
+  stylesheet.rel = 'stylesheet';
+  stylesheet.href = '/assets/basic_guided.css';
+  document.head.appendChild(stylesheet);
+
+  const script = document.createElement('script');
+  script.src = '/assets/basic_guided.js';
+  script.async = false;
+  document.head.appendChild(script);
+})();
+
 (function loadDeveloperHubAssets() {
   const stylesheet = document.createElement('link');
   stylesheet.rel = 'stylesheet';
