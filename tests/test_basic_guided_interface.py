@@ -32,12 +32,10 @@ def test_guided_interface_reuses_existing_live_control_ids() -> None:
         "basicPillTxt",
         "basicStatusAdapterBand",
         "btnStartBasic",
-        "btnStopBasic",
-        "btnRepairBasic",
-        "btnRefreshBasic",
     ):
         assert control_id in source
 
+    assert "card.querySelector('.basic-status-actions')" in source
     assert "api(" not in source
     assert "fetch(" not in source
 
@@ -78,8 +76,8 @@ def test_status_presentation_is_idempotent_and_source_scoped() -> None:
 
     assert "function setTextIfChanged" in source
     assert "observeStatusSource(el('basicPillTxt'))" in source
-    assert "observeStatusSource(el('basicStatusAdapterBand'))" in source
     assert "observeStagingContainer(el('basicQuickFields'))" in source
+    assert "observeStatusSource(el('basicStatusAdapterBand'))" not in source
     assert "observer.observe(basic" not in source
 
 
@@ -93,24 +91,42 @@ def test_start_saves_pending_basic_changes_before_existing_start_handler() -> No
     assert "await waitForBasicSave();" in source
     assert "target.dataset.guidedResume = '1';" in source
     assert "target.click();" in source
-    assert "Pending changes are saved automatically when you start the hotspot." in source
 
 
-def test_status_uses_friendly_adapter_labels_and_hides_technical_details() -> None:
+def test_status_omits_adapter_band_facts_and_decorative_notice() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
-    assert "function adapterLabelForValue" in source
-    assert ".find((option) => option.value === value)" in source
-    assert "if (statusDetails) optionsBody.appendChild(statusDetails);" in source
-    assert "if (statusDetails) diagnosticDetails.appendChild(statusDetails);" not in source
+    assert "makeFact(" not in source
+    assert "basicGuidedAdapterValue" not in source
+    assert "basicGuidedBandValue" not in source
+    assert "basic-guided-status-facts" not in source
+    assert "Pending changes are saved automatically" not in source
+    assert "basic-guided-apply-notice" not in source
+    assert "if (originalMeta) hiddenStatus.appendChild(originalMeta);" in source
 
 
-def test_guided_styles_are_basic_only_and_use_native_sizing() -> None:
+def test_empty_more_actions_disclosure_is_removed_but_controls_stay_alive() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+
+    assert "'More actions'" not in source
+    assert "basic-guided-more-actions" not in source
+    assert "if (copySsid) staging.appendChild(copySsid);" in source
+    assert "if (copyPass) staging.appendChild(copyPass);" in source
+
+
+def test_guided_styles_match_existing_theme_and_avoid_custom_iconography() -> None:
     styles = GUIDED_CSS.read_text(encoding="utf-8")
+    source = GUIDED_JS.read_text(encoding="utf-8")
 
     assert 'body[data-ui-mode="basic"] .basic-guided-step' in styles
     assert 'body[data-ui-mode="basic"] .basic-guided-status-hero' in styles
     assert 'body[data-ui-mode="basic"] .basic-guided-status-actions' in styles
+    assert "background: var(--bg-panel);" in styles
+    assert "border-color: var(--border-subtle);" in styles
+    assert "basic-guided-card-icon" not in styles
+    assert "basic-guided-status-orb" not in styles
+    assert "data-guided-icon" not in source
+    assert "data-profile-icon" not in source
     assert 'body[data-ui-mode="advanced"]' not in styles
     assert "zoom:" not in styles
     assert "transform: scale(" not in styles
@@ -125,3 +141,4 @@ def test_secondary_controls_are_preserved_in_collapsed_options() -> None:
     assert "optionsBody.appendChild(preferences)" in source
     assert "basicTelemetryContainer" in source
     assert "privacyHintBasic" in source
+    assert "if (dirty) optionsBody.appendChild(dirty);" in source
