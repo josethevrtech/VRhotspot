@@ -16,12 +16,12 @@ def test_pro_navigation_unifies_overview_and_settings() -> None:
     assert "settings.hidden = true" in source
 
 
-def test_pro_configuration_preserves_existing_controls() -> None:
+def test_pro_configuration_reuses_the_existing_settings_dom() -> None:
     source = SOURCE.read_text(encoding="utf-8")
 
+    assert "settingsPane.querySelector('.settings-header')" in source
+    assert "configuration.appendChild(header)" in source
     for control in (
-        "btnSaveConfig",
-        "btnSaveRestart",
         "ap_adapter",
         "ssid",
         "wpa2_passphrase",
@@ -60,6 +60,14 @@ def test_refresh_controls_are_hidden_but_adaptive_polling_remains_live() -> None
     assert "auto.dispatchEvent(new Event('change'" in source
     assert "every.dispatchEvent(new Event('change'" in source
     assert ".hero-quick-controls" in source
+
+
+def test_telemetry_interval_moves_with_telemetry_controls() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "moveTelemetrySettings" in source
+    assert "telemetry_interval_s" in source
+    assert "settingsGroup.appendChild(interval)" in source
 
 
 def test_runtime_details_and_support_bundle_move_to_logs() -> None:
