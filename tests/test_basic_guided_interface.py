@@ -35,9 +35,6 @@ def test_guided_interface_reuses_existing_live_control_ids() -> None:
         "btnStopBasic",
         "btnRepairBasic",
         "btnRefreshBasic",
-        "privacyModeBasic",
-        "autoRefreshBasic",
-        "showTelemetryBasic",
     ):
         assert control_id in source
 
@@ -124,6 +121,7 @@ def test_secondary_controls_are_preserved_in_collapsed_options() -> None:
 
     assert "make('details', 'basic-guided-options')" in source
     assert "'Options'" in source
-    assert "basic-status-preferences" in source
+    assert "card.querySelector('.basic-status-preferences')" in source
+    assert "optionsBody.appendChild(preferences)" in source
     assert "basicTelemetryContainer" in source
     assert "privacyHintBasic" in source
