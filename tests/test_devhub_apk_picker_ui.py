@@ -17,8 +17,9 @@ def test_developer_hub_loads_apk_picker_assets():
 
     assert "'/assets/devhub_upload.css'" in source
     assert "'/assets/devhub_upload.js'" in source
-    assert "document.head.appendChild(uploadStylesheet)" in source
-    assert "document.head.appendChild(uploadScript)" in source
+    assert "document.head.appendChild" in source
+    assert "stylesheet.href = href" in source
+    assert "script.src = src" in source
 
 
 def test_developer_hub_exposes_browser_apk_picker():
