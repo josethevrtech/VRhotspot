@@ -113,6 +113,66 @@ def test_setup_navigation_uses_vector_wifi_icon_not_emoji() -> None:
     assert "📡" not in source
 
 
+def test_density_pass_compacts_header_and_uses_horizontal_step_space() -> None:
+    loader = LOADER.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "polishProSetupDensity" in loader
+    assert "pro-guided-header-meta" in loader
+    assert "proHeaderStatus" in loader
+    assert "width: min(1280px, 100%)" in style
+    assert "grid-template-columns: minmax(190px, 238px) minmax(0, 1fr)" in style
+    assert "padding: 14px 18px" in style
+
+
+def test_density_pass_removes_legacy_essentials_and_duplicate_qos_ui() -> None:
+    loader = LOADER.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "removeLegacyEssentials" in loader
+    assert "document.querySelectorAll('.pro-config-essentials')" in loader
+    assert "qosField.hidden = true" in loader
+    assert "hiddenControls.appendChild(qosField)" in loader
+    assert '[data-field="qos_preset"]' in style
+    assert ".pro-config-essentials" in style
+
+
+def test_performance_mode_is_the_only_visible_profile_control() -> None:
+    loader = LOADER.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "PROFILE_COPY" in loader
+    assert "proPerformanceDescription" in loader
+    assert "aria-pressed" in loader
+    assert "is-selected" in loader
+    assert ".pro-performance-picker .btn-group" in style
+    assert "repeat(4, minmax(0, 1fr))" in style
+
+
+def test_pro_password_row_matches_basic_three_control_pattern() -> None:
+    loader = LOADER.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "function compactPassword()" in loader
+    assert "row.append(input, reveal, qr)" in loader
+    assert "qr.textContent = 'QR'" in loader
+    assert "Show or hide password" in loader
+    assert ".pro-password-row" in style
+    assert "grid-template-columns: minmax(0, 1fr) 50px 50px" in style
+    assert "height: 50px" in style
+
+
+def test_adapter_controls_are_one_compact_row() -> None:
+    loader = LOADER.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "proAdapterRecommendedBadge" in loader
+    assert "Rescan adapters" in loader
+    assert "recommended.hidden = true" in loader
+    assert ".pro-adapter-row" in style
+    assert "grid-template-columns: minmax(0, 1fr) auto auto" in style
+
+
 @pytest.mark.parametrize("asset", [LOADER, SOURCE, SESSION])
 def test_portal_extensions_parse_with_node(asset: Path) -> None:
     node = shutil.which("node")
