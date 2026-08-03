@@ -214,7 +214,7 @@ class DevHubAPIHandler(APIHandler):
             self.send_header(
                 "Set-Cookie",
                 f"{_BROWSER_SESSION_COOKIE}={session_id}; Path=/; HttpOnly; "
-                f"SameSite=Strict; Max-Age={_BROWSER_SESSION_TTL_S}",
+                "SameSite=Strict",
             )
         self.end_headers()
         try:
