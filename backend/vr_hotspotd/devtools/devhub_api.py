@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from http.cookies import SimpleCookie
+import json
 import logging
 from pathlib import Path
+import secrets
+import threading
+import time
 from typing import Any, Mapping, Optional
 
 from vr_hotspotd.api import APIHandler, _resolve_asset_path
@@ -41,6 +46,12 @@ log = logging.getLogger("vr_hotspotd.devhub_api")
 
 DEVICE_OVERVIEW_PATH = "/v1/devbridge/adb/device-overview"
 WIRELESS_BOOTSTRAP_PATH = "/v1/devbridge/adb/enable-wireless"
+BROWSER_SESSION_PATH = "/v1/auth/browser-session"
+BROWSER_SESSION_LOGOUT_PATH = "/v1/auth/browser-session/logout"
+_BROWSER_SESSION_COOKIE = "vrhs_browser_session"
+_BROWSER_SESSION_TTL_S = 8 * 60 * 60
+_BROWSER_SESSIONS: dict[str, float] = {}
+_BROWSER_SESSIONS_LOCK = threading.Lock()
 
 _DEVHUB_ASSET_TYPES = {
     "/assets/basic_layout.css": "text/css; charset=utf-8",
@@ -50,6 +61,9 @@ _DEVHUB_ASSET_TYPES = {
     "/assets/devhub.js": "application/javascript; charset=utf-8",
     "/assets/devhub_upload.css": "text/css; charset=utf-8",
     "/assets/devhub_upload.js": "application/javascript; charset=utf-8",
+    "/assets/browser_session.js": "application/javascript; charset=utf-8",
+    "/assets/pro_guided_workflow.js": "application/javascript; charset=utf-8",
+    "/assets/pro_guided_workflow.css": "text/css; charset=utf-8",
     "/assets/devhub_workspace.css": "text/css; charset=utf-8",
     "/assets/devhub_workspace.js": "application/javascript; charset=utf-8",
     "/assets/devhub_device_overview.css": "text/css; charset=utf-8",
@@ -115,8 +129,98 @@ _BODY_ERROR_WARNINGS = {
 }
 
 
+def _prune_browser_sessions(now: Optional[float] = None) -> None:
+    current = time.monotonic() if now is None else now
+    expired = [
+        session_id
+        for session_id, expires_at in _BROWSER_SESSIONS.items()
+        if expires_at <= current
+    ]
+    for session_id in expired:
+        _BROWSER_SESSIONS.pop(session_id, None)
+
+
+def _create_browser_session() -> str:
+    session_id = secrets.token_urlsafe(32)
+    with _BROWSER_SESSIONS_LOCK:
+        _prune_browser_sessions()
+        _BROWSER_SESSIONS[session_id] = time.monotonic() + _BROWSER_SESSION_TTL_S
+    return session_id
+
+
+def _browser_session_is_valid(session_id: str) -> bool:
+    if not session_id:
+        return False
+    with _BROWSER_SESSIONS_LOCK:
+        _prune_browser_sessions()
+        expires_at = _BROWSER_SESSIONS.get(session_id)
+        if expires_at is None:
+            return False
+        _BROWSER_SESSIONS[session_id] = time.monotonic() + _BROWSER_SESSION_TTL_S
+        return True
+
+
+def _revoke_browser_session(session_id: str) -> None:
+    if not session_id:
+        return
+    with _BROWSER_SESSIONS_LOCK:
+        _BROWSER_SESSIONS.pop(session_id, None)
+
+
 class DevHubAPIHandler(APIHandler):
     """Extend the daemon API with Developer Hub assets and operations."""
+
+    def _browser_session_id(self) -> str:
+        raw_cookie = self.headers.get("Cookie") or ""
+        if not raw_cookie:
+            return ""
+        cookie = SimpleCookie()
+        try:
+            cookie.load(raw_cookie)
+        except Exception:
+            return ""
+        morsel = cookie.get(_BROWSER_SESSION_COOKIE)
+        return morsel.value.strip() if morsel else ""
+
+    def _is_authorized(self) -> bool:
+        return super()._is_authorized() or _browser_session_is_valid(
+            self._browser_session_id()
+        )
+
+    def _respond_browser_session(
+        self,
+        *,
+        cid: str,
+        code: int,
+        result_code: str,
+        session_id: str = "",
+        clear: bool = False,
+    ) -> None:
+        payload = self._envelope(
+            correlation_id=cid,
+            result_code=result_code,
+            data={"authenticated": code == 200 and not clear},
+        )
+        raw = json.dumps(payload).encode("utf-8")
+        self.send_response(code)
+        self._send_common_headers("application/json; charset=utf-8", len(raw))
+        if clear:
+            self.send_header(
+                "Set-Cookie",
+                f"{_BROWSER_SESSION_COOKIE}=; Path=/; HttpOnly; "
+                "SameSite=Strict; Max-Age=0",
+            )
+        elif session_id:
+            self.send_header(
+                "Set-Cookie",
+                f"{_BROWSER_SESSION_COOKIE}={session_id}; Path=/; HttpOnly; "
+                "SameSite=Strict",
+            )
+        self.end_headers()
+        try:
+            self.wfile.write(raw)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _serve_devhub_asset(self, path: str) -> bool:
         content_type = _DEVHUB_ASSET_TYPES.get(path)
@@ -236,6 +340,21 @@ class DevHubAPIHandler(APIHandler):
         path, qs = self._parse_url()
         if self._serve_devhub_asset(path):
             return
+        if path == BROWSER_SESSION_PATH:
+            if _browser_session_is_valid(self._browser_session_id()):
+                self._respond_browser_session(
+                    cid=cid,
+                    code=200,
+                    result_code="browser_session_active",
+                )
+            else:
+                self._respond_browser_session(
+                    cid=cid,
+                    code=401,
+                    result_code="browser_session_missing",
+                    clear=True,
+                )
+            return
         operation = _GET_OPERATIONS.get(path)
         is_device_overview = path == DEVICE_OVERVIEW_PATH
         if operation is None and not is_device_overview:
@@ -259,11 +378,41 @@ class DevHubAPIHandler(APIHandler):
                 "serial": qs.get("serial"),
                 "third_party_only": self._qbool(qs, "third_party_only", True),
             }
-        self._respond_adb_operation(cid=cid, operation=operation or "", request=request)
+        self._respond_adb_operation(
+            cid=cid,
+            operation=operation or "",
+            request=request,
+        )
 
     def do_POST(self):
         cid = self._cid()
         path, _qs = self._parse_url()
+        if path == BROWSER_SESSION_PATH:
+            if not super()._is_authorized():
+                self._respond_browser_session(
+                    cid=cid,
+                    code=401,
+                    result_code="browser_session_rejected",
+                    clear=True,
+                )
+                return
+            self._respond_browser_session(
+                cid=cid,
+                code=200,
+                result_code="browser_session_created",
+                session_id=_create_browser_session(),
+            )
+            return
+        if path == BROWSER_SESSION_LOGOUT_PATH:
+            _revoke_browser_session(self._browser_session_id())
+            self._respond_browser_session(
+                cid=cid,
+                code=200,
+                result_code="browser_session_cleared",
+                clear=True,
+            )
+            return
+
         operation = _POST_OPERATIONS.get(path)
         tools_operation = _TOOLS_POST_OPERATIONS.get(path)
         is_apk_upload = path == APK_UPLOAD_PATH

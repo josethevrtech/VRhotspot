@@ -1,0 +1,204 @@
+body[data-ui-mode="advanced"] .pro-nav-svg {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  margin-right: 12px;
+  color: var(--accent-primary);
+}
+body[data-ui-mode="advanced"] .pro-configuration > .settings-header {
+  display: none !important;
+}
+body[data-ui-mode="advanced"] #tab-telemetry,
+body[data-ui-mode="advanced"] #tab-logs {
+  display: none !important;
+}
+body[data-ui-mode="advanced"] .pro-guided-shell,
+body[data-ui-mode="advanced"] .troubleshooting-shell {
+  width: min(1540px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 22px;
+}
+body[data-ui-mode="advanced"] .pro-guided-card,
+body[data-ui-mode="advanced"] .pro-quality-card {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-sm);
+}
+body[data-ui-mode="advanced"] .pro-guided-header,
+body[data-ui-mode="advanced"] .pro-quality-header {
+  padding: 22px 26px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+}
+body[data-ui-mode="advanced"] .pro-guided-header h2,
+body[data-ui-mode="advanced"] .pro-quality-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+body[data-ui-mode="advanced"] .pro-guided-header p {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+body[data-ui-mode="advanced"] .pro-guided-steps {
+  padding: 26px;
+}
+body[data-ui-mode="advanced"] .pro-guided-step {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+}
+body[data-ui-mode="advanced"] .pro-guided-number {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-active);
+  border-radius: 50%;
+  color: var(--accent-primary);
+  background: var(--bg-subtle);
+  font-weight: 700;
+}
+body[data-ui-mode="advanced"] .pro-guided-content {
+  min-width: 0;
+  padding: 0 0 26px 8px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+body[data-ui-mode="advanced"] .pro-guided-step:last-child .pro-guided-content {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+body[data-ui-mode="advanced"] .pro-guided-title {
+  margin: 2px 0 0;
+  font-size: 21px;
+}
+body[data-ui-mode="advanced"] .pro-guided-help {
+  margin: 6px 0 18px;
+  color: var(--text-muted);
+}
+body[data-ui-mode="advanced"] .pro-guided-slot {
+  min-width: 0;
+}
+body[data-ui-mode="advanced"] .pro-hotspot-fields,
+body[data-ui-mode="advanced"] .pro-guided-action {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+body[data-ui-mode="advanced"] .pro-hotspot-fields > :last-child {
+  grid-column: 1 / -1;
+}
+body[data-ui-mode="advanced"] .pro-performance-picker .btn-group {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+body[data-ui-mode="advanced"] .pro-performance-picker .btn {
+  min-height: 50px;
+}
+body[data-ui-mode="advanced"] .pro-advanced-settings > summary,
+body[data-ui-mode="advanced"] .pro-quality-details > summary {
+  cursor: pointer;
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+body[data-ui-mode="advanced"] .pro-advanced-body {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+body[data-ui-mode="advanced"] .pro-guided-action {
+  align-items: center;
+}
+body[data-ui-mode="advanced"] .pro-guided-action .pro-service-primary {
+  min-height: 58px;
+}
+body[data-ui-mode="advanced"] .pro-save-state {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+body[data-ui-mode="advanced"] .pro-save-state[data-state="error"] {
+  color: var(--danger);
+}
+body[data-ui-mode="advanced"] .pro-save-state[data-state="saved"] {
+  color: var(--success);
+}
+body[data-ui-mode="advanced"] .pro-guided-hidden {
+  display: none !important;
+}
+body[data-ui-mode="advanced"] .pro-quality-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+body[data-ui-mode="advanced"] .pro-quality-body {
+  padding: 20px 22px;
+}
+body[data-ui-mode="advanced"] .pro-quality-summary {
+  color: var(--text-main);
+  font-size: 16px;
+}
+body[data-ui-mode="advanced"] .pro-quality-details {
+  margin-top: 16px;
+}
+body[data-ui-mode="advanced"] .pro-quality-details .chart-wrapper {
+  min-height: 220px;
+}
+body[data-ui-mode="advanced"] .pro-quality-settings {
+  margin-top: 18px;
+}
+body[data-ui-mode="advanced"] .troubleshooting-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  padding: 22px 24px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+body[data-ui-mode="advanced"] .troubleshooting-header h2 {
+  margin: 0;
+  font-size: 24px;
+}
+body[data-ui-mode="advanced"] .troubleshooting-header p {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+}
+body[data-ui-mode="advanced"] .troubleshooting-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+body[data-ui-mode="advanced"] .troubleshooting-section-label {
+  margin: 0;
+  padding: 16px 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  font-size: 17px;
+}
+body[data-ui-mode="advanced"] .troubleshooting-shell .preflight-page,
+body[data-ui-mode="advanced"] .troubleshooting-shell .pro-runtime-details,
+body[data-ui-mode="advanced"] .troubleshooting-shell .pro-support-bundle-card,
+body[data-ui-mode="advanced"] .troubleshooting-shell .card {
+  margin: 0;
+}
+@media (max-width: 900px) {
+  body[data-ui-mode="advanced"] .pro-performance-picker .btn-group,
+  body[data-ui-mode="advanced"] .pro-hotspot-fields,
+  body[data-ui-mode="advanced"] .pro-guided-action {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body[data-ui-mode="advanced"] .troubleshooting-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
