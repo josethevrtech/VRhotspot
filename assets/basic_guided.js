@@ -12,6 +12,7 @@
 
   let repositionQueued = false;
   let saveBeforeStartRunning = false;
+  let lastStateName = '';
 
   function el(id) {
     return document.getElementById(id);
@@ -60,7 +61,10 @@
 
     const content = make('div', 'basic-guided-step-content');
     const heading = make('div', 'basic-guided-step-heading');
-    heading.append(make('h3', '', title), makeInfoTip(tipText));
+    const titleNode = make('h3', '', title);
+    titleNode.id = `${slotId}Title`;
+    heading.appendChild(titleNode);
+    if (tipText) heading.appendChild(makeInfoTip(tipText));
 
     const slot = make('div', 'basic-guided-step-slot');
     slot.id = slotId;
@@ -107,24 +111,31 @@
       ),
       createStep(
         2,
-        'Choose connection profile',
+        'Choose performance mode',
         'Speed prioritizes low latency for VR streaming.',
-        'Choose how aggressively VRhotspot tunes the connection. Speed is the recommended default.',
+        'Standard uses normal hotspot behavior. Speed prioritizes latency. Stable favors reliability.',
         'basicGuidedProfileSlot',
       ),
       createStep(
         3,
-        'Hotspot name (SSID)',
+        'Hotspot name',
         'This is the Wi-Fi network name other devices will see.',
         'Choose the name shown in the Wi-Fi list on your headset and other devices.',
         'basicGuidedSsidSlot',
       ),
       createStep(
         4,
-        'Password (Passphrase)',
+        'Password',
         'Use 8–63 characters. Press Enter or choose Save password.',
         'This password protects the hotspot. You can reveal it or generate a QR code for easy connection.',
         'basicGuidedPassSlot',
+      ),
+      createStep(
+        5,
+        'Start hotspot',
+        '',
+        'Start or stop the hotspot. VRhotspot saves pending Basic-mode changes before starting.',
+        'basicGuidedActionSlot',
       ),
     );
 
@@ -138,6 +149,10 @@
     staging.append(quickStaging);
     const connectStaging = el('basicConnectFields');
     if (connectStaging) staging.append(connectStaging);
+
+    const hiddenStatus = make('div', 'basic-guided-hidden-status');
+    hiddenStatus.id = 'basicGuidedHiddenStatus';
+    hiddenStatus.hidden = true;
 
     const passField = el('wpa2_passphrase_basic');
     const passGroup = passField?.closest('.form-group');
@@ -166,8 +181,6 @@
       passSlot.appendChild(savePass);
     }
 
-    // Keep the existing copy controls and their handlers alive without exposing
-    // an empty disclosure in the simplified Basic interface.
     if (copySsid) staging.appendChild(copySsid);
     if (copyPass) staging.appendChild(copyPass);
 
@@ -176,79 +189,180 @@
     if (actionGroup && !actionGroup.children.length) actionGroup.remove();
     if (oldConnectArea) oldConnectArea.hidden = true;
 
-    body.replaceChildren(notices, steps, technicalDefaults, staging);
+    body.replaceChildren(
+      notices,
+      steps,
+      technicalDefaults,
+      staging,
+      hiddenStatus,
+    );
     return card;
   }
 
-  function buildStatusCard() {
+  function buildHotspotStep() {
     const pill = el('basicPill');
-    if (!pill) return null;
-    const card = pill.closest('.basic-card');
-    if (!card || card.dataset.basicGuidedReady === '1') return card;
-    card.dataset.basicGuidedReady = '1';
-    card.classList.add('basic-guided-card', 'basic-guided-status-card');
+    const actionSlot = el('basicGuidedActionSlot');
+    const hiddenStatus = el('basicGuidedHiddenStatus');
+    if (!pill || !actionSlot || !hiddenStatus) return null;
 
-    setCardHeader(
-      card,
-      'Status & Control',
-      'See the hotspot state and control it from one place.',
-    );
+    const statusCard = pill.closest('.basic-card');
+    if (!statusCard || statusCard.dataset.basicGuidedReady === '1') return statusCard;
+    statusCard.dataset.basicGuidedReady = '1';
+    statusCard.classList.add('basic-guided-status-source-card');
+    statusCard.hidden = true;
 
-    const body = card.querySelector(':scope > .card-body');
-    if (!body) return card;
-    body.classList.add('basic-guided-status-body');
-
-    const hero = make('section', 'basic-guided-status-hero');
+    const control = make('section', 'basic-guided-hotspot-control');
+    const statusCopy = make('div', 'basic-guided-hotspot-copy');
     const stateRow = make('div', 'basic-guided-status-state');
     const stateDot = make('span', 'basic-guided-status-dot');
     stateDot.setAttribute('aria-hidden', 'true');
-    const stateText = make('h3', '', 'Loading…');
+    const stateText = make('h4', '', 'Loading…');
     stateText.id = 'basicGuidedStateText';
     stateRow.append(stateDot, stateText);
 
     const summary = make('p', '', 'Checking the hotspot status.');
     summary.id = 'basicGuidedStatusSummary';
-    hero.append(stateRow, summary);
+    statusCopy.append(stateRow, summary);
 
-    const hiddenStatus = make('div', 'basic-guided-hidden-status');
-    hiddenStatus.id = 'basicGuidedHiddenStatus';
-    hiddenStatus.hidden = true;
+    const startButton = el('btnStartBasic');
+    if (startButton) {
+      startButton.classList.add('basic-guided-primary-action');
+      control.append(statusCopy, startButton);
+    } else {
+      control.appendChild(statusCopy);
+    }
+    actionSlot.appendChild(control);
 
     const originalPillContainer = el('basicPillContainer');
-    if (originalPillContainer) hiddenStatus.appendChild(originalPillContainer);
-
     const originalMeta = el('basicStatusAdapterBand');
-    if (originalMeta) hiddenStatus.appendChild(originalMeta);
-
     const statusDetails = el('basicStatusDetails');
     const lastError = el('basicLastError');
     const errorDetail = el('basicLastErrorDetail');
-
-    const diagnosticDetails = make('div', 'basic-guided-status-details');
-    if (lastError) diagnosticDetails.appendChild(lastError);
-    if (errorDetail) diagnosticDetails.appendChild(errorDetail);
-
-    const actions = card.querySelector('.basic-status-actions');
-    if (actions) actions.classList.add('basic-guided-status-actions');
-
-    // These controls remain connected so switching to Pro mode and the existing
-    // state synchronization keep working, but Basic mode intentionally does not
-    // expose privacy, refresh, telemetry, or technical feedback controls.
-    const preferences = card.querySelector('.basic-status-preferences');
+    const actions = statusCard.querySelector('.basic-status-actions');
+    const stopButton = el('btnStopBasic');
+    const repairButton = el('btnRepairBasic');
+    const refreshButton = el('btnRefreshBasic');
+    const preferences = statusCard.querySelector('.basic-status-preferences');
     const privacyHint = el('privacyHintBasic');
     const telemetry = el('basicTelemetryContainer');
     const message = el('msgBasic');
     const dirty = el('dirtyBasic');
-    for (const node of (
-      [statusDetails, preferences, privacyHint, telemetry, message, dirty]
-    )) {
+
+    for (const node of [
+      originalPillContainer,
+      originalMeta,
+      statusDetails,
+      lastError,
+      errorDetail,
+      actions,
+      stopButton,
+      repairButton,
+      refreshButton,
+      preferences,
+      privacyHint,
+      telemetry,
+      message,
+      dirty,
+    ]) {
       if (node) hiddenStatus.appendChild(node);
     }
 
-    body.replaceChildren(hero, diagnosticDetails);
-    if (actions) body.appendChild(actions);
-    body.appendChild(hiddenStatus);
-    return card;
+    return statusCard;
+  }
+
+  function buildErrorDialog() {
+    if (el('basicHotspotError')) return;
+
+    const overlay = make('div', 'basic-hotspot-error-overlay');
+    overlay.id = 'basicHotspotError';
+    overlay.hidden = true;
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'basicHotspotErrorTitle');
+
+    const dialog = make('div', 'basic-hotspot-error-dialog');
+    const header = make('div', 'basic-hotspot-error-header');
+    const title = make('h2', '', 'Hotspot could not start');
+    title.id = 'basicHotspotErrorTitle';
+    const close = make('button', 'btn sm secondary', 'Close');
+    close.type = 'button';
+    close.id = 'basicHotspotErrorClose';
+    close.addEventListener('click', closeHotspotErrorDialog);
+    header.append(title, close);
+
+    const body = make('div', 'basic-hotspot-error-body');
+    body.append(
+      make('p', '', 'VRhotspot encountered a network problem.'),
+      make(
+        'p',
+        'small',
+        'Try starting it again, or open Pro mode to review diagnostics and use Repair Network.',
+      ),
+    );
+
+    const footer = make('div', 'basic-hotspot-error-footer');
+    const retry = make('button', 'btn secondary', 'Try Again');
+    retry.type = 'button';
+    retry.id = 'basicHotspotRetry';
+    retry.addEventListener('click', retryHotspotStart);
+    const openPro = make('button', 'btn primary', 'Open Pro Mode');
+    openPro.type = 'button';
+    openPro.id = 'basicHotspotOpenPro';
+    openPro.addEventListener('click', openProRepair);
+    footer.append(retry, openPro);
+
+    dialog.append(header, body, footer);
+    overlay.appendChild(dialog);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) closeHotspotErrorDialog();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !overlay.hidden) closeHotspotErrorDialog();
+    });
+    document.body.appendChild(overlay);
+  }
+
+  function openHotspotErrorDialog() {
+    if (!document.body || document.body.dataset.uiMode !== BASIC_MODE) return;
+    const overlay = el('basicHotspotError');
+    if (!overlay) return;
+    overlay.hidden = false;
+    document.body.classList.add('basic-hotspot-modal-open');
+    const openPro = el('basicHotspotOpenPro');
+    if (openPro) openPro.focus();
+  }
+
+  function closeHotspotErrorDialog() {
+    const overlay = el('basicHotspotError');
+    if (!overlay) return;
+    overlay.hidden = true;
+    document.body.classList.remove('basic-hotspot-modal-open');
+    const action = el('btnStartBasic');
+    if (action && document.body.dataset.uiMode === BASIC_MODE) action.focus();
+  }
+
+  function retryHotspotStart() {
+    closeHotspotErrorDialog();
+    const action = el('btnStartBasic');
+    if (!action) return;
+    action.dataset.guidedRetry = '1';
+    action.click();
+  }
+
+  function openProRepair() {
+    closeHotspotErrorDialog();
+    const toggle = el('uiModeToggle');
+    if (toggle && !toggle.checked) toggle.click();
+
+    window.setTimeout(() => {
+      const overview = document.querySelector('.nav-item[data-tab="overview"]');
+      if (overview && !overview.classList.contains('active')) overview.click();
+      const repair = el('btnRepair');
+      if (repair) {
+        repair.scrollIntoView({ block: 'center' });
+        repair.focus();
+      }
+    }, 250);
   }
 
   function fieldNode(key) {
@@ -300,6 +414,18 @@
     window.setTimeout(repositionBasicFields, 0);
   }
 
+  function renameProfileOptions() {
+    const names = {
+      off: 'Standard',
+      ultra_low_latency: 'Speed',
+      vr: 'Stable',
+    };
+    document.querySelectorAll('input[name="qos_basic"]').forEach((input) => {
+      const label = input.nextElementSibling;
+      if (label && names[input.value]) setTextIfChanged(label, names[input.value]);
+    });
+  }
+
   function decorateMovedFields() {
     const adapterField = fieldNode('ap_adapter');
     if (adapterField) {
@@ -320,6 +446,7 @@
     const passGroup = passField?.closest('.form-group');
     if (passGroup) passGroup.classList.add('basic-guided-pass-field');
 
+    renameProfileOptions();
     updateProfileHelp();
   }
 
@@ -328,45 +455,115 @@
     if (!helper) return;
     const selected = document.querySelector('input[name="qos_basic"]:checked');
     const copy = {
-      off: 'Uses standard hotspot behavior without extra performance tuning.',
+      off: 'Standard uses normal hotspot behavior without extra performance tuning.',
       ultra_low_latency: 'Speed prioritizes low latency for VR streaming.',
       vr: 'Stable favors reliability on busy or noisy wireless networks.',
     };
     setTextIfChanged(
       helper,
-      copy[selected?.value] || 'Choose the profile that matches how you use the hotspot.',
+      copy[selected?.value] || 'Choose the mode that matches how you use the hotspot.',
     );
+  }
+
+  function hotspotState(rawStatus) {
+    const state = (rawStatus.split('|')[0] || 'Loading…').trim();
+    const normalized = state.toLowerCase();
+
+    if (normalized.includes('error') || normalized.includes('failed')) {
+      return { name: 'error', label: 'Needs attention' };
+    }
+    if (
+      normalized.includes('stopped')
+      || normalized.includes('inactive')
+      || normalized.includes('not running')
+    ) {
+      return { name: 'stopped', label: 'Stopped' };
+    }
+    if (normalized.includes('stopping')) return { name: 'working', label: 'Stopping…' };
+    if (normalized.includes('starting') || normalized.includes('repair')) {
+      return { name: 'working', label: 'Starting…' };
+    }
+    if (normalized.includes('running')) return { name: 'running', label: state };
+    return { name: 'loading', label: state || 'Loading…' };
+  }
+
+  function syncPrimaryAction(stateName) {
+    const action = el('btnStartBasic');
+    if (!action) return;
+
+    action.classList.remove('primary', 'secondary', 'danger');
+    action.disabled = false;
+
+    if (stateName === 'running') {
+      action.dataset.guidedAction = 'stop';
+      action.textContent = 'Stop hotspot';
+      action.classList.add('danger');
+      return;
+    }
+    if (stateName === 'error') {
+      action.dataset.guidedAction = 'problem';
+      action.textContent = 'View problem';
+      action.classList.add('danger');
+      return;
+    }
+    if (stateName === 'working') {
+      action.dataset.guidedAction = 'wait';
+      action.textContent = 'Working…';
+      action.classList.add('secondary');
+      action.disabled = true;
+      return;
+    }
+    if (stateName === 'stopped') {
+      action.dataset.guidedAction = 'start';
+      action.textContent = 'Start hotspot';
+      action.classList.add('primary');
+      return;
+    }
+
+    action.dataset.guidedAction = 'wait';
+    action.textContent = 'Checking status…';
+    action.classList.add('secondary');
+    action.disabled = true;
   }
 
   function syncStatusPresentation() {
     const rawStatus = (el('basicPillTxt')?.textContent || 'Loading…').trim();
-    const state = (rawStatus.split('|')[0] || 'Loading…').trim();
-    const normalized = state.toLowerCase();
-    const card = document.querySelector('.basic-guided-status-card');
+    const current = hotspotState(rawStatus);
+    const card = document.querySelector('.basic-guided-setup-card');
     const stateText = el('basicGuidedStateText');
     const summary = el('basicGuidedStatusSummary');
+    const title = el('basicGuidedActionSlotTitle');
 
-    setTextIfChanged(stateText, state);
+    setTextIfChanged(stateText, current.label);
 
-    let stateName = 'loading';
     let summaryText = 'Checking the hotspot status.';
-    if (normalized.includes('running')) {
-      stateName = 'running';
-      summaryText = 'Your hotspot is active and ready.';
-    } else if (normalized.includes('error')) {
-      stateName = 'error';
-      summaryText = 'The hotspot needs attention.';
-    } else if (normalized.includes('starting') || normalized.includes('repair')) {
-      stateName = 'working';
-      summaryText = 'VRhotspot is preparing the connection.';
-    } else if (normalized.includes('stopped')) {
-      stateName = 'stopped';
-      summaryText = 'Your hotspot is not active.';
+    let titleText = 'Start hotspot';
+    if (current.name === 'running') {
+      titleText = 'Hotspot running';
+      summaryText = 'Your hotspot is active and ready for your headset.';
+    } else if (current.name === 'error') {
+      titleText = 'Hotspot needs attention';
+      summaryText = 'VRhotspot encountered a network problem.';
+    } else if (current.name === 'working') {
+      titleText = current.label.toLowerCase().includes('stopping')
+        ? 'Stopping hotspot'
+        : 'Starting hotspot';
+      summaryText = 'VRhotspot is applying the connection settings.';
+    } else if (current.name === 'stopped') {
+      summaryText = 'Review your settings, then start the hotspot.';
     }
-    if (card && card.dataset.hotspotState !== stateName) {
-      card.dataset.hotspotState = stateName;
+
+    if (card && card.dataset.hotspotState !== current.name) {
+      card.dataset.hotspotState = current.name;
     }
+    setTextIfChanged(title, titleText);
     setTextIfChanged(summary, summaryText);
+    syncPrimaryAction(current.name);
+
+    if (current.name === 'error' && lastStateName !== 'error') {
+      openHotspotErrorDialog();
+    }
+    lastStateName = current.name;
   }
 
   function pendingBasicChanges() {
@@ -391,15 +588,39 @@
     });
   }
 
-  function wireSaveBeforeStart() {
+  function wirePrimaryAction() {
     document.addEventListener('click', async (event) => {
       const target = event.target instanceof Element
         ? event.target.closest('#btnStartBasic')
         : null;
       if (!target) return;
 
+      if (target.dataset.guidedRetry === '1') {
+        delete target.dataset.guidedRetry;
+        return;
+      }
       if (target.dataset.guidedResume === '1') {
         delete target.dataset.guidedResume;
+        return;
+      }
+
+      const action = target.dataset.guidedAction || 'start';
+      if (action === 'stop') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const stopButton = el('btnStopBasic');
+        if (stopButton) stopButton.click();
+        return;
+      }
+      if (action === 'problem') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        openHotspotErrorDialog();
+        return;
+      }
+      if (action !== 'start') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
         return;
       }
       if (!pendingBasicChanges()) return;
@@ -409,6 +630,7 @@
       if (saveBeforeStartRunning) return;
       saveBeforeStartRunning = true;
       target.classList.add('is-saving');
+      target.disabled = true;
       setTextIfChanged(el('basicGuidedStatusSummary'), 'Saving your changes before starting…');
 
       const saveButton = el('btnSaveConfig');
@@ -418,10 +640,12 @@
       target.classList.remove('is-saving');
       saveBeforeStartRunning = false;
       if (!saved) {
+        target.disabled = false;
         setTextIfChanged(
           el('basicGuidedStatusSummary'),
           'Your changes could not be saved. Switch to Pro mode for details.',
         );
+        openHotspotErrorDialog();
         return;
       }
 
@@ -436,7 +660,7 @@
       if (!(target instanceof Element)) return;
       if (target.matches('input[name="qos_basic"]')) updateProfileHelp();
     });
-    wireSaveBeforeStart();
+    wirePrimaryAction();
   }
 
   function observeStagingContainer(container) {
@@ -461,7 +685,12 @@
     observeStatusSource(el('basicPillTxt'));
 
     const bodyObserver = new MutationObserver(() => {
-      if (document.body.dataset.uiMode === BASIC_MODE) queueReposition();
+      if (document.body.dataset.uiMode === BASIC_MODE) {
+        queueReposition();
+        syncStatusPresentation();
+      } else {
+        closeHotspotErrorDialog();
+      }
     });
     bodyObserver.observe(document.body, {
       attributes: true,
@@ -471,7 +700,8 @@
 
   function initialize() {
     buildSetupCard();
-    buildStatusCard();
+    buildHotspotStep();
+    buildErrorDialog();
     wireGuidedInteractions();
     startObservers();
     queueReposition();
