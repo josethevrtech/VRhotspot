@@ -278,7 +278,7 @@
 
   const assets = [
     '/assets/browser_session.js?v=139-session-hotfix',
-    '/assets/pro_guided_workflow.js?v=139-pro-hotfix',
+    '/assets/pro_guided_workflow.js?v=141-pro-guided-recovery',
   ];
   for (const src of assets) {
     const script = document.createElement('script');
