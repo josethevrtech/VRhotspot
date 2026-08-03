@@ -3,7 +3,7 @@
 
   const AUTOSAVE_DELAY_MS = 650;
   const SAVE_TIMEOUT_MS = 12000;
-  const RETRY_LIMIT = 120;
+  const RETRY_LIMIT = 600;
   let initialized = false;
   let guidedReady = false;
   let qualityReady = false;
@@ -53,7 +53,7 @@
     if (document.querySelector('link[data-pro-guided-styles]')) return;
     const stylesheet = document.createElement('link');
     stylesheet.rel = 'stylesheet';
-    stylesheet.href = '/assets/pro_guided_workflow.css?v=139-pro-hotfix';
+    stylesheet.href = '/assets/pro_guided_workflow.css?v=141-pro-guided-recovery';
     stylesheet.dataset.proGuidedStyles = '1';
     document.head.appendChild(stylesheet);
   }
@@ -187,13 +187,38 @@
     if (diagnosticsPane) diagnosticsPane.id = 'tab-troubleshooting';
   }
 
-  function buildGuidedSetup() {
-    if (el('proGuidedWorkflow')) return true;
+  function guidedPrerequisitesReady() {
     const overview = el('tab-overview');
-    const oldShell = overview?.querySelector('.pro-setup-shell');
     const configuration = el('proHotspotConfiguration');
     const serviceCard = overview?.querySelector('.pro-service-card');
-    if (!overview || !oldShell || !configuration || !serviceCard) return false;
+    const requiredIds = [
+      'ap_adapter',
+      'btnReloadAdapters',
+      'btnApplyVrProfileUltra',
+      'btnApplyVrProfile',
+      'btnApplyVrProfileHigh',
+      'btnApplyVrProfileStable',
+      'qos_preset',
+      'ssid',
+      'wpa2_passphrase',
+      'enable_internet',
+      'btnStart',
+      'btnSaveConfig',
+      'btnSaveRestart',
+    ];
+    return !!overview
+      && !!configuration
+      && !!serviceCard
+      && !!configuration.querySelector('.preset-bar')
+      && requiredIds.every((id) => !!el(id));
+  }
+
+  function buildGuidedSetup() {
+    if (el('proGuidedWorkflow')) return true;
+    if (!guidedPrerequisitesReady()) return false;
+    const overview = el('tab-overview');
+    const configuration = el('proHotspotConfiguration');
+    const serviceCard = overview.querySelector('.pro-service-card');
 
     const shell = make('div', 'pro-guided-shell');
     shell.id = 'proGuidedWorkflow';
@@ -215,43 +240,38 @@
     shell.appendChild(card);
 
     const adapter = document.querySelector('[data-field="ap_adapter"]');
-    if (adapter) {
-      const label = adapter.querySelector('label');
-      if (label) label.textContent = 'Wi-Fi adapter';
-      el('proStepAdapter').appendChild(adapter);
-    }
+    const adapterLabel = adapter.querySelector('label');
+    if (adapterLabel) adapterLabel.textContent = 'Wi-Fi adapter';
+    el('proStepAdapter').appendChild(adapter);
 
     const preset = configuration.querySelector('.preset-bar');
-    if (preset) {
-      preset.classList.add('pro-performance-picker');
-      const group = preset.querySelector('.btn-group');
-      const order = [
-        el('btnApplyVrProfileUltra'),
-        el('btnApplyVrProfile'),
-        el('btnApplyVrProfileHigh'),
-        el('btnApplyVrProfileStable'),
-      ].filter(Boolean);
-      if (group) order.forEach((button) => group.appendChild(button));
-      el('proStepPerformance').appendChild(preset);
-    }
+    preset.classList.add('pro-performance-picker');
+    const group = preset.querySelector('.btn-group');
+    const order = [
+      el('btnApplyVrProfileUltra'),
+      el('btnApplyVrProfile'),
+      el('btnApplyVrProfileHigh'),
+      el('btnApplyVrProfileStable'),
+    ];
+    if (group) order.forEach((button) => group.appendChild(button));
+    el('proStepPerformance').appendChild(preset);
+
     const qos = document.querySelector('[data-field="qos_preset"]');
-    if (qos) {
-      qos.classList.add('pro-guided-hidden');
-      el('proStepPerformance').appendChild(qos);
-    }
+    qos.classList.add('pro-guided-hidden');
+    el('proStepPerformance').appendChild(qos);
 
     const hotspotFields = make('div', 'pro-hotspot-fields');
     for (const key of ['ssid', 'wpa2_passphrase', 'enable_internet']) {
       const field = document.querySelector(`[data-field="${key}"]`);
-      if (field && key === 'ssid') {
+      if (key === 'ssid') {
         const label = field.querySelector('label');
         if (label) label.textContent = 'Hotspot name';
       }
-      if (field && key === 'wpa2_passphrase') {
+      if (key === 'wpa2_passphrase') {
         const label = field.querySelector('label');
         if (label) label.textContent = 'Password';
       }
-      if (field) hotspotFields.appendChild(field);
+      hotspotFields.appendChild(field);
     }
     el('proStepHotspot').appendChild(hotspotFields);
 
@@ -266,7 +286,7 @@
     const stateCopy = serviceCard.querySelector('.pro-service-state-copy');
     const primary = el('btnStart');
     if (stateCopy) action.appendChild(stateCopy);
-    if (primary) action.appendChild(primary);
+    action.appendChild(primary);
     const actionSlot = el('proStepAction');
     const saveState = make('div', 'pro-save-state', 'All changes saved.');
     saveState.id = 'proSaveState';
@@ -287,7 +307,7 @@
     wireAutosave(card);
     updateDependencies();
 
-    if (primary && primary.dataset.proGuidedWired !== '1') {
+    if (primary.dataset.proGuidedWired !== '1') {
       primary.dataset.proGuidedWired = '1';
       primary.addEventListener('click', async (event) => {
         if (primary.dataset.proGuidedAction !== 'apply') return;
@@ -433,15 +453,29 @@
       if (guidedReady && !qualityReady) qualityReady = buildConnectionQuality();
       if (!troubleshootingReady) troubleshootingReady = buildTroubleshooting();
       initialized = guidedReady && qualityReady && troubleshootingReady;
-      if (initialized && document.body) delete document.body.dataset.proGuidedError;
+      if (document.body) {
+        document.body.dataset.proGuidedStage = initialized
+          ? 'ready'
+          : guidedReady
+            ? 'guided-ready'
+            : 'waiting-for-base';
+        if (initialized) delete document.body.dataset.proGuidedError;
+      }
       return initialized;
     } catch (error) {
       if (document.body) {
+        document.body.dataset.proGuidedStage = 'error';
         document.body.dataset.proGuidedError = String(error && error.message ? error.message : error);
       }
       console.error('VRhotspot Pro workflow retrying after UI error.', error);
       return false;
     }
+  }
+
+  function resetRetryBudget() {
+    if (initialized) return;
+    retryCount = 0;
+    scheduleRetry();
   }
 
   function scheduleRetry() {
@@ -462,8 +496,21 @@
   function start() {
     enforceNavigation();
     if (initialize()) return;
-    observer = new MutationObserver(scheduleRetry);
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer = new MutationObserver((records) => {
+      if (records.some((record) => record.type === 'attributes')) retryCount = 0;
+      scheduleRetry();
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-auth-state', 'data-ui-mode'],
+    });
+    window.addEventListener('pageshow', resetRetryBudget);
+    window.addEventListener('load', resetRetryBudget, { once: true });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) resetRetryBudget();
+    });
     scheduleRetry();
   }
 
