@@ -43,7 +43,6 @@ def test_guided_interface_reuses_existing_live_control_ids() -> None:
 
     assert "api(" not in source
     assert "fetch(" not in source
-    assert "addEventListener('click'" not in source
 
 
 def test_guided_setup_uses_four_plain_language_steps() -> None:
@@ -85,6 +84,28 @@ def test_status_presentation_is_idempotent_and_source_scoped() -> None:
     assert "observeStatusSource(el('basicStatusAdapterBand'))" in source
     assert "observeStagingContainer(el('basicQuickFields'))" in source
     assert "observer.observe(basic" not in source
+
+
+def test_start_saves_pending_basic_changes_before_existing_start_handler() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+
+    assert "function wireSaveBeforeStart" in source
+    assert "event.stopImmediatePropagation();" in source
+    assert "const saveButton = el('btnSaveConfig');" in source
+    assert "saveButton.click();" in source
+    assert "await waitForBasicSave();" in source
+    assert "target.dataset.guidedResume = '1';" in source
+    assert "target.click();" in source
+    assert "Pending changes are saved automatically when you start the hotspot." in source
+
+
+def test_status_uses_friendly_adapter_labels_and_hides_technical_details() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+
+    assert "function adapterLabelForValue" in source
+    assert ".find((option) => option.value === value)" in source
+    assert "if (statusDetails) optionsBody.appendChild(statusDetails);" in source
+    assert "if (statusDetails) diagnosticDetails.appendChild(statusDetails);" not in source
 
 
 def test_guided_styles_are_basic_only_and_use_native_sizing() -> None:
