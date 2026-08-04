@@ -176,7 +176,9 @@ def test_adapter_labels_are_normalized_before_load_completes() -> None:
     assert "pro-adapter-selected-label" not in loader
     assert "optionsObserver" not in loader
     assert "Adapter details" in loader
-    assert "recommended.style.display = 'none'" in loader
+    # The authoritative composer is the sole Pro/Basic visibility owner for
+    # the Recommended button; the loader must no longer touch it at all.
+    assert "btnUseRecommended" not in loader
     assert "148-adapter-source-labels-4" in loader
     assert "#btnUseRecommended" in style
     assert "display: none !important" in style

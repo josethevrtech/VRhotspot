@@ -383,21 +383,6 @@
     installLoadAdaptersWrapper();
     ensureCurrentStyles();
 
-    const recommended = document.getElementById('btnUseRecommended');
-    if (recommended) {
-      if (isProMode()) {
-        recommended.hidden = true;
-        recommended.setAttribute('aria-hidden', 'true');
-        recommended.tabIndex = -1;
-        recommended.style.display = 'none';
-      } else {
-        recommended.hidden = false;
-        recommended.removeAttribute('aria-hidden');
-        recommended.tabIndex = 0;
-        recommended.style.removeProperty('display');
-      }
-    }
-
     if (!isProMode()) return;
 
     friendlyAdapterOptions();

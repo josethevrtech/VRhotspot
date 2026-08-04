@@ -172,6 +172,26 @@
     internalHomes.delete(node);
   }
 
+  function applyRecommendedButtonState(recommended, advanced) {
+    // The composer is the sole Pro/Basic visibility owner for this button.
+    // Pro hides it (friendly adapter labels already carry the recommendation);
+    // the complete state must hold before the 'ready' stage is published.
+    if (!recommended) return;
+    if (advanced) {
+      if (!recommended.hidden) recommended.hidden = true;
+      if (recommended.getAttribute('aria-hidden') !== 'true') {
+        recommended.setAttribute('aria-hidden', 'true');
+      }
+      if (recommended.tabIndex !== -1) recommended.tabIndex = -1;
+      if (recommended.style.display !== 'none') recommended.style.display = 'none';
+      return;
+    }
+    if (recommended.hidden) recommended.hidden = false;
+    if (recommended.hasAttribute('aria-hidden')) recommended.removeAttribute('aria-hidden');
+    if (recommended.tabIndex !== 0) recommended.tabIndex = 0;
+    if (recommended.style.display) recommended.style.removeProperty('display');
+  }
+
   function restoreBasicPresentation() {
     if (adapterOptionsObserver) {
       adapterOptionsObserver.disconnect();
@@ -184,11 +204,7 @@
       node.classList.remove('pro-adapter-field', 'pro-password-field');
       delete node.dataset.proComposerDecorated;
     });
-    const recommended = el('btnUseRecommended');
-    if (recommended) {
-      recommended.hidden = false;
-      recommended.removeAttribute('aria-hidden');
-    }
+    applyRecommendedButtonState(el('btnUseRecommended'), false);
     setStage('waiting-for-pro');
   }
 
@@ -595,8 +611,7 @@
       field.appendChild(details);
     }
 
-    recommended.hidden = false;
-    recommended.removeAttribute('aria-hidden');
+    applyRecommendedButtonState(recommended, true);
     recommended.textContent = 'Recommended';
     rescan.textContent = 'Rescan adapters';
     ensureChildOrder(row, [select, info, recommended, rescan]);

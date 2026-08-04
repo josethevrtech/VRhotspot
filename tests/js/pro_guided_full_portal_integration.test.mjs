@@ -146,6 +146,28 @@ function toggleMode(window, advanced) {
   toggle.dispatchEvent(new window.Event('change', { bubbles: true }));
 }
 
+// Captures btnUseRecommended state inside the MutationObserver microtask that
+// delivers each data-pro-guided-stage="ready" publication: no timer can run
+// between the composer writing the attribute and this snapshot, so a complete
+// capture proves readiness never depends on a later timer or observer.
+function captureReadyPublications(window, document) {
+  const captures = [];
+  new window.MutationObserver(() => {
+    if (document.body.dataset.proGuidedStage !== 'ready') return;
+    const recommended = document.getElementById('btnUseRecommended');
+    captures.push({
+      hidden: recommended?.hidden,
+      ariaHidden: recommended?.getAttribute('aria-hidden'),
+      tabIndex: recommended?.tabIndex,
+      display: recommended?.style.display,
+    });
+  }).observe(document.body, {
+    attributes: true,
+    attributeFilter: ['data-pro-guided-stage'],
+  });
+  return captures;
+}
+
 function assertBasicLayout(document) {
   assert.equal(document.body.dataset.uiMode, 'basic');
   const workflow = document.getElementById('proGuidedWorkflow');
@@ -166,6 +188,15 @@ function assertBasicLayout(document) {
   }
   assert.equal(document.querySelector('[data-ui-section="basic"] .pro-runtime-wrapper'), null);
   assert.equal(document.body.hasAttribute('data-pro-band'), false);
+
+  // The composer's Basic restore clears its Pro-only state; the `hidden`
+  // property itself is owned by basic_guided.js in the full portal, which
+  // hides the button as part of the Basic guided adapter presentation.
+  const recommended = document.getElementById('btnUseRecommended');
+  assert.ok(recommended);
+  assert.equal(recommended.hasAttribute('aria-hidden'), false);
+  assert.equal(recommended.tabIndex, 0);
+  assert.equal(recommended.style.display, '');
 }
 
 function assertProLayout(document) {
@@ -260,6 +291,12 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   window.addEventListener('error', (event) => unhandled.push(String(event.error || event.message)));
   window.addEventListener('unhandledrejection', (event) => unhandled.push(String(event.reason)));
 
+  assert.ok(
+    !portalExtensions.includes('btnUseRecommended'),
+    'devhub_upload.js must not own btnUseRecommended visibility',
+  );
+
+  const readyCaptures = captureReadyPublications(window, document);
   window.eval(fieldVisibility);
   window.eval(ui);
   window.eval(basicGuided);
@@ -278,12 +315,15 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   await waitFor(window, () => document.querySelector('.basic-guided-setup-card'), 'guided Basic setup');
   await tick(window, 150);
   assertBasicLayout(document);
+  const recommendedNode = document.getElementById('btnUseRecommended');
 
   for (let cycle = 0; cycle < 3; cycle += 1) {
     toggleMode(window, true);
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', `Pro ready cycle ${cycle + 1}`);
     await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', `friendly adapter cycle ${cycle + 1}`);
     assertProLayout(document);
+    assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
+    assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
 
     if (cycle === 0) {
       await window.loadAdapters();
@@ -299,12 +339,28 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'waiting-for-pro', `Basic restored cycle ${cycle + 1}`);
     await tick(window, 80);
     assertBasicLayout(document);
+    assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
+    assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
   }
 
   toggleMode(window, true);
   await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', 'final Pro composition');
   await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', 'final friendly adapter label');
   assertProLayout(document);
+  assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
+
+  assert.ok(
+    readyCaptures.length >= 4,
+    `expected at least 4 ready publications, saw ${readyCaptures.length}`,
+  );
+  for (const capture of readyCaptures) {
+    assert.deepEqual(capture, {
+      hidden: true,
+      ariaHidden: 'true',
+      tabIndex: -1,
+      display: 'none',
+    }, 'recommended button state must be complete when ready is published');
+  }
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);
   dom.window.close();

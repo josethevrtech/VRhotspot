@@ -177,6 +177,57 @@ function assertProLayout(document) {
   assert.equal(document.querySelector('.pro-guided-header')?.dataset.proDensityReady, '1');
   assert.equal(document.querySelector('[data-field="ap_adapter"]')?.dataset.proDensityReady, '1');
   assert.equal(document.querySelector('[data-field="wpa2_passphrase"]')?.dataset.proDensityReady, '1');
+
+  const recommended = document.getElementById('btnUseRecommended');
+  assert.equal(recommended.hidden, true);
+  assert.equal(recommended.getAttribute('aria-hidden'), 'true');
+  assert.equal(recommended.tabIndex, -1);
+  assert.equal(recommended.style.display, 'none');
+}
+
+function assertRecommendedRestoredForBasic(document) {
+  const recommended = document.getElementById('btnUseRecommended');
+  assert.equal(recommended.hidden, false);
+  assert.equal(recommended.hasAttribute('aria-hidden'), false);
+  assert.equal(recommended.tabIndex, 0);
+  assert.equal(recommended.style.display, '');
+}
+
+// Captures btnUseRecommended state inside the MutationObserver microtask that
+// delivers each data-pro-guided-stage="ready" publication: no timer can run
+// between the composer writing the attribute and this snapshot, so a complete
+// capture proves readiness never depends on a later timer or observer.
+function captureReadyPublications(window, document) {
+  const captures = [];
+  new window.MutationObserver(() => {
+    if (document.body.dataset.proGuidedStage !== 'ready') return;
+    const recommended = document.getElementById('btnUseRecommended');
+    captures.push({
+      hidden: recommended?.hidden,
+      ariaHidden: recommended?.getAttribute('aria-hidden'),
+      tabIndex: recommended?.tabIndex,
+      display: recommended?.style.display,
+    });
+  }).observe(document.body, {
+    attributes: true,
+    attributeFilter: ['data-pro-guided-stage'],
+  });
+  return captures;
+}
+
+function assertReadyPublicationsComplete(captures, minimum) {
+  assert.ok(
+    captures.length >= minimum,
+    `expected at least ${minimum} ready publications, saw ${captures.length}`,
+  );
+  for (const capture of captures) {
+    assert.deepEqual(capture, {
+      hidden: true,
+      ariaHidden: 'true',
+      tabIndex: -1,
+      display: 'none',
+    }, 'recommended button state must be complete when ready is published');
+  }
 }
 
 test('authoritative Pro composer survives repeated Basic and Pro transitions', async () => {
@@ -193,8 +244,10 @@ test('authoritative Pro composer survives repeated Basic and Pro transitions', a
   const homes = rememberHomes(document);
   applyMode(document, homes, 'basic');
   const source = await readFile(SOURCE_URL, 'utf8');
+  const readyCaptures = captureReadyPublications(window, document);
   window.eval(source);
   await tick(window);
+  const recommendedNode = document.getElementById('btnUseRecommended');
 
   assert.equal(document.getElementById('proGuidedWorkflow'), null);
   assert.equal(document.body.dataset.proGuidedStage, 'waiting-for-pro');
@@ -207,6 +260,8 @@ test('authoritative Pro composer survives repeated Basic and Pro transitions', a
     applyMode(document, homes, 'advanced');
     await tick(window, 60);
     assertProLayout(document);
+    assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
+    assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
 
     applyMode(document, homes, 'basic');
     await tick(window, 60);
@@ -217,11 +272,16 @@ test('authoritative Pro composer survives repeated Basic and Pro transitions', a
     assert.ok(document.querySelector('#basicConnectFields [data-field="ssid"]'));
     assert.equal(document.querySelector('#basicQuickFields .pro-runtime-wrapper'), null);
     assert.equal(document.querySelector('#basicConnectFields .pro-runtime-wrapper'), null);
+    assertRecommendedRestoredForBasic(document);
+    assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
+    assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
   }
 
   applyMode(document, homes, 'advanced');
   await tick(window, 60);
   assertProLayout(document);
+  assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
+  assertReadyPublicationsComplete(readyCaptures, 4);
   assert.deepEqual(errors, []);
   dom.window.close();
 });
