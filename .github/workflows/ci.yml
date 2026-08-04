@@ -34,6 +34,25 @@ jobs:
               file.write_text(text.replace(old, new), encoding='utf-8')
 
           replace_exact(
+              'assets/pro_guided_workflow.js',
+              'Select the adapter VRhotspot should use. Recommendation and readiness details stay beside the selector.',
+              'Use Recommended for the best available adapter, or rescan after connecting new hardware.',
+              expected=2,
+          )
+          replace_exact(
+              'assets/pro_guided_workflow.js',
+              """    const readiness = document.querySelector('[data-adapter-readiness-card]');
+              if (readiness) {
+                readiness.classList.add('pro-adapter-readiness');
+                appendIfNeeded(guidedSlot(shell, 'proStepAdapter'), readiness);
+              }
+          """,
+              """    document.querySelectorAll('#tab-overview [data-adapter-readiness-card]')
+                .forEach((node) => node.remove());
+          """,
+          )
+
+          replace_exact(
               'assets/devhub_upload.js',
               "    '/assets/pro_guided_readiness.js?v=148-authoritative-composer',\n",
               '',
@@ -122,6 +141,7 @@ jobs:
           git add \
             .github/workflows/ci.yml \
             assets/devhub_upload.js \
+            assets/pro_guided_workflow.js \
             tests/js/pro_guided_mode_transition.test.mjs \
             tests/js/pro_guided_full_portal_integration.test.mjs \
             tests/test_pro_guided_workflow.py
