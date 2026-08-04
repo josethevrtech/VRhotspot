@@ -357,6 +357,7 @@ function updateBandOptions() {
 let cfgDirty = false;
 let cfgJustSaved = false;
 let passphraseDirty = false;
+let passphraseRevealActive = false;
 let lastCfg = null;
 let lastAdapters = null;
 let lastStatus = null;
@@ -426,13 +427,22 @@ function getPassphraseValue() {
 
 function clearPassphraseInputs() {
   const { advanced, basic } = getPassphraseInputs();
+  passphraseRevealActive = false;
+
   if (advanced) {
     advanced.value = '';
     advanced.type = 'password';
   }
+
   if (basic) {
     basic.value = '';
     basic.type = 'password';
+  }
+
+  for (const id of ['btnRevealPass', 'btnRevealPassBasic']) {
+    document
+      .getElementById(id)
+      ?.setAttribute('aria-pressed', 'false');
   }
 }
 
@@ -463,7 +473,7 @@ function setCheckedIf(id, value) {
 function resetPassphraseUi(cfg) {
   const { advanced: passEl, basic: passBasic } = getPassphraseInputs();
   if (!passEl && !passBasic) return;
-  if (passphraseDirty) return; /* Do not overwrite user input */
+  if (passphraseDirty || passphraseRevealActive) return; /* Preserve input and visibility while editing or revealed */
   const hasSaved = !!(cfg && cfg.wpa2_passphrase_set);
   if (passEl) {
     passEl.type = 'password';
@@ -3647,35 +3657,107 @@ document.getElementById('btnUseRecommended').addEventListener('click', async () 
   }
 });
 
+function setPassphraseVisibility(visible) {
+  const { advanced, basic } = getPassphraseInputs();
+  const inputType = visible ? 'text' : 'password';
+
+  if (advanced) advanced.type = inputType;
+  if (basic) basic.type = inputType;
+
+  passphraseRevealActive = visible;
+
+  for (const id of ['btnRevealPass', 'btnRevealPassBasic']) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+
+    button.setAttribute(
+      'aria-pressed',
+      visible ? 'true' : 'false',
+    );
+
+    button.title = visible
+      ? 'Hide password'
+      : 'Show password';
+
+    button.setAttribute(
+      'aria-label',
+      button.title,
+    );
+  }
+}
+
 async function revealPassphrase(btn, targetEl) {
   if (!targetEl) return;
+
   const existing = getPassphraseValue();
+
   if (existing) {
-    if (targetEl.value !== existing) targetEl.value = existing;
-    targetEl.type = (targetEl.type === 'password') ? 'text' : 'password';
+    const show = targetEl.type === 'password';
+    const { advanced, basic } = getPassphraseInputs();
+
+    if (advanced && advanced.value !== existing) {
+      advanced.value = existing;
+    }
+
+    if (basic && basic.value !== existing) {
+      basic.value = existing;
+    }
+
+    setPassphraseVisibility(show);
+    return;
+  }
+
+  const hasSavedPassword = !!(
+    lastCfg && lastCfg.wpa2_passphrase_set
+  );
+
+  // No saved password exists. Let the user reveal the empty field
+  // first and then type a new password in plain text.
+  if (!hasSavedPassword) {
+    setPassphraseVisibility(true);
+    targetEl.focus();
     return;
   }
 
   if (btn) btn.disabled = true;
   setMsg('Revealing passphrase...');
-  const r = await api('/v1/config/reveal_passphrase', { method: 'POST', body: JSON.stringify({ confirm: true }) });
-  if (r.ok && r.json && r.json.data && typeof r.json.data.wpa2_passphrase === 'string') {
-    const pw = r.json.data.wpa2_passphrase;
+
+  const response = await api(
+    '/v1/config/reveal_passphrase',
+    {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
+    },
+  );
+
+  if (
+    response.ok
+    && response.json
+    && response.json.data
+    && typeof response.json.data.wpa2_passphrase === 'string'
+  ) {
+    const password = response.json.data.wpa2_passphrase;
     const { advanced, basic } = getPassphraseInputs();
-    if (advanced) {
-      advanced.value = pw;
-      advanced.type = 'text';
-    }
-    if (basic) {
-      basic.value = pw;
-      basic.type = 'text';
-    }
+
+    if (advanced) advanced.value = password;
+    if (basic) basic.value = password;
+
+    setPassphraseVisibility(true);
     passphraseDirty = false;
     setMsg('Passphrase revealed');
   } else {
-    const code = (r.json && r.json.result_code) ? r.json.result_code : `HTTP ${r.status}`;
-    setMsg(`Reveal failed: ${code}`, 'dangerText');
+    const code = (
+      response.json && response.json.result_code
+    )
+      ? response.json.result_code
+      : `HTTP ${response.status}`;
+
+    setMsg(
+      `Reveal failed: ${code}`,
+      'dangerText',
+    );
   }
+
   if (btn) btn.disabled = false;
 }
 
