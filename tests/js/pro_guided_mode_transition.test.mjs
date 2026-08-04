@@ -165,7 +165,7 @@ function assertProLayout(document) {
     ['1', '2', '3', '4', '5'],
   );
   assert.ok(document.querySelector('#proStepAdapter [data-field="ap_adapter"]'));
-  assert.ok(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'));
+  assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);
   assert.ok(document.querySelector('#proStepPerformance .preset-bar'));
   for (const key of CONNECTION_FIELDS) {
     assert.ok(document.querySelector(`#proStepHotspot [data-field="${key}"]`), `${key} should be in Step 3`);

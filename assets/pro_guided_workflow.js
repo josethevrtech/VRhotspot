@@ -373,7 +373,7 @@
 
     const steps = make('div', 'pro-guided-steps');
     steps.append(
-      step(1, 'Choose Wi-Fi adapter', 'Select the adapter VRhotspot should use. Recommendation and readiness details stay beside the selector.', 'proStepAdapter'),
+      step(1, 'Choose Wi-Fi adapter', 'Use Recommended for the best available adapter, or rescan after connecting new hardware.', 'proStepAdapter'),
       step(2, 'Choose performance mode', 'Choose the tradeoff that best matches latency, throughput, balance, or stability.', 'proStepPerformance'),
       step(3, 'Configure hotspot', 'Set the hotspot name, password, band, security, country, and internet-sharing behavior.', 'proStepHotspot'),
       step(4, 'Fine-tune hotspot', 'Review detailed Wireless, Network, and System & Performance options or keep the recommended defaults.', 'proStepAdvanced'),
@@ -397,7 +397,7 @@
     const copy = {
       proStepAdapter: [
         'Choose Wi-Fi adapter',
-        'Select the adapter VRhotspot should use. Recommendation and readiness details stay beside the selector.',
+        'Use Recommended for the best available adapter, or rescan after connecting new hardware.',
       ],
       proStepPerformance: [
         'Choose performance mode',
@@ -449,11 +449,8 @@
       field.dataset.proComposerDecorated = '1';
     }
 
-    const readiness = document.querySelector('[data-adapter-readiness-card]');
-    if (readiness) {
-      readiness.classList.add('pro-adapter-readiness');
-      appendIfNeeded(guidedSlot(shell, 'proStepAdapter'), readiness);
-    }
+    document.querySelectorAll('#tab-overview [data-adapter-readiness-card]')
+      .forEach((node) => node.remove());
     return true;
   }
 

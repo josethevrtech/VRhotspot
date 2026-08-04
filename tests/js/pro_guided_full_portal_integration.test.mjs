@@ -171,7 +171,7 @@ function assertProLayout(document) {
     ['1', '2', '3', '4', '5'],
   );
   assert.ok(document.querySelector('#proStepAdapter [data-field="ap_adapter"]'));
-  assert.ok(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'));
+  assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);
   assert.ok(document.querySelector('#proStepPerformance .preset-bar'));
   for (const key of CONNECTION_FIELDS) {
     assert.ok(
@@ -188,13 +188,12 @@ function assertProLayout(document) {
 }
 
 test('real portal scripts preserve Basic and compose Pro across repeated toggles', async () => {
-  const [html, fieldVisibility, ui, basicGuided, composer, readiness] = await Promise.all([
+  const [html, fieldVisibility, ui, basicGuided, composer] = await Promise.all([
     readAsset('assets/index.html'),
     readAsset('assets/field_visibility.js'),
     readAsset('assets/ui.js'),
     readAsset('assets/basic_guided.js'),
     readAsset('assets/pro_guided_workflow.js'),
-    readAsset('assets/pro_guided_readiness.js'),
   ]);
 
   const dom = new JSDOM(html, {
@@ -217,7 +216,6 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   window.eval(ui);
   window.eval(basicGuided);
   window.eval(composer);
-  window.eval(readiness);
   document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
 
   assert.equal(typeof window.setToken, 'function');
@@ -233,7 +231,6 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   for (let cycle = 0; cycle < 3; cycle += 1) {
     toggleMode(window, true);
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', `Pro ready cycle ${cycle + 1}`);
-    await waitFor(window, () => document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), `readiness cycle ${cycle + 1}`);
     assertProLayout(document);
 
     toggleMode(window, false);
@@ -244,7 +241,6 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
 
   toggleMode(window, true);
   await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', 'final Pro composition');
-  await waitFor(window, () => document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), 'final readiness');
   assertProLayout(document);
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);
