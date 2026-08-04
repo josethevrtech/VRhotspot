@@ -20,7 +20,7 @@ def test_pro_runtime_is_loaded_as_versioned_authoritative_asset() -> None:
     source = LOADER.read_text(encoding="utf-8")
 
     assert "/assets/browser_session.js?v=139-session-hotfix" in source
-    assert "/assets/pro_guided_workflow.js?v=148-ux-pass-1" in source
+    assert "/assets/pro_guided_workflow.js?v=148-adapter-details-2" in source
     assert "pro_guided_readiness.js" not in source
     assert "script.async = false" in source
     assert "polishProSetupDensity" not in source
@@ -31,7 +31,7 @@ def test_pro_setup_is_one_authoritative_five_step_workflow() -> None:
 
     assert "buildProGuidedWorkflow" in source
     assert "window.VRHOTSPOT_PRO_COMPOSER = 'authoritative-v1'" in source
-    assert "/assets/pro_guided_authoritative.css?v=148-ux-pass-1" in source
+    assert "/assets/pro_guided_authoritative.css?v=148-adapter-details-2" in source
     for number, step_id in enumerate(
         (
             "proStepAdapter",
@@ -61,6 +61,8 @@ def test_pro_composer_waits_for_pro_mode_and_restores_basic_presentation() -> No
     assert "internalHomes" in source
     assert "restoreInternalNode" in source
     assert "pro-runtime-wrapper" in source
+    assert "adapterOptionsObserver.disconnect()" in source
+    assert "delete document.body.dataset.proBand" in source
     assert "RETRY_LIMIT" not in source
 
 
@@ -148,11 +150,31 @@ def test_adapter_and_password_compaction_are_reversible() -> None:
     assert "USB Wi-Fi ${counters.usb}" in source
     assert "Internal Wi-Fi ${counters.internal}" in source
     assert "adapterTechnicalSummary" in source
+    assert "adapterDetailsIcon" in source
     assert "proAdapterInfo" in source
     assert "proAdapterDetails" in source
+    assert "Show adapter details" in source
+    assert "Hide adapter details" in source
+    assert "info.removeAttribute('data-tip')" in source
+    assert "option.removeAttribute('title')" in source
+    assert "adapterOptionsObserver = new MutationObserver" in source
+    assert "adapterOptionsObserver.observe(select" in source
     assert "ensureChildOrder(row, [input, reveal, qr])" in source
     assert ".pro-adapter-row" in style
+    assert ".pro-adapter-details-icon" in style
     assert ".pro-password-row" in style
+
+
+def test_six_ghz_adapter_notice_is_contextual() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = OVERRIDE_STYLE.read_text(encoding="utf-8")
+
+    assert "syncAdapterBandNotice" in source
+    assert "document.body.dataset.proBand = band" in source
+    assert "if (band !== '6ghz')" in source
+    assert "hint.hidden = true" in source
+    assert "maybeAutoPickAdapterForBand" in source
+    assert ':not([data-pro-band="6ghz"]) #adapterHint' in style
 
 
 def test_legacy_density_pass_is_removed_and_defensively_neutralized() -> None:
