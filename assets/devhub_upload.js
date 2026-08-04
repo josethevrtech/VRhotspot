@@ -279,6 +279,7 @@
   const assets = [
     '/assets/browser_session.js?v=139-session-hotfix',
     '/assets/pro_guided_workflow.js?v=148-authoritative-composer',
+    '/assets/pro_guided_readiness.js?v=148-authoritative-composer',
   ];
   for (const src of assets) {
     const script = document.createElement('script');
