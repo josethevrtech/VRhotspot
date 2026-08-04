@@ -279,7 +279,7 @@
   const assets = [
     '/assets/browser_session.js?v=139-session-hotfix',
     '/assets/pro_guided_workflow.js?v=148-no-adapter-summary-1',
-    '/assets/adapter_interaction_guard.js?v=148-focus-guard-1',
+    '/assets/adapter_interaction_guard.js?v=148-step3-qr-1',
   ];
   for (const src of assets) {
     const script = document.createElement('script');
