@@ -20,7 +20,23 @@ jobs:
           fetch-depth: 0
 
       - name: Apply guided Pro setup changes
-        run: python .github/agent/complete_pro_guided_setup.py
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/agent/complete_pro_guided_setup.py')
+          source = path.read_text(encoding='utf-8')
+          old = '    style = replace_once(style, style_marker, style_additions + style_marker, "insert guided detail styles")'
+          new = '''    marker_index = style.find(style_marker)
+              if marker_index < 0:
+                  raise SystemExit("insert guided detail styles: marker not found")
+              style = style[:marker_index] + style_additions + style[marker_index:]'''
+          if source.count(old) != 1:
+              raise SystemExit('CSS insertion correction did not match exactly once')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          PY
+          python .github/agent/complete_pro_guided_setup.py
 
       - name: Validate focused implementation
         run: |
