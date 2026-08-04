@@ -1,0 +1,101 @@
+body[data-ui-mode="advanced"] .pro-adapter-readiness {
+  margin-top: 12px;
+  border-radius: var(--radius-md);
+  box-shadow: none;
+}
+
+body[data-ui-mode="advanced"] .pro-adapter-readiness .card-header {
+  padding: 12px 14px;
+}
+
+body[data-ui-mode="advanced"] .pro-adapter-readiness .card-header h2 {
+  font-size: 14px;
+}
+
+body[data-ui-mode="advanced"] .pro-adapter-readiness .card-body {
+  padding: 14px;
+}
+
+body[data-ui-mode="advanced"] .pro-adapter-field > .row,
+body[data-ui-mode="advanced"] .pro-password-field > .input-with-action,
+body[data-ui-mode="advanced"] .pro-password-field > .row {
+  display: none;
+}
+
+body[data-ui-mode="advanced"] .pro-adapter-row .btn {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+body[data-ui-mode="advanced"] .pro-hotspot-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+body[data-ui-mode="advanced"] .pro-hotspot-fields input,
+body[data-ui-mode="advanced"] .pro-hotspot-fields select {
+  min-height: 50px;
+}
+
+body[data-ui-mode="advanced"] .pro-guided-advanced-groups {
+  display: grid;
+  gap: 12px;
+}
+
+body[data-ui-mode="advanced"] .pro-guided-advanced-groups > details {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+
+body[data-ui-mode="advanced"] .pro-advanced-group-help {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+body[data-ui-mode="advanced"] .pro-guided-action {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 430px);
+}
+
+body[data-ui-mode="advanced"] .pro-guided-action-buttons {
+  display: grid;
+  gap: 10px;
+}
+
+body[data-ui-mode="advanced"] .pro-guided-action-buttons > #btnStart {
+  width: 100%;
+  min-height: 54px;
+  justify-content: center;
+}
+
+body[data-ui-mode="advanced"] .pro-guided-save-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+body[data-ui-mode="advanced"] .pro-guided-secondary-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+body[data-ui-mode="advanced"] .pro-guided-save-actions .btn,
+body[data-ui-mode="advanced"] .pro-guided-secondary-actions .btn {
+  min-height: 44px;
+  justify-content: center;
+}
+
+@media (max-width: 760px) {
+  body[data-ui-mode="advanced"] .pro-hotspot-fields,
+  body[data-ui-mode="advanced"] .pro-guided-action,
+  body[data-ui-mode="advanced"] .pro-guided-save-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-ui-mode="advanced"] .pro-guided-secondary-actions {
+    justify-content: flex-start;
+  }
+}
