@@ -139,6 +139,7 @@ def validate_network_config(config: Mapping[str, Any]) -> list[str]:
             not isinstance(ap_adapter, str)
             or len(ap_adapter) > 15
             or ap_adapter.startswith("-")
+            or ap_adapter in {".", ".."}
             or not _LINUX_IFNAME_RE.fullmatch(ap_adapter)
         ):
             errors.append("invalid_ap_adapter")
