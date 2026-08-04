@@ -4,7 +4,132 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
+  remove-pro-readiness-card:
+    if: github.ref == 'refs/heads/agent/pro-guided-authoritative-composer'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/pro-guided-authoritative-composer
+          fetch-depth: 2
+
+      - name: Remove readiness card from setup flow
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f'{path}: expected {expected} matches, found {count}: {old!r}')
+              file.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_exact(
+              'assets/devhub_upload.js',
+              "    '/assets/pro_guided_readiness.js?v=148-authoritative-composer',\n",
+              '',
+          )
+
+          replace_exact(
+              'tests/js/pro_guided_mode_transition.test.mjs',
+              "  assert.ok(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'));",
+              "  assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);",
+          )
+
+          full = Path('tests/js/pro_guided_full_portal_integration.test.mjs')
+          text = full.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  "  assert.ok(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'));",
+                  "  assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);",
+              ),
+              (
+                  "  const [html, fieldVisibility, ui, basicGuided, composer, readiness] = await Promise.all([",
+                  "  const [html, fieldVisibility, ui, basicGuided, composer] = await Promise.all([",
+              ),
+              (
+                  "    readAsset('assets/pro_guided_workflow.js'),\n    readAsset('assets/pro_guided_readiness.js'),",
+                  "    readAsset('assets/pro_guided_workflow.js'),",
+              ),
+              (
+                  "  window.eval(composer);\n  window.eval(readiness);",
+                  "  window.eval(composer);",
+              ),
+              (
+                  "    await waitFor(window, () => document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), `readiness cycle ${cycle + 1}`);\n",
+                  '',
+              ),
+              (
+                  "  await waitFor(window, () => document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), 'final readiness');\n",
+                  '',
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{full}: expected 1 match, found {count}: {old!r}')
+              text = text.replace(old, new)
+          full.write_text(text, encoding='utf-8')
+
+          tests = Path('tests/test_pro_guided_workflow.py')
+          text = tests.read_text(encoding='utf-8')
+          text = text.replace('READINESS = ROOT / "assets" / "pro_guided_readiness.js"\n', '')
+          text = text.replace(
+              '    assert "/assets/pro_guided_readiness.js?v=148-authoritative-composer" in source\n',
+              '    assert "pro_guided_readiness.js" not in source\n',
+          )
+          start = text.index('def test_readiness_restoration_reuses_canonical_live_data_hooks() -> None:\n')
+          end = text.index('\ndef test_step_three_contains_the_complete_connection_setup() -> None:\n', start)
+          text = text[:start] + text[end + 1:]
+          text = text.replace(
+              '    assert "assets/pro_guided_readiness.js" in full_source\n',
+              '    assert "assets/pro_guided_readiness.js" not in full_source\n',
+          )
+          text = text.replace(
+              '[LOADER, SOURCE, READINESS, SESSION, DOM_TEST, FULL_DOM_TEST],',
+              '[LOADER, SOURCE, SESSION, DOM_TEST, FULL_DOM_TEST],',
+          )
+          tests.write_text(text, encoding='utf-8')
+          PY
+
+          git rm assets/pro_guided_readiness.js
+
+      - name: Validate focused behavior
+        run: |
+          npm install --no-save --ignore-scripts jsdom@24.1.3
+          node --check assets/devhub_upload.js
+          node --check assets/pro_guided_workflow.js
+          node --test --test-force-exit \
+            tests/js/pro_guided_mode_transition.test.mjs \
+            tests/js/pro_guided_full_portal_integration.test.mjs
+          python -m pip install -e . pytest
+          python -m pytest -q tests/test_pro_guided_workflow.py
+          git diff --check
+
+      - name: Commit clean implementation and restore CI
+        shell: bash
+        run: |
+          git show HEAD^:.github/workflows/ci.yml > .github/workflows/ci.yml
+          git add \
+            .github/workflows/ci.yml \
+            assets/devhub_upload.js \
+            tests/js/pro_guided_mode_transition.test.mjs \
+            tests/js/pro_guided_full_portal_integration.test.mjs \
+            tests/test_pro_guided_workflow.py
+          git config user.name "VRhotspot Agent"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Remove adapter readiness card from Pro setup"
+          git push origin HEAD:agent/pro-guided-authoritative-composer
+
   tests:
     runs-on: ubuntu-latest
     strategy:
