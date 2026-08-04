@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   apply-pro-slot-fix:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/pro-guided-connection-setup'
+    if: github.ref == 'refs/heads/agent/pro-guided-connection-setup' || github.head_ref == 'agent/pro-guided-connection-setup'
     runs-on: ubuntu-latest
 
     steps:
