@@ -400,7 +400,6 @@
 
     if (!isProMode()) return;
 
-    document.querySelectorAll('.pro-adapter-selected-label').forEach((node) => node.remove());
     friendlyAdapterOptions();
 
     const info = document.getElementById('proAdapterInfo');
