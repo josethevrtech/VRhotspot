@@ -20,7 +20,7 @@ def test_pro_runtime_is_loaded_as_versioned_authoritative_asset() -> None:
     source = LOADER.read_text(encoding="utf-8")
 
     assert "/assets/browser_session.js?v=139-session-hotfix" in source
-    assert "/assets/pro_guided_workflow.js?v=148-adapter-controls-3" in source
+    assert "/assets/pro_guided_workflow.js?v=148-adapter-source-labels-4" in source
     assert "pro_guided_readiness.js" not in source
     assert "script.async = false" in source
     assert "polishProSetupDensity" not in source
@@ -161,26 +161,27 @@ def test_adapter_and_password_compaction_are_reversible() -> None:
     assert "adapterOptionsObserver.observe(select" in source
     assert "ensureChildOrder(row, [input, reveal, qr])" in source
     assert ".pro-adapter-row" in style
-    assert ".pro-adapter-details-icon" in style
     assert ".pro-password-row" in style
 
 
-def test_stable_adapter_surface_replaces_duplicate_recommendation_action() -> None:
+def test_adapter_labels_are_normalized_before_load_completes() -> None:
     loader = LOADER.read_text(encoding="utf-8")
     style = OVERRIDE_STYLE.read_text(encoding="utf-8")
 
     assert "stabilizeProAdapterControl" in loader
-    assert "pro-adapter-selected-label" in loader
+    assert "installLoadAdaptersWrapper" in loader
+    assert "wrappedLoadAdapters" in loader
+    assert "const result = await original.apply(this, args)" in loader
+    assert "friendlyAdapterOptions();" in loader
+    assert "pro-adapter-selected-label" not in loader
+    assert "optionsObserver" not in loader
     assert "Adapter details" in loader
-    assert "recommended.hidden = true" in loader
-    assert "recommended.tabIndex = -1" in loader
-    assert "optionsObserver.observe(select" in loader
-    assert 'stylesheet.href = "/assets/pro_guided_authoritative.css?v=148-adapter-controls-3"' not in loader
-    assert "stylesheet.href = '/assets/pro_guided_authoritative.css?v=148-adapter-controls-3'" in loader
+    assert "recommended.style.display = 'none'" in loader
+    assert "148-adapter-source-labels-4" in loader
     assert "#btnUseRecommended" in style
     assert "display: none !important" in style
     assert ".pro-adapter-selected-label" in style
-    assert "color: transparent" in style
+    assert "color: transparent" not in style
 
 
 def test_six_ghz_adapter_notice_is_contextual() -> None:
