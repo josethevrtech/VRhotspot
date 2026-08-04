@@ -142,7 +142,13 @@ function toggleMode(window, advanced) {
 
 function assertBasicLayout(document) {
   assert.equal(document.body.dataset.uiMode, 'basic');
-  assert.equal(document.getElementById('proGuidedWorkflow'), null);
+  const workflow = document.getElementById('proGuidedWorkflow');
+  if (workflow) {
+    assert.ok(
+      workflow.closest('[data-ui-section="advanced"]'),
+      'persistent Pro workflow must remain isolated inside the hidden Advanced section',
+    );
+  }
   assert.ok(document.querySelector('#basicGuidedAdapterSlot [data-field="ap_adapter"]'));
   assert.ok(document.querySelector('#basicGuidedProfileSlot [data-field="qos_preset"]'));
   assert.ok(document.querySelector('#basicGuidedSsidSlot [data-field="ssid"]'));
