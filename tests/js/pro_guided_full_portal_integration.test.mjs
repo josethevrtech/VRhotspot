@@ -23,7 +23,7 @@ const CONNECTION_FIELDS = [
   'enable_internet',
 ];
 
-function apiPayload(url) {
+function apiPayload(url, { passphraseSaved }) {
   const path = new URL(String(url), 'http://127.0.0.1:8732').pathname;
   if (path === '/v1/status') {
     return {
@@ -38,8 +38,9 @@ function apiPayload(url) {
   if (path === '/v1/config') {
     return {
       ssid: 'VR-Hotspot',
-      wpa2_passphrase_set: true,
-      wpa2_passphrase_len: 12,
+      ...(passphraseSaved
+        ? { wpa2_passphrase_set: true, wpa2_passphrase_len: 12 }
+        : { wpa2_passphrase_set: false }),
       band_preference: '5ghz',
       ap_security: 'wpa2',
       country: 'US',
@@ -81,9 +82,9 @@ function apiPayload(url) {
   return { ok: true, data: {} };
 }
 
-function installBrowserStubs(window) {
+function installBrowserStubs(window, options) {
   window.fetch = async (url) => {
-    const payload = apiPayload(url);
+    const payload = apiPayload(url, options);
     const body = JSON.stringify(payload);
     return {
       ok: true,
@@ -263,9 +264,36 @@ function assertProLayout(document) {
   }
   assert.ok(document.getElementById('proConnectionQuality'));
   assert.ok(document.getElementById('tab-troubleshooting'));
+  assertPasswordRowComposed(document);
 }
 
-test('real portal scripts preserve Basic and compose Pro across repeated toggles', async () => {
+function assertPasswordRowComposed(document) {
+  const rows = document.querySelectorAll('.pro-password-row');
+  assert.equal(rows.length, 1, 'exactly one composed password row must exist');
+  const row = rows[0];
+  assert.deepEqual(
+    Array.from(row.children).map((node) => node.id),
+    ['wpa2_passphrase', 'btnRevealPass', 'btnShowQr'],
+    'input, reveal, and QR must be direct row children in order',
+  );
+  const field = document.querySelector('[data-field="wpa2_passphrase"]');
+  assert.equal(row.parentElement, field);
+  for (const legacy of field.querySelectorAll('.input-with-action, .row')) {
+    assert.equal(
+      legacy.querySelector('#wpa2_passphrase, #btnRevealPass, #btnShowQr'),
+      null,
+      'original production wrappers must not contain the controls in Pro',
+    );
+  }
+  const hint = document.getElementById('passHint');
+  assert.ok(hint, 'passHint must exist');
+  assert.equal(hint.parentElement, field, 'passHint must sit outside the row');
+  assert.ok(!row.contains(hint));
+  // 4 === Node.DOCUMENT_POSITION_FOLLOWING
+  assert.ok(row.compareDocumentPosition(hint) & 4, 'passHint must follow the row');
+}
+
+async function runFullPortalScenario({ passphraseSaved }) {
   const [html, fieldVisibility, ui, basicGuided, composer, portalExtensions] = await Promise.all([
     readAsset('assets/index.html'),
     readAsset('assets/field_visibility.js'),
@@ -282,7 +310,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   });
   const { window } = dom;
   const { document } = window;
-  installBrowserStubs(window);
+  installBrowserStubs(window, { passphraseSaved });
   window.localStorage.setItem('vrhs_ui_mode', 'basic');
 
   const errors = [];
@@ -316,6 +344,19 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   await tick(window, 150);
   assertBasicLayout(document);
   const recommendedNode = document.getElementById('btnUseRecommended');
+  const passwordNodes = {
+    input: document.getElementById('wpa2_passphrase'),
+    reveal: document.getElementById('btnRevealPass'),
+    qr: document.getElementById('btnShowQr'),
+  };
+  const assertPasswordIdentity = () => {
+    assert.equal(document.getElementById('wpa2_passphrase'), passwordNodes.input);
+    assert.equal(document.getElementById('btnRevealPass'), passwordNodes.reveal);
+    assert.equal(document.getElementById('btnShowQr'), passwordNodes.qr);
+    for (const id of ['wpa2_passphrase', 'btnRevealPass', 'btnShowQr']) {
+      assert.equal(document.querySelectorAll(`[id="${id}"]`).length, 1);
+    }
+  };
 
   for (let cycle = 0; cycle < 3; cycle += 1) {
     toggleMode(window, true);
@@ -324,6 +365,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
     assertProLayout(document);
     assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
     assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
+    assertPasswordIdentity();
 
     if (cycle === 0) {
       await window.loadAdapters();
@@ -341,6 +383,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
     assertBasicLayout(document);
     assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
     assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
+    assertPasswordIdentity();
   }
 
   toggleMode(window, true);
@@ -348,6 +391,32 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', 'final friendly adapter label');
   assertProLayout(document);
   assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
+  assertPasswordIdentity();
+
+  // The composer must not report ready while password composition is
+  // incomplete, and must converge once the missing control returns.
+  const qr = document.getElementById('btnShowQr');
+  const qrParent = qr.parentElement;
+  qr.remove();
+  await waitFor(
+    window,
+    () => document.body.dataset.proGuidedStage === 'composing',
+    'stage must leave ready when a password control disappears',
+  );
+  await tick(window, 400);
+  assert.equal(
+    document.body.dataset.proGuidedStage,
+    'composing',
+    'ready must not be republished while the password row is incomplete',
+  );
+  qrParent.appendChild(qr);
+  await waitFor(
+    window,
+    () => document.body.dataset.proGuidedStage === 'ready',
+    'composer must recover after the control returns',
+  );
+  assertPasswordRowComposed(document);
+  assertPasswordIdentity();
 
   assert.ok(
     readyCaptures.length >= 4,
@@ -364,4 +433,12 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);
   dom.window.close();
+}
+
+test('real portal composes Pro across toggles with a saved passphrase', async () => {
+  await runFullPortalScenario({ passphraseSaved: true });
+});
+
+test('real portal composes Pro across toggles on a clean install without a saved passphrase', async () => {
+  await runFullPortalScenario({ passphraseSaved: false });
 });

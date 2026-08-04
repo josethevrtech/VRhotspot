@@ -32,6 +32,7 @@
   ];
 
   let reconcileQueued = false;
+  let composeRetryTimer = null;
   let saveTimer = null;
   let restartRequired = false;
   let statusObserver = null;
@@ -193,6 +194,10 @@
   }
 
   function restoreBasicPresentation() {
+    if (composeRetryTimer) {
+      window.clearTimeout(composeRetryTimer);
+      composeRetryTimer = null;
+    }
     if (adapterOptionsObserver) {
       adapterOptionsObserver.disconnect();
       adapterOptionsObserver = null;
@@ -716,12 +721,25 @@
     if (label) setText(label, text);
   }
 
+  function passwordRowComplete(field, input, reveal, qr, hint) {
+    const row = field.querySelector(':scope > .pro-password-row');
+    if (!row) return false;
+    const children = Array.from(row.children);
+    if (children.length !== 3) return false;
+    if (children[0] !== input || children[1] !== reveal || children[2] !== qr) return false;
+    if (hint) {
+      if (hint.parentElement !== field) return false;
+      if (!(row.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+    }
+    return true;
+  }
+
   function decoratePassword(field) {
     const input = el('wpa2_passphrase');
     const reveal = el('btnRevealPass');
     const qr = el('btnShowQr');
     const hint = el('passHint');
-    if (!field || !input || !reveal || !qr) return;
+    if (!field || !input || !reveal || !qr) return false;
     field.classList.add('pro-password-field');
     field.dataset.proDensityReady = '1';
     setHotspotFieldLabel(field, 'Password');
@@ -753,7 +771,12 @@
       hint.classList.add('pro-password-hint');
       appendIfNeeded(field, hint);
     }
-    field.dataset.proComposerDecorated = '1';
+    // Ready may only be published once the composed row is verifiably
+    // complete; a transient DOM state must fail the pass, not go silent.
+    const complete = passwordRowComplete(field, input, reveal, qr, hint);
+    if (complete) field.dataset.proComposerDecorated = '1';
+    else delete field.dataset.proComposerDecorated;
+    return complete;
   }
 
   function decorateHotspot(shell) {
@@ -772,17 +795,18 @@
       country: 'Country',
     };
     const ordered = [];
+    let passwordReady = true;
     for (const key of CONNECTION_FIELDS) {
       const field = document.querySelector(`[data-field="${key}"]`);
       if (!field) return false;
       field.classList.add('pro-hotspot-field');
       field.dataset.proHotspotKey = key;
       if (labels[key]) setHotspotFieldLabel(field, labels[key]);
-      if (key === 'wpa2_passphrase') decoratePassword(field);
+      if (key === 'wpa2_passphrase') passwordReady = decoratePassword(field);
       ordered.push(field);
     }
     ensureChildOrder(fields, ordered);
-    return true;
+    return passwordReady;
   }
 
   function addAdvancedGroupHelp(details, text) {
@@ -1005,7 +1029,14 @@
       const qualityReady = ensureConnectionQuality(shell);
       const troubleshootingReady = ensureTroubleshooting();
       ensureStatusObserver();
-      setStage(guidedReady && qualityReady && troubleshootingReady ? 'ready' : 'composing');
+      if (guidedReady && qualityReady && troubleshootingReady) {
+        setStage('ready');
+      } else {
+        // A failed pass may leave no observable mutation behind, so the
+        // observer alone cannot guarantee another attempt.
+        setStage('composing');
+        scheduleComposeRetry();
+      }
     } catch (error) {
       const message = String(error && error.message ? error.message : error);
       setStage('error', message);
@@ -1017,6 +1048,14 @@
     if (reconcileQueued) return;
     reconcileQueued = true;
     window.setTimeout(reconcile, 0);
+  }
+
+  function scheduleComposeRetry() {
+    if (composeRetryTimer) return;
+    composeRetryTimer = window.setTimeout(() => {
+      composeRetryTimer = null;
+      scheduleReconcile();
+    }, 150);
   }
 
   function start() {

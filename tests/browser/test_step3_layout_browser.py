@@ -1,0 +1,135 @@
+"""Real-browser rendered-geometry checks for the Pro Step 3 password row.
+
+These drive the actual portal (real stylesheet order, real daemon responses)
+in a real Chromium-family browser and assert the rendered geometry contract
+that jsdom cannot measure. They are skipped unless Playwright is installed
+and a portal is reachable.
+
+Environment:
+    VRHOTSPOT_BROWSER_TEST_URL    portal UI URL (default http://127.0.0.1:8732/ui)
+    VRHOTSPOT_BROWSER_TEST_TOKEN  API token used on the login splash (required)
+    VRHOTSPOT_BROWSER_EXECUTABLE  optional browser binary (e.g. system Chrome)
+"""
+
+import os
+import urllib.request
+
+import pytest
+
+playwright_sync = pytest.importorskip("playwright.sync_api")
+
+PORTAL_URL = os.environ.get(
+    "VRHOTSPOT_BROWSER_TEST_URL", "http://127.0.0.1:8732/ui"
+)
+TOKEN = os.environ.get("VRHOTSPOT_BROWSER_TEST_TOKEN", "")
+EXECUTABLE = os.environ.get("VRHOTSPOT_BROWSER_EXECUTABLE", "")
+
+
+def _portal_reachable() -> bool:
+    health = PORTAL_URL.rsplit("/", 1)[0] + "/healthz"
+    try:
+        with urllib.request.urlopen(health, timeout=3) as response:
+            return response.status == 200
+    except OSError:
+        return False
+
+
+pytestmark = [
+    pytest.mark.skipif(not TOKEN, reason="VRHOTSPOT_BROWSER_TEST_TOKEN not set"),
+    pytest.mark.skipif(not _portal_reachable(), reason="portal is not reachable"),
+]
+
+
+@pytest.fixture(scope="module")
+def pro_page():
+    with playwright_sync.sync_playwright() as p:
+        launch_kwargs = {}
+        if EXECUTABLE:
+            launch_kwargs["executable_path"] = EXECUTABLE
+        browser = p.chromium.launch(**launch_kwargs)
+        # bypass_csp lets Playwright's string predicates run under the
+        # portal's strict script-src CSP; it does not change app behavior.
+        page = browser.new_page(
+            viewport={"width": 1440, "height": 1000}, bypass_csp=True
+        )
+        # External font hosts are unreachable in CI sandboxes.
+        page.route("**fonts.googleapis.com**", lambda route: route.abort())
+        page.route("**fonts.gstatic.com**", lambda route: route.abort())
+        page.goto(PORTAL_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(1200)
+        if page.locator("#loginToken").is_visible():
+            page.fill("#loginToken", TOKEN)
+            page.click("#btnLoginSubmit")
+        page.wait_for_selector("#uiModeToggle", state="attached", timeout=15000)
+        page.wait_for_timeout(1200)
+        page.evaluate(
+            """() => {
+                const toggle = document.getElementById('uiModeToggle');
+                toggle.checked = true;
+                toggle.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
+        )
+        page.wait_for_function(
+            "document.body.dataset.proGuidedStage === 'ready'", timeout=15000
+        )
+        page.wait_for_timeout(400)
+        yield page
+        browser.close()
+
+
+def _rect(page, selector):
+    return page.evaluate(
+        """(sel) => {
+            const el = document.querySelector(sel);
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return {x: r.x, y: r.y, w: r.width, h: r.height,
+                    left: r.left, right: r.right, top: r.top};
+        }""",
+        selector,
+    )
+
+
+def test_password_row_is_composed_before_ready(pro_page):
+    state = pro_page.evaluate(
+        """() => {
+            const row = document.querySelector('.pro-password-row');
+            return {
+                rows: document.querySelectorAll('.pro-password-row').length,
+                kids: row ? Array.from(row.children).map((el) => el.id) : null,
+            };
+        }"""
+    )
+    assert state["rows"] == 1
+    assert state["kids"] == ["wpa2_passphrase", "btnRevealPass", "btnShowQr"]
+
+
+def test_password_row_rendered_geometry(pro_page):
+    input_rect = _rect(pro_page, "#wpa2_passphrase")
+    reveal_rect = _rect(pro_page, "#btnRevealPass")
+    qr_rect = _rect(pro_page, "#btnShowQr")
+    assert input_rect and reveal_rect and qr_rect
+
+    # Identical top positions: one row, no wrapping.
+    assert abs(input_rect["top"] - reveal_rect["top"]) < 1
+    assert abs(input_rect["top"] - qr_rect["top"]) < 1
+
+    # Identical heights.
+    assert abs(input_rect["h"] - reveal_rect["h"]) < 1
+    assert abs(input_rect["h"] - qr_rect["h"]) < 1
+
+    # Reveal and QR are equal-size squares.
+    assert abs(reveal_rect["w"] - reveal_rect["h"]) < 1
+    assert abs(qr_rect["w"] - qr_rect["h"]) < 1
+    assert abs(reveal_rect["w"] - qr_rect["w"]) < 1
+
+    # QR is not on a second line: it sits to the right of reveal on the
+    # same baseline, and both are to the right of the input.
+    assert input_rect["right"] <= reveal_rect["left"] + 1
+    assert reveal_rect["right"] <= qr_rect["left"] + 1
+
+    # Reveal is not detached at the far right: the buttons hug the input
+    # within one grid gap rather than floating across the row.
+    max_gap = 24
+    assert reveal_rect["left"] - input_rect["right"] <= max_gap
+    assert qr_rect["left"] - reveal_rect["right"] <= max_gap

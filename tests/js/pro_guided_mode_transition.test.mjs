@@ -183,6 +183,33 @@ function assertProLayout(document) {
   assert.equal(recommended.getAttribute('aria-hidden'), 'true');
   assert.equal(recommended.tabIndex, -1);
   assert.equal(recommended.style.display, 'none');
+  assertPasswordRowComposed(document);
+}
+
+function assertPasswordRowComposed(document) {
+  const rows = document.querySelectorAll('.pro-password-row');
+  assert.equal(rows.length, 1, 'exactly one composed password row must exist');
+  const row = rows[0];
+  assert.deepEqual(
+    Array.from(row.children).map((node) => node.id),
+    ['wpa2_passphrase', 'btnRevealPass', 'btnShowQr'],
+    'input, reveal, and QR must be direct row children in order',
+  );
+  const field = document.querySelector('[data-field="wpa2_passphrase"]');
+  assert.equal(row.parentElement, field);
+  for (const legacy of field.querySelectorAll('.input-with-action, .row')) {
+    assert.equal(
+      legacy.querySelector('#wpa2_passphrase, #btnRevealPass, #btnShowQr'),
+      null,
+      'original wrappers must not contain the controls in Pro',
+    );
+  }
+  const hint = document.getElementById('passHint');
+  assert.ok(hint);
+  assert.equal(hint.parentElement, field);
+  assert.ok(!row.contains(hint));
+  // 4 === Node.DOCUMENT_POSITION_FOLLOWING
+  assert.ok(row.compareDocumentPosition(hint) & 4);
 }
 
 function assertRecommendedRestoredForBasic(document) {
@@ -248,6 +275,17 @@ test('authoritative Pro composer survives repeated Basic and Pro transitions', a
   window.eval(source);
   await tick(window);
   const recommendedNode = document.getElementById('btnUseRecommended');
+  const passwordInputNode = document.getElementById('wpa2_passphrase');
+  const revealNode = document.getElementById('btnRevealPass');
+  const qrNode = document.getElementById('btnShowQr');
+  const assertPasswordIdentity = () => {
+    assert.equal(document.getElementById('wpa2_passphrase'), passwordInputNode);
+    assert.equal(document.getElementById('btnRevealPass'), revealNode);
+    assert.equal(document.getElementById('btnShowQr'), qrNode);
+    for (const id of ['wpa2_passphrase', 'btnRevealPass', 'btnShowQr']) {
+      assert.equal(document.querySelectorAll(`[id="${id}"]`).length, 1);
+    }
+  };
 
   assert.equal(document.getElementById('proGuidedWorkflow'), null);
   assert.equal(document.body.dataset.proGuidedStage, 'waiting-for-pro');
@@ -262,10 +300,14 @@ test('authoritative Pro composer survives repeated Basic and Pro transitions', a
     assertProLayout(document);
     assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
     assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
+    assertPasswordIdentity();
 
     applyMode(document, homes, 'basic');
     await tick(window, 60);
     assert.equal(document.body.dataset.proGuidedStage, 'waiting-for-pro');
+    assert.equal(document.querySelector('.pro-password-row'), null);
+    assert.ok(passwordInputNode.closest('.input-with-action'), 'input must return to its original wrapper in Basic');
+    assertPasswordIdentity();
     for (const key of BASIC_QUICK_FIELDS) {
       assert.ok(document.querySelector(`#basicQuickFields [data-field="${key}"]`), `${key} should return to Basic`);
     }
@@ -281,6 +323,22 @@ test('authoritative Pro composer survives repeated Basic and Pro transitions', a
   await tick(window, 60);
   assertProLayout(document);
   assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
+  assertPasswordIdentity();
+
+  // Ready must be withheld while password composition is incomplete and
+  // recover once the missing control returns.
+  const qrParent = qrNode.parentElement;
+  qrNode.remove();
+  await tick(window, 250);
+  assert.equal(document.body.dataset.proGuidedStage, 'composing');
+  await tick(window, 400);
+  assert.equal(document.body.dataset.proGuidedStage, 'composing');
+  qrParent.appendChild(qrNode);
+  await tick(window, 400);
+  assert.equal(document.body.dataset.proGuidedStage, 'ready');
+  assertPasswordRowComposed(document);
+  assertPasswordIdentity();
+
   assertReadyPublicationsComplete(readyCaptures, 4);
   assert.deepEqual(errors, []);
   dom.window.close();
