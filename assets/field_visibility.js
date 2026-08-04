@@ -617,6 +617,7 @@ window.UI_FIELD_VISIBILITY = {
     const logs = el('tab-logs');
     const statusCard = overview?.querySelector('.status-hero');
     const debugCard = overview?.querySelector('.debug-details');
+    const readinessCard = overview?.querySelector('.adapter-readiness-card');
     if (!overview || !settings || !logs || !statusCard) return false;
 
     addStyles();
@@ -634,6 +635,7 @@ window.UI_FIELD_VISIBILITY = {
     const { configuration, supportBundle } = buildConfiguration(settings);
     buildServiceCard(statusCard);
     shell.append(statusCard, configuration);
+    if (readinessCard) shell.appendChild(readinessCard);
     overview.replaceChildren(shell);
     if (grid && grid.isConnected) grid.remove();
 

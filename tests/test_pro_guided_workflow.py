@@ -10,6 +10,7 @@ LOADER = ROOT / "assets" / "devhub_upload.js"
 SOURCE = ROOT / "assets" / "pro_guided_workflow.js"
 STYLE = ROOT / "assets" / "pro_guided_workflow.css"
 SESSION = ROOT / "assets" / "browser_session.js"
+FIELD_VISIBILITY = ROOT / "assets" / "field_visibility.js"
 
 
 def test_pro_runtime_is_loaded_as_versioned_dedicated_assets() -> None:
@@ -212,3 +213,53 @@ def test_portal_extensions_parse_with_node(asset: Path) -> None:
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_step_one_embeds_adapter_readiness_details() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    base = FIELD_VISIBILITY.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "const readinessCard = overview.querySelector('.adapter-readiness-card')" in source
+    assert "readinessCard.classList.add('pro-adapter-readiness')" in source
+    assert "adapterStep.appendChild(readinessCard)" in source
+    assert "shell.appendChild(readinessCard)" in base
+    assert ".pro-adapter-readiness" in style
+
+
+def test_step_three_contains_complete_connection_setup() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    for field in (
+        "ssid",
+        "wpa2_passphrase",
+        "band_preference",
+        "ap_security",
+        "country",
+        "enable_internet",
+    ):
+        assert f"'{field}'" in source
+    assert "network name, password, band, security, country" in source
+
+
+def test_step_four_exposes_three_detailed_option_groups_directly() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "pro-guided-advanced-groups" in source
+    assert "Channels, width, radio timing" in source
+    assert "Gateway, DHCP, DNS" in source
+    assert "Startup behavior, interface strategy" in source
+    assert "make('details', 'pro-advanced-settings')" not in source
+    assert ".pro-advanced-group-help" in style
+
+
+def test_step_five_keeps_manual_save_and_restart_actions() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "pro-guided-save-actions" in source
+    assert "save.textContent = 'Save Changes'" in source
+    assert "saveRestart.textContent = 'Save & Restart'" in source
+    assert "actionButtons.appendChild(manualSave)" in source
+    assert ".pro-guided-save-actions" in style

@@ -201,6 +201,9 @@
       'qos_preset',
       'ssid',
       'wpa2_passphrase',
+      'band_preference',
+      'ap_security',
+      'country',
       'enable_internet',
       'btnStart',
       'btnSaveConfig',
@@ -219,6 +222,7 @@
     const overview = el('tab-overview');
     const configuration = el('proHotspotConfiguration');
     const serviceCard = overview.querySelector('.pro-service-card');
+    const readinessCard = overview.querySelector('.adapter-readiness-card');
 
     const shell = make('div', 'pro-guided-shell');
     shell.id = 'proGuidedWorkflow';
@@ -232,8 +236,8 @@
     steps.append(
       step(1, 'Choose Wi-Fi adapter', 'Select the adapter VRhotspot should use. Recommended choices are labeled automatically.', 'proStepAdapter'),
       step(2, 'Choose performance mode', 'Choose the behavior that best matches your VR workflow.', 'proStepPerformance'),
-      step(3, 'Configure hotspot', 'Set the network name, password, and internet-sharing preference.', 'proStepHotspot'),
-      step(4, 'Fine-tune hotspot', 'Optional expert settings are grouped by purpose and can be left at their recommended defaults.', 'proStepAdvanced'),
+      step(3, 'Configure hotspot', 'Set the network name, password, band, security, country, and internet-sharing behavior.', 'proStepHotspot'),
+      step(4, 'Fine-tune hotspot', 'Review detailed wireless, network, and system options or leave the recommended defaults unchanged.', 'proStepAdvanced'),
       step(5, 'Start hotspot', 'Start, stop, or safely apply saved changes to a running hotspot.', 'proStepAction'),
     );
     card.append(header, steps);
@@ -242,7 +246,14 @@
     const adapter = document.querySelector('[data-field="ap_adapter"]');
     const adapterLabel = adapter.querySelector('label');
     if (adapterLabel) adapterLabel.textContent = 'Wi-Fi adapter';
-    el('proStepAdapter').appendChild(adapter);
+    const adapterStep = el('proStepAdapter');
+    adapterStep.appendChild(adapter);
+    if (readinessCard) {
+      readinessCard.classList.add('pro-adapter-readiness');
+      const readinessHeading = readinessCard.querySelector('.card-header h2');
+      if (readinessHeading) readinessHeading.textContent = 'Adapter readiness';
+      adapterStep.appendChild(readinessCard);
+    }
 
     const preset = configuration.querySelector('.preset-bar');
     preset.classList.add('pro-performance-picker');
@@ -261,7 +272,14 @@
     el('proStepPerformance').appendChild(qos);
 
     const hotspotFields = make('div', 'pro-hotspot-fields');
-    for (const key of ['ssid', 'wpa2_passphrase', 'enable_internet']) {
+    for (const key of [
+      'ssid',
+      'wpa2_passphrase',
+      'band_preference',
+      'ap_security',
+      'country',
+      'enable_internet',
+    ]) {
       const field = document.querySelector(`[data-field="${key}"]`);
       if (key === 'ssid') {
         const label = field.querySelector('label');
@@ -275,18 +293,44 @@
     }
     el('proStepHotspot').appendChild(hotspotFields);
 
-    const advanced = make('details', 'pro-advanced-settings');
-    const advancedSummary = make('summary', '', 'Advanced wireless, network, and system settings');
-    const advancedBody = make('div', 'pro-advanced-body');
-    configuration.querySelectorAll('.pro-config-details').forEach((details) => advancedBody.appendChild(details));
-    advanced.append(advancedSummary, advancedBody);
-    el('proStepAdvanced').appendChild(advanced);
+    const advancedGroups = make('div', 'pro-guided-advanced-groups');
+    const groupCopy = {
+      Wireless: 'Channels, width, radio timing, transmit power, automatic selection, and fallback behavior.',
+      Network: 'Gateway, DHCP, DNS, NAT acceleration, bridge mode, and firewall integration.',
+      'System & Performance': 'Startup behavior, interface strategy, power management, CPU tuning, kernel tuning, and debug logging.',
+    };
+    configuration.querySelectorAll('.pro-config-details').forEach((details) => {
+      const summary = details.querySelector(':scope > summary');
+      const title = String(summary?.textContent || '').trim();
+      const body = details.querySelector(':scope > .pro-config-body');
+      if (body && groupCopy[title] && !body.querySelector(':scope > .pro-advanced-group-help')) {
+        body.prepend(make('p', 'pro-advanced-group-help', groupCopy[title]));
+      }
+      advancedGroups.appendChild(details);
+    });
+    el('proStepAdvanced').appendChild(advancedGroups);
 
     const action = make('div', 'pro-guided-action');
     const stateCopy = serviceCard.querySelector('.pro-service-state-copy');
     const primary = el('btnStart');
+    const actionButtons = make('div', 'pro-guided-action-buttons');
+    actionButtons.appendChild(primary);
+
+    const manualSave = make('div', 'pro-guided-save-actions');
+    const save = el('btnSaveConfig');
+    const saveRestart = el('btnSaveRestart');
+    if (save) {
+      save.textContent = 'Save Changes';
+      manualSave.appendChild(save);
+    }
+    if (saveRestart) {
+      saveRestart.textContent = 'Save & Restart';
+      manualSave.appendChild(saveRestart);
+    }
+    if (manualSave.children.length) actionButtons.appendChild(manualSave);
+
     if (stateCopy) action.appendChild(stateCopy);
-    action.appendChild(primary);
+    action.appendChild(actionButtons);
     const actionSlot = el('proStepAction');
     const saveState = make('div', 'pro-save-state', 'All changes saved.');
     saveState.id = 'proSaveState';
