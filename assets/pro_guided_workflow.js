@@ -334,10 +334,12 @@
       'btnSaveRestart',
       'btnRepair',
     ];
+    const preset = configuration?.querySelector('.preset-bar')
+      || overview?.querySelector('#proStepPerformance .preset-bar');
     return !!overview
       && !!configuration
       && !!serviceCard
-      && !!configuration.querySelector('.preset-bar')
+      && !!preset
       && requiredIds.every((id) => !!el(id));
   }
 
