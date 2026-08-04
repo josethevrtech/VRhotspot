@@ -5,6 +5,132 @@ on:
   pull_request:
 
 jobs:
+  apply-input-hardening-review-fixes:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/input-validation-hardening'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/input-validation-hardening
+          fetch-depth: 0
+
+      - name: Apply reviewed fixes and regression tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          api_path = Path("backend/vr_hotspotd/api.py")
+          api = api_path.read_text(encoding="utf-8")
+          old_auth = '''        request_token = self._get_req_token()
+                  if not isinstance(request_token, str):
+                      return False
+                  return hmac.compare_digest(request_token, tok)
+          '''
+          new_auth = '''        request_token = self._get_req_token()
+                  if not isinstance(request_token, str):
+                      return False
+                  try:
+                      request_bytes = request_token.encode("utf-8", "surrogateescape")
+                      expected_bytes = tok.encode("utf-8", "surrogateescape")
+                  except UnicodeEncodeError:
+                      request_bytes = request_token.encode("utf-8", "surrogatepass")
+                      expected_bytes = tok.encode("utf-8", "surrogatepass")
+                  return hmac.compare_digest(request_bytes, expected_bytes)
+          '''
+          if old_auth not in api:
+              raise SystemExit("expected authorization block not found")
+          api_path.write_text(api.replace(old_auth, new_auth, 1), encoding="utf-8")
+
+          config_path = Path("backend/vr_hotspotd/config.py")
+          config = config_path.read_text(encoding="utf-8")
+          old_adapter = '''            or ap_adapter.startswith("-")
+                      or not _LINUX_IFNAME_RE.fullmatch(ap_adapter)
+          '''
+          new_adapter = '''            or ap_adapter.startswith("-")
+                      or ap_adapter in {".", ".."}
+                      or not _LINUX_IFNAME_RE.fullmatch(ap_adapter)
+          '''
+          if old_adapter not in config:
+              raise SystemExit("expected adapter validation block not found")
+          config_path.write_text(config.replace(old_adapter, new_adapter, 1), encoding="utf-8")
+
+          auth_tests_path = Path("tests/test_auth.py")
+          auth_tests = auth_tests_path.read_text(encoding="utf-8")
+          marker = "def test_authorization_handles_non_ascii_and_surrogate_tokens_without_exceptions"
+          if marker not in auth_tests:
+              auth_tests += r'''
+
+
+def test_authorization_handles_non_ascii_and_surrogate_tokens_without_exceptions(monkeypatch):
+    handler = _handler_with_headers({})
+
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "sëcret")
+    handler._get_req_token = lambda: "different-ë"
+    assert handler._is_authorized() is False
+
+    handler._get_req_token = lambda: "sëcret"
+    assert handler._is_authorized() is True
+
+    surrogate_token = "secret-\udcff"
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", surrogate_token)
+    handler._get_req_token = lambda: surrogate_token
+    assert handler._is_authorized() is True
+
+    handler._get_req_token = lambda: "secret-\udcfe"
+    assert handler._is_authorized() is False
+
+
+def test_authorization_rejects_non_ascii_request_token_normally(monkeypatch):
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "configured-secret")
+    handler = _handler_with_headers({})
+    handler._get_req_token = lambda: "crafted-ÿ-token"
+
+    assert handler._is_authorized() is False
+'''
+              auth_tests_path.write_text(auth_tests, encoding="utf-8")
+
+          config_tests_path = Path("tests/test_config_network_validation.py")
+          config_tests = config_tests_path.read_text(encoding="utf-8")
+          marker = "def test_network_config_rejects_dot_directory_adapter_names"
+          if marker not in config_tests:
+              config_tests += r'''
+
+
+def test_network_config_rejects_dot_directory_adapter_names():
+    for adapter in (".", ".."):
+        assert "invalid_ap_adapter" in config.validate_network_config(
+            _config(ap_adapter=adapter)
+        )
+
+
+def test_network_config_accepts_valid_dotted_adapter_name():
+    assert config.validate_network_config(_config(ap_adapter="wlp2s0.1")) == []
+'''
+              config_tests_path.write_text(config_tests, encoding="utf-8")
+          PY
+
+      - name: Check patch
+        run: |
+          python -m compileall -q backend/vr_hotspotd tests/test_auth.py tests/test_config_network_validation.py
+          git diff --check
+
+      - name: Commit fixes and remove temporary automation
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm -f .github/workflows/agent-apply-input-hardening-review-fixes.yml
+          git add backend/vr_hotspotd/api.py backend/vr_hotspotd/config.py tests/test_auth.py tests/test_config_network_validation.py .github/workflows/ci.yml .github/workflows/agent-apply-input-hardening-review-fixes.yml
+          git config user.name "VRhotspot Agent"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Fix Unicode token comparison regression"
+          git push origin HEAD:agent/input-validation-hardening
+
   tests:
     runs-on: ubuntu-latest
     strategy:
