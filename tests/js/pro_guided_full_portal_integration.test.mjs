@@ -23,10 +23,6 @@ const CONNECTION_FIELDS = [
   'enable_internet',
 ];
 
-function field(key, control) {
-  return `<div class="form-group" data-field="${key}"><label>${key}</label>${control}</div>`;
-}
-
 function apiPayload(url) {
   const path = new URL(String(url), 'http://127.0.0.1:8732').pathname;
   if (path === '/v1/status') {
@@ -186,12 +182,13 @@ function assertProLayout(document) {
 }
 
 test('real portal scripts preserve Basic and compose Pro across repeated toggles', async () => {
-  const [html, fieldVisibility, ui, basicGuided, composer] = await Promise.all([
+  const [html, fieldVisibility, ui, basicGuided, composer, readiness] = await Promise.all([
     readAsset('assets/index.html'),
     readAsset('assets/field_visibility.js'),
     readAsset('assets/ui.js'),
     readAsset('assets/basic_guided.js'),
     readAsset('assets/pro_guided_workflow.js'),
+    readAsset('assets/pro_guided_readiness.js'),
   ]);
 
   const dom = new JSDOM(html, {
@@ -214,6 +211,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   window.eval(ui);
   window.eval(basicGuided);
   window.eval(composer);
+  window.eval(readiness);
   document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
 
   assert.equal(typeof window.setToken, 'function');
@@ -229,6 +227,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   for (let cycle = 0; cycle < 3; cycle += 1) {
     toggleMode(window, true);
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', `Pro ready cycle ${cycle + 1}`);
+    await waitFor(window, () => document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), `readiness cycle ${cycle + 1}`);
     assertProLayout(document);
 
     toggleMode(window, false);
@@ -239,6 +238,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
 
   toggleMode(window, true);
   await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', 'final Pro composition');
+  await waitFor(window, () => document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), 'final readiness');
   assertProLayout(document);
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);
