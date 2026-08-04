@@ -6,6 +6,13 @@ on:
       - agent/input-validation-hardening
     paths:
       - .github/workflows/agent-apply-input-hardening-review-fixes.yml
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
