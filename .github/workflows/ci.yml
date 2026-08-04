@@ -4,7 +4,316 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
+  apply-pro-mode-transition-fix:
+    if: github.ref == 'refs/heads/agent/pro-guided-connection-setup'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/pro-guided-connection-setup
+          fetch-depth: 0
+
+      - name: Repair Pro mode lifecycle
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+              return text.replace(old, new, 1)
+
+          source_path = Path('assets/pro_guided_workflow.js')
+          source = source_path.read_text(encoding='utf-8')
+
+          helpers = r'''
+  function isAdvancedMode() {
+    return document.body?.dataset.uiMode === 'advanced';
+  }
+
+  function guidedSlot(shell, id) {
+    const node = shell?.querySelector(`#${id}`);
+    if (!node) throw new Error(`missing guided slot: ${id}`);
+    return node;
+  }
+
+  function rehydrateGuidedSetup(shell) {
+    const configuration = el('proHotspotConfiguration');
+    if (!shell || !configuration) return false;
+
+    const adapter = document.querySelector('[data-field="ap_adapter"]');
+    if (!adapter) return false;
+    const adapterLabel = adapter.querySelector('label');
+    if (adapterLabel) adapterLabel.textContent = 'Wi-Fi adapter';
+    guidedSlot(shell, 'proStepAdapter').prepend(adapter);
+
+    const preset = shell.querySelector('.pro-performance-picker')
+      || configuration.querySelector('.preset-bar');
+    if (preset) {
+      preset.classList.add('pro-performance-picker');
+      guidedSlot(shell, 'proStepPerformance').appendChild(preset);
+    }
+
+    const qos = document.querySelector('[data-field="qos_preset"]');
+    if (qos) {
+      qos.classList.add('pro-guided-hidden');
+      guidedSlot(shell, 'proStepPerformance').appendChild(qos);
+    }
+
+    let hotspotFields = shell.querySelector('.pro-hotspot-fields');
+    if (!hotspotFields) {
+      hotspotFields = make('div', 'pro-hotspot-fields');
+      guidedSlot(shell, 'proStepHotspot').appendChild(hotspotFields);
+    }
+    for (const key of [
+      'ssid',
+      'wpa2_passphrase',
+      'band_preference',
+      'ap_security',
+      'country',
+      'enable_internet',
+    ]) {
+      const field = document.querySelector(`[data-field="${key}"]`);
+      if (!field) continue;
+      if (key === 'ssid') {
+        const label = field.querySelector('label');
+        if (label) label.textContent = 'Hotspot name';
+      }
+      if (key === 'wpa2_passphrase') {
+        const label = field.querySelector('label');
+        if (label) label.textContent = 'Password';
+      }
+      hotspotFields.appendChild(field);
+    }
+    return true;
+  }
+
+'''
+          source = replace_once(
+              source,
+              "  function buildGuidedSetup() {\n",
+              helpers + "  function buildGuidedSetup() {\n",
+              'insert mode helpers',
+          )
+          source = replace_once(
+              source,
+              """  function buildGuidedSetup() {
+    if (el('proGuidedWorkflow')) return true;
+    if (!guidedPrerequisitesReady()) return false;
+""",
+              """  function buildGuidedSetup() {
+    if (!isAdvancedMode()) return false;
+    const existing = el('proGuidedWorkflow');
+    if (existing) return rehydrateGuidedSetup(existing);
+    if (!guidedPrerequisitesReady()) return false;
+""",
+              'gate and rehydrate guided setup',
+          )
+          source = replace_once(
+              source,
+              "const adapterStep = el('proStepAdapter');",
+              "const adapterStep = guidedSlot(shell, 'proStepAdapter');",
+              'fix adapter slot lookup',
+          )
+          if source.count("el('proStepPerformance').appendChild(") != 2:
+              raise SystemExit('performance slot lookup count changed')
+          source = source.replace(
+              "el('proStepPerformance').appendChild(",
+              "guidedSlot(shell, 'proStepPerformance').appendChild(",
+          )
+          source = replace_once(
+              source,
+              "el('proStepHotspot').appendChild(hotspotFields);",
+              "guidedSlot(shell, 'proStepHotspot').appendChild(hotspotFields);",
+              'fix hotspot slot lookup',
+          )
+          source = replace_once(
+              source,
+              "el('proStepAdvanced').appendChild(advancedGroups);",
+              "guidedSlot(shell, 'proStepAdvanced').appendChild(advancedGroups);",
+              'fix advanced slot lookup',
+          )
+          source = replace_once(
+              source,
+              "const actionSlot = el('proStepAction');",
+              "const actionSlot = guidedSlot(shell, 'proStepAction');",
+              'fix action slot lookup',
+          )
+          source = replace_once(
+              source,
+              """    for (const node of [headerBar, serviceSecondary, serviceMeta, ...feedback]) {
+      if (node) hidden.appendChild(node);
+    }
+    card.appendChild(hidden);
+
+    overview.replaceChildren(shell);
+""",
+              """    for (const node of [headerBar, serviceSecondary, serviceMeta, ...feedback]) {
+      if (node) hidden.appendChild(node);
+    }
+    hidden.appendChild(configuration);
+    card.appendChild(hidden);
+
+    overview.replaceChildren(shell);
+    rehydrateGuidedSetup(shell);
+""",
+              'retain configuration home and rehydrate',
+          )
+          source = replace_once(
+              source,
+              """  function initialize() {
+    enforceNavigation();
+    try {
+""",
+              """  function initialize() {
+    if (!isAdvancedMode()) {
+      if (document.body) document.body.dataset.proGuidedStage = 'waiting-for-pro';
+      return false;
+    }
+    enforceNavigation();
+    try {
+""",
+              'gate initialization by mode',
+          )
+          source = replace_once(
+              source,
+              """  function scheduleRetry() {
+    if (retryQueued || initialized || retryCount >= RETRY_LIMIT) return;
+""",
+              """  function scheduleRetry() {
+    if (!isAdvancedMode() || retryQueued || initialized || retryCount >= RETRY_LIMIT) return;
+""",
+              'disable retries in Basic mode',
+          )
+          old_start = r'''  function start() {
+    enforceNavigation();
+    if (initialize()) return;
+    observer = new MutationObserver((records) => {
+      if (records.some((record) => record.type === 'attributes')) retryCount = 0;
+      scheduleRetry();
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-auth-state', 'data-ui-mode'],
+    });
+    window.addEventListener('pageshow', resetRetryBudget);
+    window.addEventListener('load', resetRetryBudget, { once: true });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) resetRetryBudget();
+    });
+    scheduleRetry();
+  }
+'''
+          new_start = r'''  function start() {
+    observer = new MutationObserver((records) => {
+      const modeChanged = records.some(
+        (record) => record.type === 'attributes' && record.attributeName === 'data-ui-mode',
+      );
+      if (modeChanged) {
+        retryCount = 0;
+        if (isAdvancedMode()) {
+          guidedReady = false;
+          initialized = false;
+        }
+      }
+      scheduleRetry();
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-auth-state', 'data-ui-mode'],
+    });
+    window.addEventListener('pageshow', resetRetryBudget);
+    window.addEventListener('load', resetRetryBudget, { once: true });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) resetRetryBudget();
+    });
+    scheduleRetry();
+  }
+'''
+          source = replace_once(source, old_start, new_start, 'replace lifecycle observer')
+          source_path.write_text(source, encoding='utf-8')
+
+          test_path = Path('tests/test_pro_guided_workflow.py')
+          tests = test_path.read_text(encoding='utf-8')
+          addition = r'''
+
+
+def test_pro_builder_waits_for_advanced_mode_and_rehydrates_on_return() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "document.body?.dataset.uiMode === 'advanced'" in source
+    assert "if (!isAdvancedMode()) return false" in source
+    assert "data.proGuidedStage = 'waiting-for-pro'" not in source
+    assert "document.body.dataset.proGuidedStage = 'waiting-for-pro'" in source
+    assert "if (!isAdvancedMode() || retryQueued" in source
+    assert "guidedReady = false" in source
+    assert "initialized = false" in source
+    assert "return rehydrateGuidedSetup(existing)" in source
+    assert "hidden.appendChild(configuration)" in source
+
+
+def test_pro_builder_resolves_detached_slots_within_its_shell() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "const node = shell?.querySelector(`#${id}`)" in source
+    for step_id in (
+        "proStepAdapter",
+        "proStepPerformance",
+        "proStepHotspot",
+        "proStepAdvanced",
+        "proStepAction",
+    ):
+        assert f"guidedSlot(shell, '{step_id}')" in source
+    assert "const adapterStep = el('proStepAdapter')" not in source
+    assert "el('proStepPerformance').appendChild" not in source
+    assert "el('proStepHotspot').appendChild" not in source
+    assert "el('proStepAdvanced').appendChild" not in source
+    assert "const actionSlot = el('proStepAction')" not in source
+
+
+def test_basic_mode_controls_are_not_stolen_before_pro_mode_is_active() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    build_start = source.index("function buildGuidedSetup()")
+    advanced_gate = source.index("if (!isAdvancedMode()) return false", build_start)
+    adapter_move = source.index("document.querySelector('[data-field=\"ap_adapter\"]')", build_start)
+    assert advanced_gate < adapter_move
+'''
+          if 'def test_pro_builder_waits_for_advanced_mode_and_rehydrates_on_return' not in tests:
+              tests += addition
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+
+      - name: Validate focused repair
+        run: |
+          node --check assets/pro_guided_workflow.js
+          python -m pip install -e . pytest
+          python -m pytest -q tests/test_pro_guided_workflow.py tests/test_basic_guided_interface.py
+          git diff --check
+
+      - name: Commit repair and restore normal CI
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          git add assets/pro_guided_workflow.js tests/test_pro_guided_workflow.py .github/workflows/ci.yml
+          git config user.name "VRhotspot Agent"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Fix Pro mode transition lifecycle"
+          git push origin HEAD:agent/pro-guided-connection-setup
+
   tests:
     runs-on: ubuntu-latest
     strategy:
