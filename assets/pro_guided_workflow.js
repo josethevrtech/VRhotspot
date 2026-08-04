@@ -601,35 +601,32 @@
     rescan.textContent = 'Rescan adapters';
     ensureChildOrder(row, [select, info, recommended, rescan]);
 
-    if (info.dataset.proAdapterDetailsWired !== '1') {
-      info.dataset.proAdapterDetailsWired = '1';
-      info.addEventListener('click', () => {
-        const expanded = info.getAttribute('aria-expanded') === 'true';
-        info.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-        details.hidden = expanded;
-        syncAdapterPresentation(select, info, details);
+    if (row.dataset.proAdapterWired !== '1') {
+      row.dataset.proAdapterWired = '1';
+      row.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const detailsControl = target?.closest('#proAdapterInfo');
+        if (detailsControl === info) {
+          const expanded = info.getAttribute('aria-expanded') === 'true';
+          info.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+          details.hidden = expanded;
+          syncAdapterPresentation(select, info, details);
+          return;
+        }
+        if (target === recommended || recommended.contains(target)) {
+          window.setTimeout(() => {
+            if (!isAdvancedMode()) return;
+            syncAdapterPresentation(select, info, details);
+            syncAdapterBandNotice();
+          }, 0);
+        }
       });
-    }
-
-    if (select.dataset.proAdapterPresentationWired !== '1') {
-      select.dataset.proAdapterPresentationWired = '1';
-      select.addEventListener('change', () => {
-        if (!isAdvancedMode()) return;
+      row.addEventListener('change', (event) => {
+        if (event.target !== select || !isAdvancedMode()) return;
         info.setAttribute('aria-expanded', 'false');
         details.hidden = true;
         syncAdapterPresentation(select, info, details);
         syncAdapterBandNotice();
-      });
-    }
-
-    if (recommended.dataset.proAdapterPresentationWired !== '1') {
-      recommended.dataset.proAdapterPresentationWired = '1';
-      recommended.addEventListener('click', () => {
-        window.setTimeout(() => {
-          if (!isAdvancedMode()) return;
-          syncAdapterPresentation(select, info, details);
-          syncAdapterBandNotice();
-        }, 0);
       });
     }
 
