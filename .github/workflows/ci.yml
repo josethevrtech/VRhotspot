@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   remove-pro-readiness-card:
-    if: github.ref == 'refs/heads/agent/pro-guided-authoritative-composer'
+    if: github.ref == 'refs/heads/agent/pro-guided-authoritative-composer' || github.head_ref == 'agent/pro-guided-authoritative-composer'
     runs-on: ubuntu-latest
 
     steps:
