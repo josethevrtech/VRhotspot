@@ -6,53 +6,32 @@ body[data-ui-mode="advanced"] .pro-password-field > .row {
 
 body[data-ui-mode="advanced"] .pro-adapter-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 9px;
   align-items: center;
 }
 
-body[data-ui-mode="advanced"] .pro-adapter-row select,
-body[data-ui-mode="advanced"] .pro-adapter-row .btn {
+body[data-ui-mode="advanced"] .pro-adapter-row #ap_adapter,
+body[data-ui-mode="advanced"] .pro-adapter-row #btnReloadAdapters {
   min-height: 46px;
 }
 
-body[data-ui-mode="advanced"] .pro-adapter-row .btn {
+body[data-ui-mode="advanced"] .pro-adapter-row #btnReloadAdapters {
+  padding-inline: 18px;
   white-space: nowrap;
 }
 
-body[data-ui-mode="advanced"] .pro-adapter-info {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  min-width: 42px;
-  padding: 0 !important;
-  border-radius: 50%;
-  color: var(--accent-primary);
-  font-family: Georgia, serif;
-  font-size: 17px;
-  font-weight: 700;
-  text-transform: lowercase;
+body[data-ui-mode="advanced"] #btnUseRecommended,
+body[data-ui-mode="advanced"] #proAdapterInfo,
+body[data-ui-mode="advanced"] #proAdapterDetails {
+  display: none !important;
 }
 
-body[data-ui-mode="advanced"] .pro-adapter-info[aria-expanded="true"] {
-  border-color: var(--border-active);
-  background: var(--accent-subtle);
-  box-shadow: var(--shadow-glow);
-}
-
-body[data-ui-mode="advanced"] .pro-adapter-details {
-  margin-top: 9px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-subtle);
+body[data-ui-mode="advanced"] .pro-adapter-summary {
+  margin: 9px 0 0;
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
-}
-
-body[data-ui-mode="advanced"] .pro-adapter-details[hidden] {
-  display: none !important;
 }
 
 body[data-ui-mode="advanced"] .pro-hotspot-fields {
@@ -254,5 +233,18 @@ body[data-ui-mode="advanced"] .pro-guided-secondary-actions .btn {
   body[data-ui-mode="advanced"] .pro-hotspot-fields > [data-field="enable_internet"],
   body[data-ui-mode="advanced"] .pro-guided-action-buttons > #btnStart {
     grid-column: auto;
+  }
+}
+
+/* 148-simple-adapter-mobile */
+
+@media (max-width: 760px) {
+  body[data-ui-mode="advanced"] .pro-adapter-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-ui-mode="advanced"] .pro-adapter-row #ap_adapter,
+  body[data-ui-mode="advanced"] .pro-adapter-row #btnReloadAdapters {
+    grid-column: 1;
   }
 }

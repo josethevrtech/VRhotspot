@@ -2747,6 +2747,10 @@ function enforceBandRules() {
   const is6 = (band === '6ghz');
   const is5 = (band === '5ghz');
 
+  if (!is6) {
+    setAdapterBandHint();
+  }
+
   if (bandPreferenceTip) {
     renderHintTip(bandPreferenceTip, '5 GHz: best default for VR streaming on most adapters.');
   }
@@ -2792,36 +2796,92 @@ function adapterSupportsBand(a, band) {
   return true;
 }
 
-function maybeAutoPickAdapterForBand() {
-  const rawBand = document.getElementById('band_preference').value;
-  const band = resolveBandPref(rawBand);
-  const sel = document.getElementById('ap_adapter');
+function setAdapterBandHint(message = '', warning = false) {
   const hint = document.getElementById('adapterHint');
-  if (!lastAdapters || !Array.isArray(lastAdapters.adapters)) return;
+  if (!hint) return;
+
+  hint.replaceChildren();
+
+  if (!message) {
+    hint.hidden = true;
+    hint.style.display = 'none';
+    return;
+  }
+
+  hint.hidden = false;
+  hint.style.display = '';
+
+  if (warning) {
+    const badge = document.createElement('span');
+    badge.className = 'pillWarn';
+    badge.textContent = message;
+    hint.appendChild(badge);
+    return;
+  }
+
+  hint.textContent = message;
+}
+
+function maybeAutoPickAdapterForBand() {
+  const bandSelect = document.getElementById('band_preference');
+  const adapterSelect = document.getElementById('ap_adapter');
+  if (!bandSelect || !adapterSelect) {
+    setAdapterBandHint();
+    return;
+  }
+
+  const band = resolveBandPref(bandSelect.value);
+
+  // Adapter capability warnings are relevant only when 6 GHz is selected.
+  if (band !== '6ghz') {
+    setAdapterBandHint();
+    return;
+  }
+
+  if (!lastAdapters || !Array.isArray(lastAdapters.adapters)) {
+    setAdapterBandHint();
+    return;
+  }
 
   const byIf = new Map();
-  for (const a of lastAdapters.adapters) byIf.set(a.ifname, a);
+  for (const adapter of lastAdapters.adapters) {
+    byIf.set(adapter.ifname, adapter);
+  }
 
-  const cur = sel.value;
-  const curA = byIf.get(cur);
+  const compatible = lastAdapters.adapters.filter(
+    (adapter) => adapter.supports_ap && adapter.supports_6ghz,
+  );
 
-  if (band === '6ghz') {
-    const any6 = lastAdapters.adapters.filter(a => a.supports_ap && a.supports_6ghz);
-    if (!any6.length) {
-      hint.innerHTML = "<span class='pillWarn'>No 6 GHz-capable AP adapter detected</span>";
-      return;
-    }
-    hint.textContent = "6 GHz requires an adapter that supports 6 GHz in AP mode.";
-    if (!curA || !adapterSupportsBand(curA, '6ghz')) {
-      // Prefer recommended if it also supports 6 GHz, else first 6G adapter.
-      const rec = lastAdapters.recommended;
-      const recA = byIf.get(rec);
-      const pick = (recA && recA.supports_ap && recA.supports_6ghz) ? rec : any6[0].ifname;
-      sel.value = pick;
-      setDirty(true);
-    }
-  } else {
-    hint.textContent = "";
+  if (!compatible.length) {
+    setAdapterBandHint(
+      'No 6 GHz-capable AP adapter detected',
+      true,
+    );
+    return;
+  }
+
+  setAdapterBandHint(
+    '6 GHz requires an adapter that supports 6 GHz in AP mode.',
+  );
+
+  const currentAdapter = byIf.get(adapterSelect.value);
+  if (currentAdapter && adapterSupportsBand(currentAdapter, '6ghz')) {
+    return;
+  }
+
+  const recommended = lastAdapters.recommended;
+  const recommendedAdapter = byIf.get(recommended);
+  const selected = (
+    recommendedAdapter &&
+    recommendedAdapter.supports_ap &&
+    recommendedAdapter.supports_6ghz
+  )
+    ? recommended
+    : compatible[0].ifname;
+
+  if (adapterSelect.value !== selected) {
+    adapterSelect.value = selected;
+    setDirty(true);
   }
 }
 
@@ -3259,6 +3319,111 @@ function applyConfig(cfg) {
   updateBasicQosBanner();
 }
 
+function adapterDisplayKind(adapter) {
+  const bus = String((adapter && adapter.bus) || '').trim().toLowerCase();
+  const identity = `${adapter?.name || ''} ${adapter?.ifname || ''}`.toLowerCase();
+
+  if (bus === 'usb' || identity.includes('usb')) {
+    return 'usb';
+  }
+
+  if (['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)) {
+    return 'internal';
+  }
+
+  return 'other';
+}
+
+function buildAdapterOptionDefinitions(adapters, mode, recommended) {
+  const rank = { usb: 0, internal: 1, other: 2 };
+
+  const ordered = adapters.slice().sort((left, right) => {
+    const leftRecommended = left.ifname === recommended ? 0 : 1;
+    const rightRecommended = right.ifname === recommended ? 0 : 1;
+
+    if (leftRecommended !== rightRecommended) {
+      return leftRecommended - rightRecommended;
+    }
+
+    const leftKind = adapterDisplayKind(left);
+    const rightKind = adapterDisplayKind(right);
+
+    if (rank[leftKind] !== rank[rightKind]) {
+      return rank[leftKind] - rank[rightKind];
+    }
+
+    return String(left.ifname || '').localeCompare(String(right.ifname || ''));
+  });
+
+  const counters = {
+    usb: 0,
+    internal: 0,
+    other: 0,
+  };
+
+  const definitions = [];
+
+  for (const adapter of ordered) {
+    const kind = adapterDisplayKind(adapter);
+
+    if (mode === 'basic' && kind !== 'usb') {
+      continue;
+    }
+
+    let label;
+
+    if (kind === 'usb') {
+      counters.usb += 1;
+      label = `USB Wi-Fi ${counters.usb}`;
+    } else if (kind === 'internal') {
+      label = `Internal Wi-Fi ${counters.internal}`;
+      counters.internal += 1;
+    } else {
+      counters.other += 1;
+      label = `Wi-Fi Adapter ${counters.other}`;
+    }
+
+    if (adapter.ifname === recommended) {
+      label += ' (Recommended)';
+    }
+
+    definitions.push({
+      value: adapter.ifname,
+      label,
+    });
+  }
+
+  return definitions;
+}
+
+function adapterOptionsAreCurrent(select, definitions) {
+  if (select.options.length !== definitions.length) {
+    return false;
+  }
+
+  return definitions.every((definition, index) => {
+    const option = select.options[index];
+    return (
+      option &&
+      option.value === definition.value &&
+      option.textContent === definition.label
+    );
+  });
+}
+
+function replaceAdapterOptions(select, definitions) {
+  const fragment = document.createDocumentFragment();
+
+  for (const definition of definitions) {
+    const option = document.createElement('option');
+    option.value = definition.value;
+    option.textContent = definition.label;
+    fragment.appendChild(option);
+  }
+
+  select.replaceChildren(fragment);
+}
+
 async function loadAdapters() {
   if (!isAuthenticated) return;
   let r;
@@ -3280,38 +3445,13 @@ async function loadAdapters() {
   // Preserve current selection if possible.
   const current = el.value;
 
-  el.innerHTML = '';
   const mode = getUiMode();
-  let basicUsbCount = 0;
+  const definitions = buildAdapterOptionDefinitions(list, mode, rec);
 
-  for (const a of list) {
-    // Basic Mode: Only show USB adapters (hide internal/PCI)
-    // Advanced Mode: Show all (internal + USB)
-    if (mode === 'basic') {
-      // If we detected bus info, enforce USB-only.
-      // If bus detection failed (unknown), we might default to hiding it to be safe, 
-      // or showing it. Given the request "only surface USB", we hide unless confirmed USB.
-      if (a.bus !== 'usb') {
-        continue;
-      }
-    }
-
-    const opt = document.createElement('option');
-    opt.value = a.ifname;
-
-    if (mode === 'basic') {
-      basicUsbCount++;
-      const recStr = (a.ifname === rec) ? ' (Recommended)' : '';
-      opt.textContent = `USB Wi-Fi ${basicUsbCount}${recStr}`;
-    } else {
-      const ap = a.supports_ap ? 'AP' : 'no-AP';
-      const caps = capsLabel(a);
-      const reg = a.regdom && a.regdom.country ? a.regdom.country : '--';
-      const star = (a.ifname === rec) ? '* ' : '';
-      opt.textContent = `${star}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
-    }
-
-    el.appendChild(opt);
+  // The adapter endpoint is refreshed repeatedly. Do not destroy and rebuild
+  // an unchanged native select because doing so visibly flashes its contents.
+  if (!adapterOptionsAreCurrent(el, definitions)) {
+    replaceAdapterOptions(el, definitions);
   }
   el.dataset.recommended = rec;
 
@@ -3912,8 +4052,10 @@ function bootstrapAuthenticatedUi() {
   wireQr();
   wireTabs();
 
-  // Load adapters first so the adapter select is populated before applying config.
-  loadAdapters()
+  // Load the saved config first so the adapter selector never paints
+  // a temporary recommended choice before restoring the configured adapter.
+  refresh()
+    .then(loadAdapters)
     .then(loadAdapterReadiness)
     .then(refresh)
     .then(() => {

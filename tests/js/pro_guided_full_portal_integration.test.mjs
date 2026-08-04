@@ -246,6 +246,54 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
     await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', `friendly adapter cycle ${cycle + 1}`);
     assertProLayout(document);
 
+    if (cycle === 0) {
+      const adapterSelect = document.getElementById('ap_adapter');
+      const originalOption = adapterSelect.options[0];
+
+      await window.loadAdapters();
+
+      assert.equal(
+        adapterSelect.options[0],
+        originalOption,
+        'an unchanged adapter inventory must preserve the existing option nodes',
+      );
+
+      const bandSelect = document.getElementById('band_preference');
+      const adapterHint = document.getElementById('adapterHint');
+
+      bandSelect.value = '5ghz';
+      window.enforceBandRules();
+      window.maybeAutoPickAdapterForBand();
+
+      assert.equal(adapterHint.hidden, true);
+      assert.equal(adapterHint.style.display, 'none');
+      assert.equal(adapterHint.textContent, '');
+
+      if (!Array.from(bandSelect.options).some((option) => option.value === '6ghz')) {
+        const option = document.createElement('option');
+        option.value = '6ghz';
+        option.textContent = '6 GHz';
+        bandSelect.appendChild(option);
+      }
+
+      bandSelect.value = '6ghz';
+      window.enforceBandRules();
+      window.maybeAutoPickAdapterForBand();
+
+      assert.equal(adapterHint.hidden, false);
+      assert.match(
+        adapterHint.textContent,
+        /No 6 GHz-capable AP adapter detected/,
+      );
+
+      bandSelect.value = '5ghz';
+      window.enforceBandRules();
+      window.maybeAutoPickAdapterForBand();
+
+      assert.equal(adapterHint.hidden, true);
+      assert.equal(adapterHint.textContent, '');
+    }
+
     toggleMode(window, false);
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'waiting-for-pro', `Basic restored cycle ${cycle + 1}`);
     await tick(window, 80);

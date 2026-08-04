@@ -89,7 +89,7 @@
   function ensureStyles() {
     const styles = [
       ['/assets/pro_guided_workflow.css?v=148-authoritative-composer', 'base'],
-      ['/assets/pro_guided_authoritative.css?v=148-ux-pass-1', 'authoritative'],
+      ['/assets/pro_guided_authoritative.css?v=148-simple-adapter-1', 'authoritative'],
     ];
     for (const [href, kind] of styles) {
       if (document.querySelector(`link[data-pro-guided-styles="${kind}"]`)) continue;
@@ -423,84 +423,64 @@
     }
   }
 
-  function adapterTechnicalSummary(adapter, ifname, fallback = '') {
-    if (!adapter) return fallback || `Interface: ${ifname || '--'}`;
-    const parts = [];
-    const name = String(adapter.name || adapter.model || '').trim();
-    if (name) parts.push(name);
-    parts.push(`Interface: ${ifname || adapter.ifname || '--'}`);
-    if (adapter.phy) parts.push(`Radio: ${adapter.phy}`);
-    const bus = String(adapter.bus || '').trim();
-    if (bus) parts.push(`Bus: ${bus.toUpperCase()}`);
-    const bands = [];
-    if (adapter.supports_2ghz) bands.push('2.4 GHz');
-    if (adapter.supports_5ghz) bands.push('5 GHz');
-    if (adapter.supports_6ghz) bands.push('6 GHz');
-    if (bands.length) parts.push(`Bands: ${bands.join(', ')}`);
-    parts.push(adapter.supports_ap ? 'AP mode supported' : 'AP mode not supported');
-    const country = adapter.regdom?.country || adapter.country || '';
-    if (country) parts.push(`Regulatory: ${country}`);
-    if (Number.isFinite(Number(adapter.score))) parts.push(`Score: ${adapter.score}`);
-    return parts.join(' · ');
-  }
-
   function adapterRecord(ifname) {
     try {
-      if (typeof getAdapterByIfname === 'function') return getAdapterByIfname(ifname);
+      if (typeof getAdapterByIfname === 'function') {
+        return getAdapterByIfname(ifname);
+      }
     } catch {
-      // The synthetic DOM fixture intentionally has no adapter inventory.
+      // Adapter inventory can initialize after the Pro surface.
     }
     return null;
   }
 
-  function friendlyAdapterKind(adapter, rawLabel) {
-    const bus = String(adapter?.bus || '').trim().toLowerCase();
-    const identity = `${bus} ${adapter?.name || ''} ${rawLabel || ''}`.toLowerCase();
-    if (bus === 'usb' || identity.includes('usb')) return 'usb';
-    if (['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)) return 'internal';
-    return adapter ? 'internal' : 'other';
+  function adapterBands(adapter) {
+    const bands = [];
+    if (adapter?.supports_2ghz) bands.push('2.4 GHz');
+    if (adapter?.supports_5ghz) bands.push('5 GHz');
+    if (adapter?.supports_6ghz) bands.push('6 GHz');
+    return bands;
   }
 
-  function syncFriendlyAdapterOptions(select) {
-    const counters = { usb: 0, internal: 0, other: 0 };
-    const recommended = String(select.dataset.recommended || '');
-    let selected = null;
+  function selectedAdapterSummary(select) {
+    const adapter = adapterRecord(select.value);
+    const label = String(
+      select.selectedOptions?.[0]?.textContent || ''
+    ).trim();
+    const bus = String(adapter?.bus || '').toLowerCase();
+    const isUsb = bus === 'usb' || label.toLowerCase().includes('usb');
+    const isInternal = (
+      ['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)
+      || label.toLowerCase().includes('internal')
+    );
+    const recommended = (
+      select.value === String(select.dataset.recommended || '')
+      || label.includes('(Recommended)')
+    );
+    const bands = adapterBands(adapter);
+    const support = bands.length
+      ? ` Supports ${bands.join(' and ')}.`
+      : '';
 
-    for (const option of Array.from(select.options)) {
-      const rawLabel = option.dataset.rawAdapterLabel || String(option.textContent || '').trim();
-      if (!option.dataset.rawAdapterLabel) option.dataset.rawAdapterLabel = rawLabel;
-      const adapter = adapterRecord(option.value);
-      const kind = friendlyAdapterKind(adapter, rawLabel);
-      let label;
-      if (kind === 'usb') {
-        counters.usb += 1;
-        label = `USB Wi-Fi ${counters.usb}`;
-      } else if (kind === 'internal') {
-        label = `Internal Wi-Fi ${counters.internal}`;
-        counters.internal += 1;
-      } else {
-        counters.other += 1;
-        label = `Wi-Fi Adapter ${counters.other}`;
-      }
-      if (option.value === recommended) label += ' (Recommended)';
-
-      const technical = adapterTechnicalSummary(adapter, option.value, rawLabel);
-      if (option.textContent !== label) option.textContent = label;
-      if (option.title !== technical) option.title = technical;
-      option.dataset.technicalLabel = technical;
-      if (option.selected) selected = { label, technical };
+    if (adapter && !adapter.supports_ap) {
+      return 'This adapter may not support hotspot mode.';
     }
-    return selected;
+
+    if (isUsb) {
+      return recommended
+        ? `Recommended for VR hotspot use.${support}`
+        : `USB Wi-Fi adapter selected.${support}`;
+    }
+
+    if (isInternal) {
+      return `Built-in Wi-Fi selected.${support} A USB adapter is recommended for better VR performance.`;
+    }
+
+    return `Wi-Fi adapter selected.${support}`;
   }
 
-  function syncAdapterPresentation(select, info, details) {
-    const selected = syncFriendlyAdapterOptions(select);
-    const technical = selected?.technical || 'Select a Wi-Fi adapter to view its technical identity.';
-    info.hidden = select.options.length === 0;
-    info.title = technical;
-    info.setAttribute('data-tip', technical);
-    info.setAttribute('aria-label', `Adapter details: ${technical}`);
-    setText(details, technical);
+  function syncAdapterSummary(select, summary) {
+    setText(summary, selectedAdapterSummary(select));
   }
 
   function decorateAdapter(shell) {
@@ -508,7 +488,7 @@
     const select = el('ap_adapter');
     const recommended = el('btnUseRecommended');
     const rescan = el('btnReloadAdapters');
-    if (!field || !select || !recommended || !rescan) return false;
+    if (!field || !select || !rescan) return false;
 
     prependIfNeeded(guidedSlot(shell, 'proStepAdapter'), field);
     field.classList.add('pro-adapter-field');
@@ -517,63 +497,33 @@
     let row = field.querySelector(':scope > .pro-adapter-row');
     if (!row) {
       rememberInternalHome(select);
-      rememberInternalHome(recommended);
       rememberInternalHome(rescan);
       row = make('div', 'pro-adapter-row pro-runtime-wrapper');
-      const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
+      const label = field.querySelector(
+        ':scope > label, :scope > .field-label-with-tip'
+      );
       if (label?.nextSibling) field.insertBefore(row, label.nextSibling);
       else field.prepend(row);
     }
 
-    let info = row.querySelector('#proAdapterInfo');
-    if (!info) {
-      info = make('button', 'btn pro-adapter-info tip', 'i');
-      info.id = 'proAdapterInfo';
-      info.type = 'button';
-      info.setAttribute('aria-expanded', 'false');
-      info.setAttribute('aria-controls', 'proAdapterDetails');
+    el('proAdapterInfo')?.remove();
+    el('proAdapterDetails')?.remove();
+
+    if (recommended) {
+      recommended.hidden = true;
+      recommended.setAttribute('aria-hidden', 'true');
     }
 
-    let details = field.querySelector(':scope > #proAdapterDetails');
-    if (!details) {
-      details = make('div', 'pro-adapter-details pro-runtime-wrapper');
-      details.id = 'proAdapterDetails';
-      details.hidden = true;
-      details.setAttribute('role', 'status');
-      field.appendChild(details);
-    }
+    setText(rescan, 'Rescan adapters');
+    ensureChildOrder(row, [select, rescan]);
 
-    recommended.hidden = false;
-    recommended.removeAttribute('aria-hidden');
-    recommended.textContent = 'Recommended';
-    rescan.textContent = 'Rescan adapters';
-    ensureChildOrder(row, [select, info, recommended, rescan]);
-
-    if (row.dataset.proAdapterWired !== '1') {
-      row.dataset.proAdapterWired = '1';
-      row.addEventListener('click', (event) => {
-        if (event.target === info) {
-          const expanded = info.getAttribute('aria-expanded') === 'true';
-          info.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-          details.hidden = expanded;
-          return;
-        }
-        if (event.target === recommended || recommended.contains(event.target)) {
-          window.setTimeout(() => syncAdapterPresentation(select, info, details), 0);
-        }
-      });
-      row.addEventListener('change', (event) => {
-        if (event.target !== select) return;
-        info.setAttribute('aria-expanded', 'false');
-        details.hidden = true;
-        syncAdapterPresentation(select, info, details);
-      });
-    }
-
-    syncAdapterPresentation(select, info, details);
+    el('proAdapterSummary')?.remove();
     field.dataset.proComposerDecorated = '1';
-    document.querySelectorAll('#tab-overview [data-adapter-readiness-card]')
-      .forEach((node) => node.remove());
+
+    document.querySelectorAll(
+      '#tab-overview [data-adapter-readiness-card]'
+    ).forEach((node) => node.remove());
+
     return true;
   }
 
@@ -658,7 +608,7 @@
     reveal.title = 'Show or hide password';
     reveal.setAttribute('aria-label', 'Show or hide password');
     qr.type = 'button';
-    qr.textContent = 'QR';
+    setText(qr, 'QR');
     qr.className = 'btn icon-only';
     qr.title = 'Show QR code';
     qr.setAttribute('aria-label', 'Show QR code');
@@ -934,13 +884,24 @@
   }
 
   function start() {
-    const observer = new MutationObserver(scheduleReconcile);
+    const observer = new MutationObserver((mutations) => {
+      const stage = document.body?.dataset.proGuidedStage || '';
+      const needsStructure = stage !== 'ready';
+      const relevant = mutations.some((mutation) => (
+        mutation.type === 'attributes'
+        || (needsStructure && mutation.type === 'childList')
+      ));
+
+      if (relevant) scheduleReconcile();
+    });
+
     observer.observe(document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['data-auth-state', 'data-ui-mode'],
     });
+
     window.addEventListener('pageshow', scheduleReconcile);
     window.addEventListener('load', scheduleReconcile, { once: true });
     document.addEventListener('visibilitychange', () => {
