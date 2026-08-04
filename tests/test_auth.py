@@ -183,7 +183,7 @@ def test_configured_token_accepts_supported_client_headers(monkeypatch, headers)
     assert payload["data"]["token_configured"] is True
 
 
-def test_authorization_uses_constant_time_string_comparison(monkeypatch):
+def test_authorization_uses_constant_time_byte_comparison(monkeypatch):
     monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "configured-secret")
     calls = []
     comparison = SimpleNamespace(
@@ -193,7 +193,7 @@ def test_authorization_uses_constant_time_string_comparison(monkeypatch):
     handler = _handler_with_headers({"X-Api-Token": "configured-secret"})
 
     assert handler._is_authorized() is True
-    assert calls == [("configured-secret", "configured-secret")]
+    assert calls == [(b"configured-secret", b"configured-secret")]
 
 
 def test_authorization_rejects_non_string_request_token_without_comparison_error(monkeypatch):
