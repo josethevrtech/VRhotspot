@@ -8,6 +8,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 GUARD = ROOT / "assets" / "adapter_interaction_guard.js"
 LOADER = ROOT / "assets" / "devhub_upload.js"
+STYLE = ROOT / "assets" / "pro_guided_authoritative.css"
 DEVHUB_API = ROOT / "backend" / "vr_hotspotd" / "devtools" / "devhub_api.py"
 
 
@@ -15,7 +16,9 @@ def test_guard_is_loaded_after_the_pro_workflow() -> None:
     source = LOADER.read_text(encoding="utf-8")
 
     workflow_index = source.index("/assets/pro_guided_workflow.js")
-    guard_index = source.index("/assets/adapter_interaction_guard.js?v=148-focus-guard-1")
+    guard_index = source.index(
+        "/assets/adapter_interaction_guard.js?v=148-step3-qr-1"
+    )
 
     assert guard_index > workflow_index
 
@@ -49,6 +52,46 @@ def test_guard_keeps_six_ghz_notice_contextual() -> None:
     assert "selectedBand() !== '6ghz'" in source
     assert "hint.hidden = true" in source
     assert "hint.style.display = 'none'" in source
+
+
+def test_step_three_runtime_organizes_the_six_connection_fields() -> None:
+    source = GUARD.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "organizeStepThreeAndRepairQr" in source
+    assert "#proStepHotspot .pro-hotspot-fields" in source
+    for key in (
+        "ssid",
+        "wpa2_passphrase",
+        "band_preference",
+        "ap_security",
+        "country",
+        "enable_internet",
+    ):
+        assert f"'{key}'" in source
+
+    assert '"ssid password"' in style
+    assert '"band security"' in style
+    assert '"country internet"' in style
+    assert "grid-template-columns: minmax(0, 1fr) 48px 48px" in style
+    assert ".pro-password-action" in style
+    assert '[data-field="enable_internet"]' in style
+
+
+def test_shared_qr_controller_handles_basic_and_pro_buttons() -> None:
+    source = GUARD.read_text(encoding="utf-8")
+
+    assert "btnShowQr" in source
+    assert "btnShowQrBasic" in source
+    assert "btnCloseQr" in source
+    assert "event.stopImmediatePropagation()" in source
+    assert "/v1/config/reveal_passphrase" in source
+    assert "JSON.stringify({ confirm: true })" in source
+    assert "WIFI:S:${escapeWifiValue(ssid)}" in source
+    assert "new QrConstructor(placeholder, options)" in source
+    assert "modal.style.display = 'flex'" in source
+    assert "modal.style.display = 'none'" in source
+    assert "aria-pressed" in source
 
 
 def test_guard_parses_with_node() -> None:
