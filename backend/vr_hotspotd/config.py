@@ -1,6 +1,8 @@
 import ipaddress
 import json
 import os
+import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
 
@@ -9,6 +11,7 @@ CONFIG_TMP = Path("/var/lib/vr-hotspot/config.json.tmp")
 CONFIG_SCHEMA_VERSION = 4
 INVALID_NETWORK_CONFIG = "invalid_network_config"
 _LAN_IPV4_PREFIX_LENGTH = 24
+_LINUX_IFNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "version": CONFIG_SCHEMA_VERSION,
@@ -105,13 +108,44 @@ class ConfigValidationError(ValueError):
 
 
 def validate_network_config(config: Mapping[str, Any]) -> list[str]:
-    """Validate the effective fixed-/24 LAN and strictly increasing DHCP range."""
+    """Validate network addresses and hostapd-bound configuration values."""
 
     cfg = DEFAULT_CONFIG.copy()
     if isinstance(config, Mapping):
         cfg.update(config)
 
     errors: list[str] = []
+    ssid = cfg.get("ssid")
+    if not isinstance(ssid, str) or not ssid:
+        errors.append("invalid_ssid")
+    elif any(unicodedata.category(char) == "Cc" for char in ssid):
+        errors.append("invalid_ssid_control_characters")
+    else:
+        try:
+            if len(ssid.encode("utf-8")) > 32:
+                errors.append("invalid_ssid_max_length_32_bytes")
+        except UnicodeEncodeError:
+            errors.append("invalid_ssid")
+
+    passphrase = cfg.get("wpa2_passphrase")
+    if isinstance(passphrase, str) and any(
+        unicodedata.category(char) == "Cc" for char in passphrase
+    ):
+        errors.append("invalid_passphrase_control_characters")
+
+    ap_adapter = cfg.get("ap_adapter")
+    if ap_adapter:
+        if (
+            not isinstance(ap_adapter, str)
+            or len(ap_adapter) > 15
+            or ap_adapter.startswith("-")
+            or ap_adapter in {".", ".."}
+            or not _LINUX_IFNAME_RE.fullmatch(ap_adapter)
+        ):
+            errors.append("invalid_ap_adapter")
+    elif ap_adapter not in ("", None):
+        errors.append("invalid_ap_adapter")
+
     parsed: Dict[str, ipaddress.IPv4Address] = {}
     for field in ("lan_gateway_ip", "dhcp_start_ip", "dhcp_end_ip"):
         value = cfg.get(field)

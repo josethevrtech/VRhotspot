@@ -1,6 +1,7 @@
 import copy
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -423,7 +424,16 @@ class APIHandler(BaseHTTPRequestHandler):
         tok = self._env_token()
         if not tok:
             return False
-        return self._get_req_token() == tok
+        request_token = self._get_req_token()
+        if not isinstance(request_token, str):
+            return False
+        try:
+            request_bytes = request_token.encode("utf-8", "surrogateescape")
+            expected_bytes = tok.encode("utf-8", "surrogateescape")
+        except UnicodeEncodeError:
+            request_bytes = request_token.encode("utf-8", "surrogatepass")
+            expected_bytes = tok.encode("utf-8", "surrogatepass")
+        return hmac.compare_digest(request_bytes, expected_bytes)
 
     def _require_auth(self, cid: str) -> bool:
         if not self._env_token():

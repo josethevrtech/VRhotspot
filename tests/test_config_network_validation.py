@@ -112,6 +112,41 @@ def test_single_address_dhcp_range_is_rejected():
 
 
 @pytest.mark.parametrize(
+    ("updates", "expected_error"),
+    (
+        ({"ssid": "bad\nssid=attacker"}, "invalid_ssid_control_characters"),
+        ({"ssid": "bad\rssid=attacker"}, "invalid_ssid_control_characters"),
+        ({"ssid": "bad\x00ssid=attacker"}, "invalid_ssid_control_characters"),
+        ({"ssid": "bad\x1fssid=attacker"}, "invalid_ssid_control_characters"),
+        ({"ssid": "x" * 33}, "invalid_ssid_max_length_32_bytes"),
+        ({"ssid": "é" * 17}, "invalid_ssid_max_length_32_bytes"),
+        ({"wpa2_passphrase": "password\nwpa=0"}, "invalid_passphrase_control_characters"),
+        ({"wpa2_passphrase": "password\rwpa=0"}, "invalid_passphrase_control_characters"),
+        ({"wpa2_passphrase": "password\x00wpa=0"}, "invalid_passphrase_control_characters"),
+        ({"wpa2_passphrase": "password\x1fwpa=0"}, "invalid_passphrase_control_characters"),
+        ({"ap_adapter": "../wlan0"}, "invalid_ap_adapter"),
+        ({"ap_adapter": "-wlan0"}, "invalid_ap_adapter"),
+        ({"ap_adapter": "wlan0/extra"}, "invalid_ap_adapter"),
+        ({"ap_adapter": "wlan-interface-16"}, "invalid_ap_adapter"),
+    ),
+)
+def test_network_config_rejects_unsafe_wireless_inputs(updates, expected_error):
+    assert expected_error in config.validate_network_config(_config(**updates))
+
+
+def test_network_config_accepts_existing_wireless_inputs_at_byte_boundaries():
+    candidate = _config(
+        ssid="é" * 16,
+        wpa2_passphrase="Existing compatible passphrase!",
+        ap_adapter="wlp2s0.1-test00",
+    )
+
+    assert len(candidate["ssid"].encode("utf-8")) == 32
+    assert len(candidate["ap_adapter"]) == 15
+    assert config.validate_network_config(candidate) == []
+
+
+@pytest.mark.parametrize(
     ("engine", "extra_args"),
     (
         (
@@ -291,6 +326,34 @@ def test_config_api_preserves_valid_update_behavior(monkeypatch):
     assert payload["result_code"] == "config_saved"
     assert payload["data"]["dhcp_end_ip"] == "192.168.68.200"
     assert writes == [{"dhcp_end_ip": "192.168.68.200"}]
+
+
+@pytest.mark.parametrize(
+    ("updates", "expected_error"),
+    (
+        ({"ssid": "bad\nssid=attacker"}, "invalid_ssid_control_characters"),
+        ({"wpa2_passphrase": "password\rwpa=0"}, "invalid_passphrase_control_characters"),
+        ({"ap_adapter": "../wlan0"}, "invalid_ap_adapter"),
+    ),
+)
+def test_config_api_rejects_unsafe_wireless_inputs_without_persisting(
+    monkeypatch,
+    updates,
+    expected_error,
+):
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
+    monkeypatch.setattr(api, "load_config_snapshot", lambda: _config())
+    writes = []
+    monkeypatch.setattr(api, "write_config_file", lambda value: writes.append(value))
+    handler = _api_handler(path="/v1/config", body={"config": updates})
+
+    handler.do_POST()
+    payload = _response_json(handler)
+
+    assert handler._last_code == 400
+    assert payload["result_code"] == config.INVALID_NETWORK_CONFIG
+    assert expected_error in payload["data"]["validation_errors"]
+    assert writes == []
 
 
 @pytest.mark.parametrize("path", ("/v1/start", "/v1/restart"))

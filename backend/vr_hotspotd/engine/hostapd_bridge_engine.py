@@ -10,6 +10,7 @@ import time
 from typing import List, Optional, Tuple
 
 from vr_hotspotd import host_probes
+from vr_hotspotd.config import ConfigValidationError, validate_network_config
 from vr_hotspotd.engine.secret_io import (
     add_passphrase_arguments,
     read_passphrase,
@@ -189,6 +190,12 @@ def _write_hostapd_conf(
     short_guard_interval: bool = True,
     tx_power: Optional[int] = None,
 ) -> None:
+    validation_errors = validate_network_config(
+        {"ssid": ssid, "wpa2_passphrase": passphrase, "ap_adapter": ifname}
+    )
+    if validation_errors:
+        raise ConfigValidationError(validation_errors)
+
     cc = (country or "").strip().upper()
     
     # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
