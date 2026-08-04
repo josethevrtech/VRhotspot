@@ -89,7 +89,7 @@
   function ensureStyles() {
     const styles = [
       ['/assets/pro_guided_workflow.css?v=148-authoritative-composer', 'base'],
-      ['/assets/pro_guided_authoritative.css?v=148-authoritative-composer', 'authoritative'],
+      ['/assets/pro_guided_authoritative.css?v=148-ux-pass-1', 'authoritative'],
     ];
     for (const [href, kind] of styles) {
       if (document.querySelector(`link[data-pro-guided-styles="${kind}"]`)) continue;
@@ -423,6 +423,86 @@
     }
   }
 
+  function adapterTechnicalSummary(adapter, ifname, fallback = '') {
+    if (!adapter) return fallback || `Interface: ${ifname || '--'}`;
+    const parts = [];
+    const name = String(adapter.name || adapter.model || '').trim();
+    if (name) parts.push(name);
+    parts.push(`Interface: ${ifname || adapter.ifname || '--'}`);
+    if (adapter.phy) parts.push(`Radio: ${adapter.phy}`);
+    const bus = String(adapter.bus || '').trim();
+    if (bus) parts.push(`Bus: ${bus.toUpperCase()}`);
+    const bands = [];
+    if (adapter.supports_2ghz) bands.push('2.4 GHz');
+    if (adapter.supports_5ghz) bands.push('5 GHz');
+    if (adapter.supports_6ghz) bands.push('6 GHz');
+    if (bands.length) parts.push(`Bands: ${bands.join(', ')}`);
+    parts.push(adapter.supports_ap ? 'AP mode supported' : 'AP mode not supported');
+    const country = adapter.regdom?.country || adapter.country || '';
+    if (country) parts.push(`Regulatory: ${country}`);
+    if (Number.isFinite(Number(adapter.score))) parts.push(`Score: ${adapter.score}`);
+    return parts.join(' · ');
+  }
+
+  function adapterRecord(ifname) {
+    try {
+      if (typeof getAdapterByIfname === 'function') return getAdapterByIfname(ifname);
+    } catch {
+      // The synthetic DOM fixture intentionally has no adapter inventory.
+    }
+    return null;
+  }
+
+  function friendlyAdapterKind(adapter, rawLabel) {
+    const bus = String(adapter?.bus || '').trim().toLowerCase();
+    const identity = `${bus} ${adapter?.name || ''} ${rawLabel || ''}`.toLowerCase();
+    if (bus === 'usb' || identity.includes('usb')) return 'usb';
+    if (['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)) return 'internal';
+    return adapter ? 'internal' : 'other';
+  }
+
+  function syncFriendlyAdapterOptions(select) {
+    const counters = { usb: 0, internal: 0, other: 0 };
+    const recommended = String(select.dataset.recommended || '');
+    let selected = null;
+
+    for (const option of Array.from(select.options)) {
+      const rawLabel = option.dataset.rawAdapterLabel || String(option.textContent || '').trim();
+      if (!option.dataset.rawAdapterLabel) option.dataset.rawAdapterLabel = rawLabel;
+      const adapter = adapterRecord(option.value);
+      const kind = friendlyAdapterKind(adapter, rawLabel);
+      let label;
+      if (kind === 'usb') {
+        counters.usb += 1;
+        label = `USB Wi-Fi ${counters.usb}`;
+      } else if (kind === 'internal') {
+        label = `Internal Wi-Fi ${counters.internal}`;
+        counters.internal += 1;
+      } else {
+        counters.other += 1;
+        label = `Wi-Fi Adapter ${counters.other}`;
+      }
+      if (option.value === recommended) label += ' (Recommended)';
+
+      const technical = adapterTechnicalSummary(adapter, option.value, rawLabel);
+      if (option.textContent !== label) option.textContent = label;
+      if (option.title !== technical) option.title = technical;
+      option.dataset.technicalLabel = technical;
+      if (option.selected) selected = { label, technical };
+    }
+    return selected;
+  }
+
+  function syncAdapterPresentation(select, info, details) {
+    const selected = syncFriendlyAdapterOptions(select);
+    const technical = selected?.technical || 'Select a Wi-Fi adapter to view its technical identity.';
+    info.hidden = select.options.length === 0;
+    info.title = technical;
+    info.setAttribute('data-tip', technical);
+    info.setAttribute('aria-label', `Adapter details: ${technical}`);
+    setText(details, technical);
+  }
+
   function decorateAdapter(shell) {
     const field = document.querySelector('[data-field="ap_adapter"]');
     const select = el('ap_adapter');
@@ -433,22 +513,65 @@
     prependIfNeeded(guidedSlot(shell, 'proStepAdapter'), field);
     field.classList.add('pro-adapter-field');
     field.dataset.proDensityReady = '1';
-    if (field.dataset.proComposerDecorated !== '1') {
+
+    let row = field.querySelector(':scope > .pro-adapter-row');
+    if (!row) {
       rememberInternalHome(select);
       rememberInternalHome(recommended);
       rememberInternalHome(rescan);
-      const row = make('div', 'pro-adapter-row pro-runtime-wrapper');
-      row.append(select, recommended, rescan);
+      row = make('div', 'pro-adapter-row pro-runtime-wrapper');
       const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
       if (label?.nextSibling) field.insertBefore(row, label.nextSibling);
       else field.prepend(row);
-      recommended.hidden = false;
-      recommended.removeAttribute('aria-hidden');
-      recommended.textContent = 'Recommended';
-      rescan.textContent = 'Rescan adapters';
-      field.dataset.proComposerDecorated = '1';
     }
 
+    let info = row.querySelector('#proAdapterInfo');
+    if (!info) {
+      info = make('button', 'btn pro-adapter-info tip', 'i');
+      info.id = 'proAdapterInfo';
+      info.type = 'button';
+      info.setAttribute('aria-expanded', 'false');
+      info.setAttribute('aria-controls', 'proAdapterDetails');
+    }
+
+    let details = field.querySelector(':scope > #proAdapterDetails');
+    if (!details) {
+      details = make('div', 'pro-adapter-details pro-runtime-wrapper');
+      details.id = 'proAdapterDetails';
+      details.hidden = true;
+      details.setAttribute('role', 'status');
+      field.appendChild(details);
+    }
+
+    recommended.hidden = false;
+    recommended.removeAttribute('aria-hidden');
+    recommended.textContent = 'Recommended';
+    rescan.textContent = 'Rescan adapters';
+    ensureChildOrder(row, [select, info, recommended, rescan]);
+
+    if (row.dataset.proAdapterWired !== '1') {
+      row.dataset.proAdapterWired = '1';
+      row.addEventListener('click', (event) => {
+        if (event.target === info) {
+          const expanded = info.getAttribute('aria-expanded') === 'true';
+          info.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+          details.hidden = expanded;
+          return;
+        }
+        if (event.target === recommended || recommended.contains(event.target)) {
+          window.setTimeout(() => syncAdapterPresentation(select, info, details), 0);
+        }
+      });
+      row.addEventListener('change', (event) => {
+        if (event.target !== select) return;
+        info.setAttribute('aria-expanded', 'false');
+        details.hidden = true;
+        syncAdapterPresentation(select, info, details);
+      });
+    }
+
+    syncAdapterPresentation(select, info, details);
+    field.dataset.proComposerDecorated = '1';
     document.querySelectorAll('#tab-overview [data-adapter-readiness-card]')
       .forEach((node) => node.remove());
     return true;
@@ -503,19 +626,33 @@
     return true;
   }
 
+  function setHotspotFieldLabel(field, text) {
+    const label = field?.querySelector(':scope > label, :scope > .field-label-with-tip > label');
+    if (label) setText(label, text);
+  }
+
   function decoratePassword(field) {
     const input = el('wpa2_passphrase');
     const reveal = el('btnRevealPass');
     const qr = el('btnShowQr');
+    const hint = el('passHint');
     if (!field || !input || !reveal || !qr) return;
     field.classList.add('pro-password-field');
     field.dataset.proDensityReady = '1';
-    if (field.dataset.proComposerDecorated === '1') return;
+    setHotspotFieldLabel(field, 'Password');
 
-    rememberInternalHome(input);
-    rememberInternalHome(reveal);
-    rememberInternalHome(qr);
-    const row = make('div', 'pro-password-row pro-runtime-wrapper');
+    let row = field.querySelector(':scope > .pro-password-row');
+    if (!row) {
+      rememberInternalHome(input);
+      rememberInternalHome(reveal);
+      rememberInternalHome(qr);
+      if (hint) rememberInternalHome(hint);
+      row = make('div', 'pro-password-row pro-runtime-wrapper');
+      const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
+      if (label?.nextSibling) field.insertBefore(row, label.nextSibling);
+      else field.prepend(row);
+    }
+
     reveal.type = 'button';
     reveal.classList.add('icon-only');
     reveal.title = 'Show or hide password';
@@ -525,10 +662,12 @@
     qr.className = 'btn icon-only';
     qr.title = 'Show QR code';
     qr.setAttribute('aria-label', 'Show QR code');
-    row.append(input, reveal, qr);
-    const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
-    if (label?.nextSibling) field.insertBefore(row, label.nextSibling);
-    else field.prepend(row);
+    ensureChildOrder(row, [input, reveal, qr]);
+
+    if (hint) {
+      hint.classList.add('pro-password-hint');
+      appendIfNeeded(field, hint);
+    }
     field.dataset.proComposerDecorated = '1';
   }
 
@@ -538,12 +677,26 @@
       fields = make('div', 'pro-hotspot-fields');
       guidedSlot(shell, 'proStepHotspot').appendChild(fields);
     }
+    fields.dataset.proLayout = 'organized';
+
+    const labels = {
+      ssid: 'Hotspot name (SSID)',
+      wpa2_passphrase: 'Password',
+      band_preference: 'Band',
+      ap_security: 'Security',
+      country: 'Country',
+    };
+    const ordered = [];
     for (const key of CONNECTION_FIELDS) {
       const field = document.querySelector(`[data-field="${key}"]`);
       if (!field) return false;
-      appendIfNeeded(fields, field);
+      field.classList.add('pro-hotspot-field');
+      field.dataset.proHotspotKey = key;
+      if (labels[key]) setHotspotFieldLabel(field, labels[key]);
       if (key === 'wpa2_passphrase') decoratePassword(field);
+      ordered.push(field);
     }
+    ensureChildOrder(fields, ordered);
     return true;
   }
 

@@ -20,7 +20,7 @@ def test_pro_runtime_is_loaded_as_versioned_authoritative_asset() -> None:
     source = LOADER.read_text(encoding="utf-8")
 
     assert "/assets/browser_session.js?v=139-session-hotfix" in source
-    assert "/assets/pro_guided_workflow.js?v=148-authoritative-composer" in source
+    assert "/assets/pro_guided_workflow.js?v=148-ux-pass-1" in source
     assert "pro_guided_readiness.js" not in source
     assert "script.async = false" in source
     assert "polishProSetupDensity" not in source
@@ -31,7 +31,7 @@ def test_pro_setup_is_one_authoritative_five_step_workflow() -> None:
 
     assert "buildProGuidedWorkflow" in source
     assert "window.VRHOTSPOT_PRO_COMPOSER = 'authoritative-v1'" in source
-    assert "/assets/pro_guided_authoritative.css?v=148-authoritative-composer" in source
+    assert "/assets/pro_guided_authoritative.css?v=148-ux-pass-1" in source
     for number, step_id in enumerate(
         (
             "proStepAdapter",
@@ -98,7 +98,10 @@ def test_step_three_contains_the_complete_connection_setup() -> None:
         assert f"'{field}'" in source
     assert "hotspot name, password, band, security, country" in source
     assert ".pro-hotspot-fields" in style
-    assert "repeat(2, minmax(0, 1fr))" in style
+    assert "repeat(6, minmax(0, 1fr))" in style
+    assert "[data-field=\"ssid\"]" in style
+    assert "[data-field=\"wpa2_passphrase\"]" in style
+    assert "[data-field=\"enable_internet\"]" in style
 
 
 def test_step_four_exposes_detailed_wireless_network_and_system_groups() -> None:
@@ -126,6 +129,8 @@ def test_step_five_keeps_start_save_restart_and_repair_actions() -> None:
     assert "Apply Changes & Restart" in source
     assert ".pro-guided-save-actions" in style
     assert ".pro-guided-secondary-actions" in style
+    assert "repeat(3, minmax(0, 1fr))" in style
+    assert "display: contents" in style
 
 
 def test_adapter_and_password_compaction_are_reversible() -> None:
@@ -140,6 +145,12 @@ def test_adapter_and_password_compaction_are_reversible() -> None:
     assert "rememberInternalHome(qr)" in source
     assert "recommended.hidden = false" in source
     assert "Rescan adapters" in source
+    assert "USB Wi-Fi ${counters.usb}" in source
+    assert "Internal Wi-Fi ${counters.internal}" in source
+    assert "adapterTechnicalSummary" in source
+    assert "proAdapterInfo" in source
+    assert "proAdapterDetails" in source
+    assert "ensureChildOrder(row, [input, reveal, qr])" in source
     assert ".pro-adapter-row" in style
     assert ".pro-password-row" in style
 

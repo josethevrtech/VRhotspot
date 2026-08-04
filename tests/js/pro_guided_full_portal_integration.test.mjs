@@ -55,17 +55,23 @@ function apiPayload(url) {
   }
   if (path === '/v1/adapters') {
     return {
-      adapters: [{
-        ifname: 'wlan1',
-        name: 'Test USB Wi-Fi adapter',
-        recommended: true,
-        score: 100,
-        supports_2ghz: true,
-        supports_5ghz: true,
-        supports_6ghz: false,
-        reasons: ['USB adapter', '5 GHz AP capable'],
-      }],
-      recommended: 'wlan1',
+      data: {
+        adapters: [{
+          ifname: 'wlan1',
+          name: 'Test USB Wi-Fi adapter',
+          bus: 'usb',
+          phy: 'phy2',
+          recommended: true,
+          score: 100,
+          supports_ap: true,
+          supports_2ghz: true,
+          supports_5ghz: true,
+          supports_6ghz: false,
+          regdom: { country: 'US' },
+          reasons: ['USB adapter', '5 GHz AP capable'],
+        }],
+        recommended: 'wlan1',
+      },
     };
   }
   if (path.includes('preflight')) {
@@ -171,6 +177,12 @@ function assertProLayout(document) {
     ['1', '2', '3', '4', '5'],
   );
   assert.ok(document.querySelector('#proStepAdapter [data-field="ap_adapter"]'));
+  const adapterSelect = document.getElementById('ap_adapter');
+  assert.equal(adapterSelect?.selectedOptions[0]?.textContent, 'USB Wi-Fi 1 (Recommended)');
+  const adapterInfo = document.getElementById('proAdapterInfo');
+  assert.ok(adapterInfo, 'adapter information affordance must exist');
+  assert.match(adapterInfo.getAttribute('data-tip') || '', /wlan1/);
+  assert.ok(document.getElementById('proAdapterDetails'));
   assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);
   assert.ok(document.querySelector('#proStepPerformance .preset-bar'));
   for (const key of CONNECTION_FIELDS) {
@@ -231,6 +243,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   for (let cycle = 0; cycle < 3; cycle += 1) {
     toggleMode(window, true);
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', `Pro ready cycle ${cycle + 1}`);
+    await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', `friendly adapter cycle ${cycle + 1}`);
     assertProLayout(document);
 
     toggleMode(window, false);
@@ -241,6 +254,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
 
   toggleMode(window, true);
   await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', 'final Pro composition');
+  await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', 'final friendly adapter label');
   assertProLayout(document);
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);
