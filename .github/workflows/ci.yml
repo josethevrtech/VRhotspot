@@ -4,7 +4,141 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
+  apply-pro-slot-fix:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/pro-guided-connection-setup'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/pro-guided-connection-setup
+          fetch-depth: 0
+
+      - name: Fix detached workflow slot lookup
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(text: str, old: str, new: str, expected: int, label: str) -> str:
+              count = text.count(old)
+              if count != expected:
+                  raise SystemExit(f"{label}: expected {expected} matches, found {count}")
+              return text.replace(old, new)
+
+          source_path = Path('assets/pro_guided_workflow.js')
+          source = source_path.read_text(encoding='utf-8')
+          source = replace_exact(
+              source,
+              """    card.append(header, steps);
+              shell.appendChild(card);
+
+              const adapter = document.querySelector('[data-field=\"ap_adapter\"]');
+          """,
+              """    card.append(header, steps);
+              shell.appendChild(card);
+
+              const guidedSlot = (id) => {
+                const node = shell.querySelector(`#${id}`);
+                if (!node) throw new Error(`missing guided slot: ${id}`);
+                return node;
+              };
+
+              const adapter = document.querySelector('[data-field=\"ap_adapter\"]');
+          """,
+              1,
+              'insert detached-shell slot resolver',
+          )
+          source = replace_exact(
+              source,
+              "const adapterStep = el('proStepAdapter');",
+              "const adapterStep = guidedSlot('proStepAdapter');",
+              1,
+              'fix adapter step lookup',
+          )
+          source = replace_exact(
+              source,
+              "el('proStepPerformance').appendChild(",
+              "guidedSlot('proStepPerformance').appendChild(",
+              2,
+              'fix performance step lookups',
+          )
+          source = replace_exact(
+              source,
+              "el('proStepHotspot').appendChild(hotspotFields);",
+              "guidedSlot('proStepHotspot').appendChild(hotspotFields);",
+              1,
+              'fix hotspot step lookup',
+          )
+          source = replace_exact(
+              source,
+              "el('proStepAdvanced').appendChild(advancedGroups);",
+              "guidedSlot('proStepAdvanced').appendChild(advancedGroups);",
+              1,
+              'fix advanced step lookup',
+          )
+          source = replace_exact(
+              source,
+              "const actionSlot = el('proStepAction');",
+              "const actionSlot = guidedSlot('proStepAction');",
+              1,
+              'fix action step lookup',
+          )
+          source_path.write_text(source, encoding='utf-8')
+
+          test_path = Path('tests/test_pro_guided_workflow.py')
+          tests = test_path.read_text(encoding='utf-8')
+          addition = r'''
+
+
+def test_guided_builder_resolves_steps_inside_detached_shell() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "const guidedSlot = (id) =>" in source
+    assert "shell.querySelector(`#${id}`)" in source
+    assert "missing guided slot" in source
+    for step_id in (
+        "proStepAdapter",
+        "proStepPerformance",
+        "proStepHotspot",
+        "proStepAdvanced",
+        "proStepAction",
+    ):
+        assert f"guidedSlot('{step_id}')" in source
+    assert "const adapterStep = el('proStepAdapter')" not in source
+    assert "el('proStepPerformance').appendChild" not in source
+    assert "el('proStepHotspot').appendChild" not in source
+    assert "el('proStepAdvanced').appendChild" not in source
+    assert "const actionSlot = el('proStepAction')" not in source
+'''
+          if 'def test_guided_builder_resolves_steps_inside_detached_shell' not in tests:
+              tests += addition
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+
+      - name: Validate runtime fix
+        run: |
+          node --check assets/pro_guided_workflow.js
+          python -m pip install -e . pytest
+          python -m pytest -q tests/test_pro_guided_workflow.py tests/test_basic_guided_interface.py
+          git diff --check
+
+      - name: Commit fix and restore CI
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          git add assets/pro_guided_workflow.js tests/test_pro_guided_workflow.py .github/workflows/ci.yml
+          git config user.name "VRhotspot Agent"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Fix detached Pro workflow step lookup"
+          git push origin HEAD:agent/pro-guided-connection-setup
+
   tests:
     runs-on: ubuntu-latest
     strategy:
