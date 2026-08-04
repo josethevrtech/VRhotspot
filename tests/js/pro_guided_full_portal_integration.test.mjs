@@ -23,6 +23,10 @@ const CONNECTION_FIELDS = [
   'enable_internet',
 ];
 
+function field(key, control) {
+  return `<div class="form-group" data-field="${key}"><label>${key}</label>${control}</div>`;
+}
+
 function apiPayload(url) {
   const path = new URL(String(url), 'http://127.0.0.1:8732').pathname;
   if (path === '/v1/status') {
@@ -103,11 +107,13 @@ function installBrowserStubs(window) {
     clear() {}
     makeCode() {}
   };
-  window.Chart = class {
+  class ChartStub {
     constructor() {}
     destroy() {}
     update() {}
-  };
+  }
+  ChartStub.defaults = { color: '', borderColor: '', font: { family: '' } };
+  window.Chart = ChartStub;
   window.HTMLCanvasElement.prototype.getContext = () => ({});
   window.HTMLElement.prototype.scrollIntoView = () => {};
   window.confirm = () => true;
