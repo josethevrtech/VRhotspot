@@ -147,15 +147,16 @@ function toggleMode(window, advanced) {
 function assertBasicLayout(document) {
   assert.equal(document.body.dataset.uiMode, 'basic');
   assert.equal(document.getElementById('proGuidedWorkflow'), null);
-  for (const key of BASIC_QUICK_FIELDS) {
+  assert.ok(document.querySelector('#basicGuidedAdapterSlot [data-field="ap_adapter"]'));
+  assert.ok(document.querySelector('#basicGuidedProfileSlot [data-field="qos_preset"]'));
+  assert.ok(document.querySelector('#basicGuidedSsidSlot [data-field="ssid"]'));
+  for (const key of ['band_preference', 'ap_security', 'country', 'enable_internet']) {
     assert.ok(
-      document.querySelector(`#basicQuickFields [data-field="${key}"]`),
-      `${key} should be in the production Basic quick-fields container`,
+      document.querySelector(`#basicGuidedTechnicalDefaults [data-field="${key}"]`),
+      `${key} should be in the production Basic technical-default container`,
     );
   }
-  assert.ok(document.querySelector('#basicConnectFields [data-field="ssid"]'));
-  assert.equal(document.querySelector('#basicQuickFields .pro-runtime-wrapper'), null);
-  assert.equal(document.querySelector('#basicConnectFields .pro-runtime-wrapper'), null);
+  assert.equal(document.querySelector('[data-ui-section="basic"] .pro-runtime-wrapper'), null);
 }
 
 function assertProLayout(document) {
