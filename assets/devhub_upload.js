@@ -278,12 +278,172 @@
 
   const assets = [
     '/assets/browser_session.js?v=139-session-hotfix',
-    '/assets/pro_guided_workflow.js?v=148-adapter-details-2',
+    '/assets/pro_guided_workflow.js?v=148-adapter-controls-3',
   ];
   for (const src of assets) {
     const script = document.createElement('script');
     script.src = src;
     script.async = false;
     document.head.appendChild(script);
+  }
+})();
+
+(function stabilizeProAdapterControl() {
+  'use strict';
+
+  let observedSelect = null;
+  let optionsObserver = null;
+  let normalizing = false;
+  let reconcileQueued = false;
+
+  function isProMode() {
+    return document.body?.dataset.uiMode === 'advanced';
+  }
+
+  function adapterRecord(ifname) {
+    try {
+      if (typeof getAdapterByIfname === 'function') return getAdapterByIfname(ifname);
+    } catch {
+      // The Pro adapter surface can initialize before the inventory helper is ready.
+    }
+    return null;
+  }
+
+  function adapterKind(adapter, rawLabel) {
+    const bus = String(adapter?.bus || '').trim().toLowerCase();
+    const identity = `${bus} ${adapter?.name || ''} ${rawLabel || ''}`.toLowerCase();
+    if (bus === 'usb' || identity.includes('usb')) return 'usb';
+    if (['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)) return 'internal';
+    return adapter ? 'internal' : 'other';
+  }
+
+  function ensureSelectedLabel(row) {
+    let label = row.querySelector(':scope > .pro-adapter-selected-label');
+    if (!label) {
+      label = document.createElement('span');
+      label.className = 'pro-adapter-selected-label pro-runtime-wrapper';
+      label.setAttribute('aria-hidden', 'true');
+      row.prepend(label);
+    }
+    return label;
+  }
+
+  function normalizeOptions(select) {
+    if (!isProMode()) return '';
+    const row = select.closest('.pro-adapter-row');
+    if (!row) return '';
+
+    const counters = { usb: 0, internal: 0, other: 0 };
+    const recommended = String(select.dataset.recommended || '');
+    let selectedLabel = '';
+    normalizing = true;
+    try {
+      for (const option of Array.from(select.options)) {
+        const rawLabel = option.dataset.rawAdapterLabel || String(option.textContent || '').trim();
+        if (!option.dataset.rawAdapterLabel) option.dataset.rawAdapterLabel = rawLabel;
+        const adapter = adapterRecord(option.value);
+        const kind = adapterKind(adapter, rawLabel);
+        let label;
+        if (kind === 'usb') {
+          counters.usb += 1;
+          label = `USB Wi-Fi ${counters.usb}`;
+        } else if (kind === 'internal') {
+          label = `Internal Wi-Fi ${counters.internal}`;
+          counters.internal += 1;
+        } else {
+          counters.other += 1;
+          label = `Wi-Fi Adapter ${counters.other}`;
+        }
+        if (option.value === recommended) label += ' (Recommended)';
+        if (option.textContent !== label) option.textContent = label;
+        option.removeAttribute('title');
+        if (option.selected) selectedLabel = label;
+      }
+    } finally {
+      normalizing = false;
+    }
+
+    const display = ensureSelectedLabel(row);
+    if (selectedLabel) display.textContent = selectedLabel;
+    return selectedLabel;
+  }
+
+  function decorateDetailsButton(info) {
+    if (!info) return;
+    const expanded = info.getAttribute('aria-expanded') === 'true';
+    info.replaceChildren(document.createTextNode('Adapter details'));
+    info.classList.add('pro-adapter-details-button');
+    info.classList.remove('tip');
+    info.removeAttribute('data-tip');
+    info.title = expanded ? 'Hide adapter details' : 'Show adapter details';
+    info.setAttribute('aria-label', info.title);
+  }
+
+  function decorate() {
+    if (!isProMode()) return false;
+    const select = document.getElementById('ap_adapter');
+    const row = select?.closest('.pro-adapter-row');
+    const info = document.getElementById('proAdapterInfo');
+    const recommended = document.getElementById('btnUseRecommended');
+    if (!select || !row || !info) return false;
+
+    const stylesheet = document.querySelector('link[data-pro-guided-styles="authoritative"]');
+    if (stylesheet && !stylesheet.href.includes('148-adapter-controls-3')) {
+      stylesheet.href = '/assets/pro_guided_authoritative.css?v=148-adapter-controls-3';
+    }
+
+    if (recommended) {
+      recommended.hidden = true;
+      recommended.setAttribute('aria-hidden', 'true');
+      recommended.tabIndex = -1;
+    }
+
+    decorateDetailsButton(info);
+    normalizeOptions(select);
+
+    if (observedSelect !== select) {
+      if (optionsObserver) optionsObserver.disconnect();
+      observedSelect = select;
+      optionsObserver = new MutationObserver(() => {
+        if (normalizing || !isProMode()) return;
+        normalizeOptions(select);
+      });
+      optionsObserver.observe(select, { childList: true, subtree: true });
+    }
+
+    if (select.dataset.proStableLabelWired !== '1') {
+      select.dataset.proStableLabelWired = '1';
+      select.addEventListener('change', () => normalizeOptions(select));
+    }
+    return true;
+  }
+
+  function reconcile() {
+    reconcileQueued = false;
+    decorate();
+  }
+
+  function schedule() {
+    if (reconcileQueued) return;
+    reconcileQueued = true;
+    window.setTimeout(reconcile, 0);
+  }
+
+  function start() {
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-ui-mode', 'aria-expanded'],
+    });
+    window.addEventListener('pageshow', schedule);
+    schedule();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start, { once: true });
+  } else {
+    start();
   }
 })();
