@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from vr_hotspotd import state
+from vr_hotspotd import config, state
 from vr_hotspotd.engine import (
     hostapd6_engine,
     hostapd_bridge_engine,
@@ -234,11 +234,11 @@ def test_vendor_lnxrouter_reads_password_fd_without_password_in_argv():
     assert SECRET not in completed.stderr
 
 
-def _write_nat_config(path: Path, secret: str) -> None:
+def _write_nat_config(path: Path, secret: str, *, ssid: str = "VR-Hotspot") -> None:
     hostapd_nat_engine._write_hostapd_conf(
         path=str(path),
         ifname="wlan1",
-        ssid="VR-Hotspot",
+        ssid=ssid,
         passphrase=secret,
         country="US",
         band="5ghz",
@@ -248,22 +248,22 @@ def _write_nat_config(path: Path, secret: str) -> None:
     )
 
 
-def _write_six_ghz_config(path: Path, secret: str) -> None:
+def _write_six_ghz_config(path: Path, secret: str, *, ssid: str = "VR-Hotspot") -> None:
     hostapd6_engine._write_hostapd_6ghz_conf(
         path=str(path),
         ifname="wlan1",
-        ssid="VR-Hotspot",
+        ssid=ssid,
         passphrase=secret,
         country="US",
         channel=5,
     )
 
 
-def _write_bridge_config(path: Path, secret: str) -> None:
+def _write_bridge_config(path: Path, secret: str, *, ssid: str = "VR-Hotspot") -> None:
     hostapd_bridge_engine._write_hostapd_conf(
         path=str(path),
         ifname="wlan1",
-        ssid="VR-Hotspot",
+        ssid=ssid,
         passphrase=secret,
         country="US",
         band="5ghz",
@@ -285,6 +285,26 @@ def test_secret_bearing_hostapd_configs_are_mode_0600(tmp_path, write_config):
 
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
     assert SECRET in config_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("write_config", "ssid", "passphrase"),
+    (
+        (_write_nat_config, "bad\nssid=attacker", SECRET),
+        (_write_six_ghz_config, "bad\nssid=attacker", SECRET),
+        (_write_bridge_config, "bad\nssid=attacker", SECRET),
+        (_write_nat_config, "VR-Hotspot", "password\rwpa=0"),
+        (_write_six_ghz_config, "VR-Hotspot", "password\rwpa=0"),
+        (_write_bridge_config, "VR-Hotspot", "password\rwpa=0"),
+    ),
+)
+def test_hostapd_config_writers_refuse_unsafe_values(tmp_path, write_config, ssid, passphrase):
+    config_path = tmp_path / "hostapd.conf"
+
+    with pytest.raises(config.ConfigValidationError):
+        write_config(config_path, passphrase, ssid=ssid)
+
+    assert not config_path.exists()
 
 
 def test_6ghz_spawn_failure_removes_protected_secret_config(

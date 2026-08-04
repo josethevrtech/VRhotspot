@@ -1,9 +1,11 @@
 import io
 import json
 from email.message import Message
+from types import SimpleNamespace
 
 import pytest
 
+import vr_hotspotd.api as api_module
 import vr_hotspotd.server as api_server
 from vr_hotspotd.api import APIHandler
 from vr_hotspotd.devtools.devhub_api import DevHubAPIHandler
@@ -179,6 +181,27 @@ def test_configured_token_accepts_supported_client_headers(monkeypatch, headers)
     assert handler._last_code == 200
     assert payload["result_code"] == "ok"
     assert payload["data"]["token_configured"] is True
+
+
+def test_authorization_uses_constant_time_string_comparison(monkeypatch):
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "configured-secret")
+    calls = []
+    comparison = SimpleNamespace(
+        compare_digest=lambda request, expected: calls.append((request, expected)) or True
+    )
+    monkeypatch.setattr(api_module, "hmac", comparison, raising=False)
+    handler = _handler_with_headers({"X-Api-Token": "configured-secret"})
+
+    assert handler._is_authorized() is True
+    assert calls == [("configured-secret", "configured-secret")]
+
+
+def test_authorization_rejects_non_string_request_token_without_comparison_error(monkeypatch):
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "configured-secret")
+    handler = _handler_with_headers({})
+    handler._get_req_token = lambda: b"configured-secret"
+
+    assert handler._is_authorized() is False
 
 
 @pytest.mark.parametrize(

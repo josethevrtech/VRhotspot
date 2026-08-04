@@ -557,6 +557,12 @@ def _write_hostapd_conf(
     tx_power: Optional[int] = None,
     mode: str = "full",
 ) -> None:
+    validation_errors = validate_network_config(
+        {"ssid": ssid, "wpa2_passphrase": passphrase, "ap_adapter": ifname}
+    )
+    if validation_errors:
+        raise ConfigValidationError(validation_errors)
+
     cc = (country or "").strip().upper()
 
     chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}

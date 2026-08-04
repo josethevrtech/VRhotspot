@@ -212,6 +212,12 @@ def _write_hostapd_6ghz_conf(
       - sae_pwe=2 (H2E-only is recommended/expected for 6 GHz in many deployments)
       - op_class=131 is commonly used for 6 GHz 20 MHz operation
     """
+    validation_errors = validate_network_config(
+        {"ssid": ssid, "wpa2_passphrase": passphrase, "ap_adapter": ifname}
+    )
+    if validation_errors:
+        raise ConfigValidationError(validation_errors)
+
     cc = (country or "").strip().upper()
     
     # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
