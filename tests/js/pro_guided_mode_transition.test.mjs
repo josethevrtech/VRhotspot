@@ -128,9 +128,38 @@ function tick(window, ms = 30) {
 }
 
 function assertProLayout(document) {
+  const requiredIds = [
+    'ap_adapter',
+    'btnUseRecommended',
+    'btnReloadAdapters',
+    'btnApplyVrProfileUltra',
+    'btnApplyVrProfile',
+    'btnApplyVrProfileHigh',
+    'btnApplyVrProfileStable',
+    'qos_preset',
+    ...CONNECTION_FIELDS,
+    'btnStart',
+    'btnSaveConfig',
+    'btnSaveRestart',
+    'btnRepair',
+  ];
+  const diagnostics = {
+    stage: document.body.dataset.proGuidedStage,
+    error: document.body.dataset.proGuidedError || null,
+    mode: document.body.dataset.uiMode,
+    overview: Boolean(document.getElementById('tab-overview')),
+    configuration: Boolean(document.getElementById('proHotspotConfiguration')),
+    serviceCard: Boolean(document.querySelector('#tab-overview .pro-service-card')),
+    preset: Boolean(document.querySelector('#proHotspotConfiguration .preset-bar')),
+    missingIds: requiredIds.filter((id) => !document.getElementById(id)),
+  };
   const workflow = document.getElementById('proGuidedWorkflow');
-  assert.ok(workflow, 'Pro workflow should exist');
-  assert.equal(document.body.dataset.proGuidedStage, 'ready');
+  assert.ok(workflow, `Pro workflow should exist: ${JSON.stringify(diagnostics)}`);
+  assert.equal(
+    document.body.dataset.proGuidedStage,
+    'ready',
+    JSON.stringify(diagnostics),
+  );
   assert.deepEqual(
     Array.from(workflow.querySelectorAll('.pro-guided-step')).map((node) => node.dataset.step),
     ['1', '2', '3', '4', '5'],
