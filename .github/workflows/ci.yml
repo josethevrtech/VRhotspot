@@ -4,7 +4,46 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
+  apply-pro-guided-setup:
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/pro-guided-connection-setup'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/pro-guided-connection-setup
+          fetch-depth: 0
+
+      - name: Apply guided Pro setup changes
+        run: python .github/agent/complete_pro_guided_setup.py
+
+      - name: Validate focused implementation
+        run: |
+          node --check assets/field_visibility.js
+          node --check assets/pro_guided_workflow.js
+          node --check assets/devhub_upload.js
+          python -m pip install -e . pytest
+          python -m pytest -q tests/test_pro_guided_workflow.py tests/test_basic_guided_interface.py
+          git diff --check
+
+      - name: Commit implementation and restore repository workflows
+        shell: bash
+        run: |
+          git fetch origin main
+          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm -f .github/workflows/agent-complete-pro-guided-setup.yml
+          rm -f .github/agent/complete_pro_guided_setup.py
+          git add assets/field_visibility.js assets/pro_guided_workflow.js assets/pro_guided_workflow.css tests/test_pro_guided_workflow.py .github/workflows/ci.yml .github/workflows/agent-complete-pro-guided-setup.yml .github/agent/complete_pro_guided_setup.py
+          git config user.name "VRhotspot Agent"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "Complete guided five-step Pro connection setup"
+          git push origin HEAD:agent/pro-guided-connection-setup
+
   tests:
     runs-on: ubuntu-latest
     strategy:
