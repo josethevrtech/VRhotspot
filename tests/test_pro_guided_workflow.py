@@ -8,6 +8,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 LOADER = ROOT / "assets" / "devhub_upload.js"
 SOURCE = ROOT / "assets" / "pro_guided_workflow.js"
+READINESS = ROOT / "assets" / "pro_guided_readiness.js"
 STYLE = ROOT / "assets" / "pro_guided_workflow.css"
 OVERRIDE_STYLE = ROOT / "assets" / "pro_guided_authoritative.css"
 SESSION = ROOT / "assets" / "browser_session.js"
@@ -21,6 +22,7 @@ def test_pro_runtime_is_loaded_as_versioned_authoritative_asset() -> None:
 
     assert "/assets/browser_session.js?v=139-session-hotfix" in source
     assert "/assets/pro_guided_workflow.js?v=148-authoritative-composer" in source
+    assert "/assets/pro_guided_readiness.js?v=148-authoritative-composer" in source
     assert "script.async = false" in source
     assert "polishProSetupDensity" not in source
 
@@ -80,6 +82,27 @@ def test_pro_composer_resolves_detached_steps_inside_its_shell() -> None:
     assert "el('proStepPerformance').appendChild" not in source
     assert "el('proStepHotspot').appendChild" not in source
     assert "el('proStepAdvanced').appendChild" not in source
+
+
+def test_readiness_restoration_reuses_canonical_live_data_hooks() -> None:
+    source = READINESS.read_text(encoding="utf-8")
+
+    assert "restoreProAdapterReadiness" in source
+    assert "dataAdapterReadinessCard" not in source
+    assert "card.dataset.adapterReadinessCard" in source
+    for field in (
+        "recommended",
+        "state",
+        "score",
+        "six-ghz",
+        "basic-recommended",
+        "reasons",
+        "explanation",
+        "fallback",
+    ):
+        assert field in source
+    assert "btnReloadAdapters" in source
+    assert "document.body?.dataset.uiMode !== 'advanced'" in source
 
 
 def test_step_three_contains_the_complete_connection_setup() -> None:
@@ -192,6 +215,7 @@ def test_real_dom_mode_transition_regressions_are_wired_into_ci() -> None:
     assert "assets/ui.js" in full_source
     assert "assets/field_visibility.js" in full_source
     assert "assets/basic_guided.js" in full_source
+    assert "assets/pro_guided_readiness.js" in full_source
     assert "for (let cycle = 0; cycle < 3" in full_source
     assert "jsdom@24.1.3" in ci
     assert "--test-force-exit" in ci
@@ -199,7 +223,10 @@ def test_real_dom_mode_transition_regressions_are_wired_into_ci() -> None:
     assert "tests/js/pro_guided_full_portal_integration.test.mjs" in ci
 
 
-@pytest.mark.parametrize("asset", [LOADER, SOURCE, SESSION, DOM_TEST, FULL_DOM_TEST])
+@pytest.mark.parametrize(
+    "asset",
+    [LOADER, SOURCE, READINESS, SESSION, DOM_TEST, FULL_DOM_TEST],
+)
 def test_portal_extensions_parse_with_node(asset: Path) -> None:
     node = shutil.which("node")
     if node is None:
