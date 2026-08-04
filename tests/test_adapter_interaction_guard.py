@@ -10,6 +10,7 @@ GUARD = ROOT / "assets" / "adapter_interaction_guard.js"
 UI = ROOT / "assets" / "ui.js"
 LOADER = ROOT / "assets" / "devhub_upload.js"
 STYLE = ROOT / "assets" / "pro_guided_authoritative.css"
+WORKFLOW = ROOT / "assets" / "pro_guided_workflow.js"
 DEVHUB_API = ROOT / "backend" / "vr_hotspotd" / "devtools" / "devhub_api.py"
 
 
@@ -55,12 +56,16 @@ def test_guard_keeps_six_ghz_notice_contextual() -> None:
     assert "hint.style.display = 'none'" in source
 
 
-def test_step_three_runtime_organizes_the_six_connection_fields() -> None:
-    source = GUARD.read_text(encoding="utf-8")
+def test_authoritative_composer_owns_step_three_and_password_row() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    guard = GUARD.read_text(encoding="utf-8")
     style = STYLE.read_text(encoding="utf-8")
 
-    assert "organizeStepThreeLayout" in source
-    assert "#proStepHotspot .pro-hotspot-fields" in source
+    assert "function decorateHotspot(shell)" in workflow
+    assert "function decoratePassword(field)" in workflow
+    assert "ensureChildOrder(row, [input, reveal, qr])" in workflow
+    assert "organizeStepThreeLayout" not in guard
+
     for key in (
         "ssid",
         "wpa2_passphrase",
@@ -69,7 +74,7 @@ def test_step_three_runtime_organizes_the_six_connection_fields() -> None:
         "country",
         "enable_internet",
     ):
-        assert f"'{key}'" in source
+        assert f"'{key}'" in workflow
 
     assert '"ssid password"' in style
     assert '"band security"' in style
@@ -99,12 +104,14 @@ def test_step_three_layout_keeps_optional_hints_from_creating_empty_space() -> N
 
 def test_step_three_layout_does_not_replace_original_qr_controller() -> None:
     guard = GUARD.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
     ui = UI.read_text(encoding="utf-8")
 
-    assert "organizeStepThreeLayout" in guard
+    assert "organizeStepThreeLayout" not in guard
     assert "organizeStepThreeAndRepairQr" not in guard
     assert "QR_BUTTON_IDS" not in guard
     assert "stopImmediatePropagation()" not in guard
+    assert "function decoratePassword(field)" in workflow
     assert "function wireQr()" in ui
     assert "btnShowQr.addEventListener('click', showQr)" in ui
     assert "btnShowQrBasic.addEventListener" in ui
