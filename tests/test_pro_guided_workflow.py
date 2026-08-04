@@ -12,6 +12,7 @@ STYLE = ROOT / "assets" / "pro_guided_workflow.css"
 OVERRIDE_STYLE = ROOT / "assets" / "pro_guided_authoritative.css"
 SESSION = ROOT / "assets" / "browser_session.js"
 DOM_TEST = ROOT / "tests" / "js" / "pro_guided_mode_transition.test.mjs"
+FULL_DOM_TEST = ROOT / "tests" / "js" / "pro_guided_full_portal_integration.test.mjs"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 
@@ -178,19 +179,27 @@ def test_connection_quality_and_troubleshooting_remain_integrated() -> None:
     assert "tab-troubleshooting" in source
 
 
-def test_real_dom_mode_transition_regression_is_wired_into_ci() -> None:
-    test_source = DOM_TEST.read_text(encoding="utf-8")
+def test_real_dom_mode_transition_regressions_are_wired_into_ci() -> None:
+    synthetic_source = DOM_TEST.read_text(encoding="utf-8")
+    full_source = FULL_DOM_TEST.read_text(encoding="utf-8")
     ci = CI.read_text(encoding="utf-8")
 
-    assert "JSDOM" in test_source
-    assert "Basic and Pro transitions" in test_source
-    assert "for (let cycle = 0; cycle < 3" in test_source
-    assert "assertProLayout" in test_source
+    assert "JSDOM" in synthetic_source
+    assert "Basic and Pro transitions" in synthetic_source
+    assert "for (let cycle = 0; cycle < 3" in synthetic_source
+    assert "assertProLayout" in synthetic_source
+    assert "assets/index.html" in full_source
+    assert "assets/ui.js" in full_source
+    assert "assets/field_visibility.js" in full_source
+    assert "assets/basic_guided.js" in full_source
+    assert "for (let cycle = 0; cycle < 3" in full_source
     assert "jsdom@24.1.3" in ci
-    assert "node --test tests/js/pro_guided_mode_transition.test.mjs" in ci
+    assert "--test-force-exit" in ci
+    assert "tests/js/pro_guided_mode_transition.test.mjs" in ci
+    assert "tests/js/pro_guided_full_portal_integration.test.mjs" in ci
 
 
-@pytest.mark.parametrize("asset", [LOADER, SOURCE, SESSION, DOM_TEST])
+@pytest.mark.parametrize("asset", [LOADER, SOURCE, SESSION, DOM_TEST, FULL_DOM_TEST])
 def test_portal_extensions_parse_with_node(asset: Path) -> None:
     node = shutil.which("node")
     if node is None:
