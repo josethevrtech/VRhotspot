@@ -5,29 +5,61 @@ body[data-ui-mode="advanced"] .pro-password-field > .row {
 }
 
 body[data-ui-mode="advanced"] .pro-adapter-row {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 9px;
   align-items: center;
 }
 
-body[data-ui-mode="advanced"] .pro-adapter-row select,
-body[data-ui-mode="advanced"] .pro-adapter-row .btn {
-  min-height: 46px;
+body[data-ui-mode="advanced"] .pro-adapter-row #ap_adapter,
+body[data-ui-mode="advanced"] .pro-adapter-selected-label {
+  grid-column: 1;
+  grid-row: 1;
 }
 
-body[data-ui-mode="advanced"] .pro-adapter-row .btn {
+body[data-ui-mode="advanced"] .pro-adapter-row #ap_adapter {
+  min-height: 46px;
+  color: transparent;
+}
+
+body[data-ui-mode="advanced"] .pro-adapter-row #ap_adapter option {
+  color: var(--text-primary);
+}
+
+body[data-ui-mode="advanced"] .pro-adapter-selected-label {
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 46px;
+  padding: 0 38px 0 13px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  pointer-events: none;
+}
+
+body[data-ui-mode="advanced"] #btnUseRecommended {
+  display: none !important;
 }
 
 body[data-ui-mode="advanced"] .pro-adapter-info {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  min-width: 42px;
-  padding: 0 !important;
+  grid-column: 2;
+  grid-row: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 15px !important;
   border-radius: var(--radius-md);
   color: var(--accent-primary);
+  white-space: nowrap;
 }
 
 body[data-ui-mode="advanced"] .pro-adapter-info:hover,
@@ -39,9 +71,13 @@ body[data-ui-mode="advanced"] .pro-adapter-info[aria-expanded="true"] {
 }
 
 body[data-ui-mode="advanced"] .pro-adapter-details-icon {
-  width: 19px;
-  height: 19px;
-  pointer-events: none;
+  display: none;
+}
+
+body[data-ui-mode="advanced"] #btnReloadAdapters {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-height: 40px;
 }
 
 body[data-ui-mode="advanced"] .pro-adapter-details {
@@ -247,11 +283,27 @@ body[data-ui-mode="advanced"] .pro-guided-secondary-actions .btn {
 
 @media (max-width: 760px) {
   body[data-ui-mode="advanced"] .pro-adapter-row {
-    grid-template-columns: 42px repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  body[data-ui-mode="advanced"] .pro-adapter-row select {
-    grid-column: 1 / -1;
+  body[data-ui-mode="advanced"] .pro-adapter-row #ap_adapter,
+  body[data-ui-mode="advanced"] .pro-adapter-selected-label,
+  body[data-ui-mode="advanced"] .pro-adapter-info,
+  body[data-ui-mode="advanced"] #btnReloadAdapters {
+    grid-column: 1;
+  }
+
+  body[data-ui-mode="advanced"] .pro-adapter-row #ap_adapter,
+  body[data-ui-mode="advanced"] .pro-adapter-selected-label {
+    grid-row: 1;
+  }
+
+  body[data-ui-mode="advanced"] .pro-adapter-info {
+    grid-row: 2;
+  }
+
+  body[data-ui-mode="advanced"] #btnReloadAdapters {
+    grid-row: 3;
   }
 
   body[data-ui-mode="advanced"] .pro-hotspot-fields,
