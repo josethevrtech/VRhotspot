@@ -64,6 +64,7 @@ _DEVHUB_ASSET_TYPES = {
     "/assets/browser_session.js": "application/javascript; charset=utf-8",
     "/assets/pro_guided_workflow.js": "application/javascript; charset=utf-8",
     "/assets/pro_guided_workflow.css": "text/css; charset=utf-8",
+    "/assets/pro_guided_authoritative.css": "text/css; charset=utf-8",
     "/assets/devhub_workspace.css": "text/css; charset=utf-8",
     "/assets/devhub_workspace.js": "application/javascript; charset=utf-8",
     "/assets/devhub_device_overview.css": "text/css; charset=utf-8",
