@@ -134,12 +134,10 @@ jobs:
           python -m pytest -q tests/test_pro_guided_workflow.py
           git diff --check
 
-      - name: Commit clean implementation and restore CI
+      - name: Commit validated source cleanup
         shell: bash
         run: |
-          git show HEAD^:.github/workflows/ci.yml > .github/workflows/ci.yml
           git add \
-            .github/workflows/ci.yml \
             assets/devhub_upload.js \
             assets/pro_guided_workflow.js \
             tests/js/pro_guided_mode_transition.test.mjs \
