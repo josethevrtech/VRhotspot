@@ -36,6 +36,7 @@
   let restartRequired = false;
   let statusObserver = null;
   let qualityObserver = null;
+  let adapterOptionsObserver = null;
   const internalHomes = new Map();
 
   window.VRHOTSPOT_PRO_COMPOSER = 'authoritative-v1';
@@ -89,7 +90,7 @@
   function ensureStyles() {
     const styles = [
       ['/assets/pro_guided_workflow.css?v=148-authoritative-composer', 'base'],
-      ['/assets/pro_guided_authoritative.css?v=148-ux-pass-1', 'authoritative'],
+      ['/assets/pro_guided_authoritative.css?v=148-adapter-details-2', 'authoritative'],
     ];
     for (const [href, kind] of styles) {
       if (document.querySelector(`link[data-pro-guided-styles="${kind}"]`)) continue;
@@ -172,6 +173,11 @@
   }
 
   function restoreBasicPresentation() {
+    if (adapterOptionsObserver) {
+      adapterOptionsObserver.disconnect();
+      adapterOptionsObserver = null;
+    }
+    if (document.body) delete document.body.dataset.proBand;
     for (const node of Array.from(internalHomes.keys())) restoreInternalNode(node);
     document.querySelectorAll('.pro-runtime-wrapper').forEach((node) => node.remove());
     document.querySelectorAll('.pro-adapter-field, .pro-password-field').forEach((node) => {
@@ -284,6 +290,7 @@
       scheduleSave(true);
       updateDependencies();
       syncPerformanceSelection();
+      syncAdapterBandNotice();
     });
     root.addEventListener('input', (event) => {
       if (!(event.target instanceof HTMLInputElement)) return;
@@ -298,6 +305,7 @@
       window.setTimeout(() => {
         scheduleSave(true);
         syncPerformanceSelection();
+        syncAdapterBandNotice();
       }, 0);
     });
   }
@@ -461,6 +469,18 @@
     return adapter ? 'internal' : 'other';
   }
 
+  function adapterDetailsIcon() {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.classList.add('pro-adapter-details-icon');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('fill', 'currentColor');
+    path.setAttribute('d', 'M12 5c5.5 0 9.5 5.2 9.7 5.4a1 1 0 0 1 0 1.2C21.5 11.8 17.5 17 12 17S2.5 11.8 2.3 11.6a1 1 0 0 1 0-1.2C2.5 10.2 6.5 5 12 5Zm0 2c-3.7 0-6.8 3-7.6 4 .8 1 3.9 4 7.6 4s6.8-3 7.6-4c-.8-1-3.9-4-7.6-4Zm0 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z');
+    svg.appendChild(path);
+    return svg;
+  }
+
   function syncFriendlyAdapterOptions(select) {
     const counters = { usb: 0, internal: 0, other: 0 };
     const recommended = String(select.dataset.recommended || '');
@@ -486,7 +506,7 @@
 
       const technical = adapterTechnicalSummary(adapter, option.value, rawLabel);
       if (option.textContent !== label) option.textContent = label;
-      if (option.title !== technical) option.title = technical;
+      option.removeAttribute('title');
       option.dataset.technicalLabel = technical;
       if (option.selected) selected = { label, technical };
     }
@@ -496,11 +516,40 @@
   function syncAdapterPresentation(select, info, details) {
     const selected = syncFriendlyAdapterOptions(select);
     const technical = selected?.technical || 'Select a Wi-Fi adapter to view its technical identity.';
+    const expanded = info.getAttribute('aria-expanded') === 'true';
+    const action = expanded ? 'Hide adapter details' : 'Show adapter details';
     info.hidden = select.options.length === 0;
-    info.title = technical;
-    info.setAttribute('data-tip', technical);
-    info.setAttribute('aria-label', `Adapter details: ${technical}`);
+    info.title = action;
+    info.setAttribute('aria-label', action);
+    info.removeAttribute('data-tip');
     setText(details, technical);
+  }
+
+  function syncAdapterBandNotice() {
+    const hint = el('adapterHint');
+    const bandSelect = el('band_preference');
+    if (!hint || !bandSelect || !document.body) return;
+
+    let band = String(bandSelect.value || '');
+    try {
+      if (typeof resolveBandPref === 'function') band = resolveBandPref(band);
+    } catch {
+      // The isolated DOM fixture does not expose every production helper.
+    }
+    document.body.dataset.proBand = band;
+
+    if (band !== '6ghz') {
+      hint.textContent = '';
+      hint.hidden = true;
+      return;
+    }
+
+    hint.hidden = false;
+    try {
+      if (typeof maybeAutoPickAdapterForBand === 'function') maybeAutoPickAdapterForBand();
+    } catch {
+      // Keep the notice visible even when the production helper is unavailable.
+    }
   }
 
   function decorateAdapter(shell) {
@@ -527,12 +576,15 @@
 
     let info = row.querySelector('#proAdapterInfo');
     if (!info) {
-      info = make('button', 'btn pro-adapter-info tip', 'i');
+      info = make('button', 'btn pro-adapter-info');
       info.id = 'proAdapterInfo';
       info.type = 'button';
       info.setAttribute('aria-expanded', 'false');
       info.setAttribute('aria-controls', 'proAdapterDetails');
+      info.appendChild(adapterDetailsIcon());
     }
+    info.classList.remove('tip');
+    info.removeAttribute('data-tip');
 
     let details = field.querySelector(':scope > #proAdapterDetails');
     if (!details) {
@@ -549,28 +601,49 @@
     rescan.textContent = 'Rescan adapters';
     ensureChildOrder(row, [select, info, recommended, rescan]);
 
-    if (row.dataset.proAdapterWired !== '1') {
-      row.dataset.proAdapterWired = '1';
-      row.addEventListener('click', (event) => {
-        if (event.target === info) {
-          const expanded = info.getAttribute('aria-expanded') === 'true';
-          info.setAttribute('aria-expanded', expanded ? 'false' : 'true');
-          details.hidden = expanded;
-          return;
-        }
-        if (event.target === recommended || recommended.contains(event.target)) {
-          window.setTimeout(() => syncAdapterPresentation(select, info, details), 0);
-        }
-      });
-      row.addEventListener('change', (event) => {
-        if (event.target !== select) return;
-        info.setAttribute('aria-expanded', 'false');
-        details.hidden = true;
+    if (info.dataset.proAdapterDetailsWired !== '1') {
+      info.dataset.proAdapterDetailsWired = '1';
+      info.addEventListener('click', () => {
+        const expanded = info.getAttribute('aria-expanded') === 'true';
+        info.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+        details.hidden = expanded;
         syncAdapterPresentation(select, info, details);
       });
     }
 
+    if (select.dataset.proAdapterPresentationWired !== '1') {
+      select.dataset.proAdapterPresentationWired = '1';
+      select.addEventListener('change', () => {
+        if (!isAdvancedMode()) return;
+        info.setAttribute('aria-expanded', 'false');
+        details.hidden = true;
+        syncAdapterPresentation(select, info, details);
+        syncAdapterBandNotice();
+      });
+    }
+
+    if (recommended.dataset.proAdapterPresentationWired !== '1') {
+      recommended.dataset.proAdapterPresentationWired = '1';
+      recommended.addEventListener('click', () => {
+        window.setTimeout(() => {
+          if (!isAdvancedMode()) return;
+          syncAdapterPresentation(select, info, details);
+          syncAdapterBandNotice();
+        }, 0);
+      });
+    }
+
+    if (!adapterOptionsObserver) {
+      adapterOptionsObserver = new MutationObserver(() => {
+        if (!isAdvancedMode()) return;
+        syncAdapterPresentation(select, info, details);
+        syncAdapterBandNotice();
+      });
+      adapterOptionsObserver.observe(select, { childList: true, subtree: true });
+    }
+
     syncAdapterPresentation(select, info, details);
+    syncAdapterBandNotice();
     field.dataset.proComposerDecorated = '1';
     document.querySelectorAll('#tab-overview [data-adapter-readiness-card]')
       .forEach((node) => node.remove());
@@ -788,6 +861,7 @@
     ].every(Boolean);
     wireAutosave(shell.querySelector('.pro-guided-card'));
     updateDependencies();
+    syncAdapterBandNotice();
     syncHeaderStatus();
     syncPrimaryAction();
     return ready;
