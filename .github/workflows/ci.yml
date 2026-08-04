@@ -65,7 +65,7 @@ jobs:
 
       - name: Exercise synthetic and full-portal mode transitions
         run: |
-          node --test \
+          node --test --test-force-exit \
             tests/js/pro_guided_mode_transition.test.mjs \
             tests/js/pro_guided_full_portal_integration.test.mjs
 
