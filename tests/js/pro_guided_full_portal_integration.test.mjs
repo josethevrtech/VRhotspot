@@ -165,6 +165,7 @@ function assertBasicLayout(document) {
     );
   }
   assert.equal(document.querySelector('[data-ui-section="basic"] .pro-runtime-wrapper'), null);
+  assert.equal(document.body.hasAttribute('data-pro-band'), false);
 }
 
 function assertProLayout(document) {
@@ -179,10 +180,31 @@ function assertProLayout(document) {
   assert.ok(document.querySelector('#proStepAdapter [data-field="ap_adapter"]'));
   const adapterSelect = document.getElementById('ap_adapter');
   assert.equal(adapterSelect?.selectedOptions[0]?.textContent, 'USB Wi-Fi 1 (Recommended)');
+  assert.equal(adapterSelect?.selectedOptions[0]?.hasAttribute('title'), false);
+
   const adapterInfo = document.getElementById('proAdapterInfo');
-  assert.ok(adapterInfo, 'adapter information affordance must exist');
-  assert.match(adapterInfo.getAttribute('data-tip') || '', /wlan1/);
-  assert.ok(document.getElementById('proAdapterDetails'));
+  const adapterDetails = document.getElementById('proAdapterDetails');
+  assert.ok(adapterInfo, 'adapter details control must exist');
+  assert.ok(adapterInfo.querySelector('.pro-adapter-details-icon'));
+  assert.equal(adapterInfo.title, 'Show adapter details');
+  assert.equal(adapterInfo.hasAttribute('data-tip'), false);
+  assert.equal(adapterInfo.getAttribute('aria-expanded'), 'false');
+  assert.ok(adapterDetails);
+  assert.equal(adapterDetails.hidden, true);
+
+  adapterInfo.click();
+  assert.equal(adapterInfo.getAttribute('aria-expanded'), 'true');
+  assert.equal(adapterInfo.title, 'Hide adapter details');
+  assert.equal(adapterDetails.hidden, false);
+  assert.match(adapterDetails.textContent, /Interface: wlan1/);
+  adapterInfo.click();
+  assert.equal(adapterInfo.getAttribute('aria-expanded'), 'false');
+  assert.equal(adapterDetails.hidden, true);
+
+  const adapterHint = document.getElementById('adapterHint');
+  assert.equal(document.body.dataset.proBand, '5ghz');
+  assert.equal(adapterHint?.hidden, true);
+  assert.equal(adapterHint?.textContent, '');
   assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);
   assert.ok(document.querySelector('#proStepPerformance .preset-bar'));
   for (const key of CONNECTION_FIELDS) {
@@ -245,6 +267,21 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', `Pro ready cycle ${cycle + 1}`);
     await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', `friendly adapter cycle ${cycle + 1}`);
     assertProLayout(document);
+
+    if (cycle === 0) {
+      const adapterSelect = document.getElementById('ap_adapter');
+      const rawOption = document.createElement('option');
+      rawOption.value = 'wlan1';
+      rawOption.textContent = '* wlan1 (phy2, 5G/2G, reg=US, score=100, AP)';
+      rawOption.selected = true;
+      adapterSelect.replaceChildren(rawOption);
+      await tick(window, 0);
+      assert.equal(
+        adapterSelect.selectedOptions[0]?.textContent,
+        'USB Wi-Fi 1 (Recommended)',
+        'adapter inventory refresh must be normalized by the select observer',
+      );
+    }
 
     toggleMode(window, false);
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'waiting-for-pro', `Basic restored cycle ${cycle + 1}`);
