@@ -182,10 +182,21 @@ function assertProLayout(document) {
   assert.equal(adapterSelect?.selectedOptions[0]?.textContent, 'USB Wi-Fi 1 (Recommended)');
   assert.equal(adapterSelect?.selectedOptions[0]?.hasAttribute('title'), false);
 
+  const stableLabel = document.querySelector('#proStepAdapter .pro-adapter-selected-label');
+  assert.ok(stableLabel, 'stable selected-adapter label must exist');
+  assert.equal(stableLabel.textContent, 'USB Wi-Fi 1 (Recommended)');
+
+  const recommended = document.getElementById('btnUseRecommended');
+  assert.ok(recommended);
+  assert.equal(recommended.hidden, true);
+  assert.equal(recommended.getAttribute('aria-hidden'), 'true');
+  assert.equal(recommended.tabIndex, -1);
+
   const adapterInfo = document.getElementById('proAdapterInfo');
   const adapterDetails = document.getElementById('proAdapterDetails');
   assert.ok(adapterInfo, 'adapter details control must exist');
-  assert.ok(adapterInfo.querySelector('.pro-adapter-details-icon'));
+  assert.equal(adapterInfo.textContent, 'Adapter details');
+  assert.equal(adapterInfo.querySelector('.pro-adapter-details-icon'), null);
   assert.equal(adapterInfo.title, 'Show adapter details');
   assert.equal(adapterInfo.hasAttribute('data-tip'), false);
   assert.equal(adapterInfo.getAttribute('aria-expanded'), 'false');
@@ -222,12 +233,13 @@ function assertProLayout(document) {
 }
 
 test('real portal scripts preserve Basic and compose Pro across repeated toggles', async () => {
-  const [html, fieldVisibility, ui, basicGuided, composer] = await Promise.all([
+  const [html, fieldVisibility, ui, basicGuided, composer, portalExtensions] = await Promise.all([
     readAsset('assets/index.html'),
     readAsset('assets/field_visibility.js'),
     readAsset('assets/ui.js'),
     readAsset('assets/basic_guided.js'),
     readAsset('assets/pro_guided_workflow.js'),
+    readAsset('assets/devhub_upload.js'),
   ]);
 
   const dom = new JSDOM(html, {
@@ -250,6 +262,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   window.eval(ui);
   window.eval(basicGuided);
   window.eval(composer);
+  window.eval(portalExtensions);
   document.dispatchEvent(new window.Event('DOMContentLoaded', { bubbles: true }));
 
   assert.equal(typeof window.setToken, 'function');
@@ -266,21 +279,29 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
     toggleMode(window, true);
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', `Pro ready cycle ${cycle + 1}`);
     await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', `friendly adapter cycle ${cycle + 1}`);
+    await waitFor(window, () => document.querySelector('.pro-adapter-selected-label')?.textContent === 'USB Wi-Fi 1 (Recommended)', `stable label cycle ${cycle + 1}`);
     assertProLayout(document);
 
     if (cycle === 0) {
       const adapterSelect = document.getElementById('ap_adapter');
+      const stableLabel = document.querySelector('.pro-adapter-selected-label');
       const rawOption = document.createElement('option');
       rawOption.value = 'wlan1';
       rawOption.textContent = '* wlan1 (phy2, 5G/2G, reg=US, score=100, AP)';
       rawOption.selected = true;
       adapterSelect.replaceChildren(rawOption);
+      assert.equal(
+        stableLabel.textContent,
+        'USB Wi-Fi 1 (Recommended)',
+        'the painted label must remain stable while the native option list is rebuilt',
+      );
       await tick(window, 0);
       assert.equal(
         adapterSelect.selectedOptions[0]?.textContent,
         'USB Wi-Fi 1 (Recommended)',
-        'adapter inventory refresh must be normalized by the select observer',
+        'adapter inventory refresh must normalize the native option list',
       );
+      assert.equal(stableLabel.textContent, 'USB Wi-Fi 1 (Recommended)');
     }
 
     toggleMode(window, false);
@@ -292,6 +313,7 @@ test('real portal scripts preserve Basic and compose Pro across repeated toggles
   toggleMode(window, true);
   await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', 'final Pro composition');
   await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', 'final friendly adapter label');
+  await waitFor(window, () => document.querySelector('.pro-adapter-selected-label')?.textContent === 'USB Wi-Fi 1 (Recommended)', 'final stable adapter label');
   assertProLayout(document);
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);
