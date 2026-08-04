@@ -26,18 +26,22 @@ body[data-ui-mode="advanced"] .pro-adapter-info {
   width: 42px;
   min-width: 42px;
   padding: 0 !important;
-  border-radius: 50%;
+  border-radius: var(--radius-md);
   color: var(--accent-primary);
-  font-family: Georgia, serif;
-  font-size: 17px;
-  font-weight: 700;
-  text-transform: lowercase;
 }
 
+body[data-ui-mode="advanced"] .pro-adapter-info:hover,
+body[data-ui-mode="advanced"] .pro-adapter-info:focus-visible,
 body[data-ui-mode="advanced"] .pro-adapter-info[aria-expanded="true"] {
   border-color: var(--border-active);
   background: var(--accent-subtle);
   box-shadow: var(--shadow-glow);
+}
+
+body[data-ui-mode="advanced"] .pro-adapter-details-icon {
+  width: 19px;
+  height: 19px;
+  pointer-events: none;
 }
 
 body[data-ui-mode="advanced"] .pro-adapter-details {
@@ -52,6 +56,10 @@ body[data-ui-mode="advanced"] .pro-adapter-details {
 }
 
 body[data-ui-mode="advanced"] .pro-adapter-details[hidden] {
+  display: none !important;
+}
+
+body[data-ui-mode="advanced"]:not([data-pro-band="6ghz"]) #adapterHint {
   display: none !important;
 }
 
