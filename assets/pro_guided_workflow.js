@@ -1,21 +1,48 @@
 (function buildProGuidedWorkflow() {
   'use strict';
 
+  const ADVANCED_MODE = 'advanced';
   const AUTOSAVE_DELAY_MS = 650;
   const SAVE_TIMEOUT_MS = 12000;
-  const RETRY_LIMIT = 600;
-  let initialized = false;
-  let guidedReady = false;
-  let qualityReady = false;
-  let troubleshootingReady = false;
+  const PROFILE_COPY = {
+    btnApplyVrProfileUltra: {
+      value: 'ultra_low_latency',
+      description: 'Prioritizes the lowest possible response time for demanding VR streaming.',
+    },
+    btnApplyVrProfile: {
+      value: 'balanced',
+      description: 'Recommended default for a strong balance of responsiveness and stability.',
+    },
+    btnApplyVrProfileHigh: {
+      value: 'high_throughput',
+      description: 'Prioritizes sustained transfer speed for large or bandwidth-heavy workloads.',
+    },
+    btnApplyVrProfileStable: {
+      value: 'vr',
+      description: 'Favors connection consistency when the wireless environment is unpredictable.',
+    },
+  };
+  const CONNECTION_FIELDS = [
+    'ssid',
+    'wpa2_passphrase',
+    'band_preference',
+    'ap_security',
+    'country',
+    'enable_internet',
+  ];
+
+  let reconcileQueued = false;
   let saveTimer = null;
   let restartRequired = false;
-  let retryCount = 0;
-  let retryTimer = null;
-  let retryQueued = false;
-  let observer = null;
+  let statusObserver = null;
+  let qualityObserver = null;
+  const internalHomes = new Map();
 
-  function el(id) { return document.getElementById(id); }
+  window.VRHOTSPOT_PRO_COMPOSER = 'authoritative-v1';
+
+  function el(id) {
+    return document.getElementById(id);
+  }
 
   function make(tag, className, text) {
     const node = document.createElement(tag);
@@ -26,6 +53,17 @@
 
   function setText(node, text) {
     if (node && node.textContent !== text) node.textContent = text;
+  }
+
+  function isAdvancedMode() {
+    return document.body?.dataset.uiMode === ADVANCED_MODE;
+  }
+
+  function setStage(stage, error) {
+    if (!document.body) return;
+    document.body.dataset.proGuidedStage = stage;
+    if (error) document.body.dataset.proGuidedError = error;
+    else delete document.body.dataset.proGuidedError;
   }
 
   function icon(kind) {
@@ -43,24 +81,51 @@
   }
 
   function replaceNav(item, kind, label) {
-    if (!item) return;
-    if (item.dataset.proNavLabel === label) return;
+    if (!item || item.dataset.proNavLabel === label) return;
     item.dataset.proNavLabel = label;
     item.replaceChildren(icon(kind), document.createTextNode(label));
   }
 
-  function addStyles() {
-    if (document.querySelector('link[data-pro-guided-styles]')) return;
-    const stylesheet = document.createElement('link');
-    stylesheet.rel = 'stylesheet';
-    stylesheet.href = '/assets/pro_guided_workflow.css?v=141-pro-guided-recovery';
-    stylesheet.dataset.proGuidedStyles = '1';
-    document.head.appendChild(stylesheet);
+  function ensureStyles() {
+    const styles = [
+      ['/assets/pro_guided_workflow.css?v=148-authoritative-composer', 'base'],
+      ['/assets/pro_guided_authoritative.css?v=148-authoritative-composer', 'authoritative'],
+    ];
+    for (const [href, kind] of styles) {
+      if (document.querySelector(`link[data-pro-guided-styles="${kind}"]`)) continue;
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = href;
+      stylesheet.dataset.proGuidedStyles = kind;
+      document.head.appendChild(stylesheet);
+    }
+  }
+
+  function enforceNavigation() {
+    ensureStyles();
+    const overviewNav = document.querySelector('.nav-item[data-tab="overview"]');
+    replaceNav(overviewNav, 'wifi', 'Set Up Hotspot');
+
+    document.querySelector('.nav-item[data-tab="telemetry"]')?.remove();
+    document.querySelector('.nav-item[data-tab="logs"]')?.remove();
+
+    const troubleshootingNav = document.querySelector(
+      '.nav-item[data-tab="troubleshooting"], .nav-item[data-tab="diagnostics"]',
+    );
+    if (troubleshootingNav) {
+      troubleshootingNav.dataset.tab = 'troubleshooting';
+      replaceNav(troubleshootingNav, 'trouble', 'Troubleshooting');
+    }
+
+    const diagnosticsPane = el('tab-diagnostics');
+    if (diagnosticsPane) diagnosticsPane.id = 'tab-troubleshooting';
   }
 
   function step(number, title, help, id) {
     const section = make('section', 'pro-guided-step');
+    section.dataset.step = String(number);
     const badge = make('span', 'pro-guided-number', String(number));
+    badge.setAttribute('aria-hidden', 'true');
     const content = make('div', 'pro-guided-content');
     content.append(make('h3', 'pro-guided-title', title), make('p', 'pro-guided-help', help));
     const slot = make('div', 'pro-guided-slot');
@@ -70,9 +135,85 @@
     return section;
   }
 
+  function guidedSlot(shell, id) {
+    const node = shell?.querySelector(`#${id}`);
+    if (!node) throw new Error(`missing guided slot: ${id}`);
+    return node;
+  }
+
+  function appendIfNeeded(parent, node) {
+    if (parent && node && node.parentNode !== parent) parent.appendChild(node);
+  }
+
+  function prependIfNeeded(parent, node) {
+    if (!parent || !node) return;
+    if (node.parentNode !== parent || parent.firstElementChild !== node) parent.prepend(node);
+  }
+
+  function ensureChildOrder(parent, nodes) {
+    if (!parent) return;
+    const desired = nodes.filter(Boolean);
+    const current = Array.from(parent.children).filter((node) => desired.includes(node));
+    if (current.length === desired.length && current.every((node, index) => node === desired[index])) return;
+    desired.forEach((node) => parent.appendChild(node));
+  }
+
+  function rememberInternalHome(node) {
+    if (!node || internalHomes.has(node)) return;
+    internalHomes.set(node, { parent: node.parentNode, next: node.nextSibling });
+  }
+
+  function restoreInternalNode(node) {
+    const home = internalHomes.get(node);
+    if (!node || !home?.parent) return;
+    if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(node, home.next);
+    else home.parent.appendChild(node);
+    internalHomes.delete(node);
+  }
+
+  function restoreBasicPresentation() {
+    for (const node of Array.from(internalHomes.keys())) restoreInternalNode(node);
+    document.querySelectorAll('.pro-runtime-wrapper').forEach((node) => node.remove());
+    document.querySelectorAll('.pro-adapter-field, .pro-password-field').forEach((node) => {
+      node.classList.remove('pro-adapter-field', 'pro-password-field');
+      delete node.dataset.proComposerDecorated;
+    });
+    const recommended = el('btnUseRecommended');
+    if (recommended) {
+      recommended.hidden = false;
+      recommended.removeAttribute('aria-hidden');
+    }
+    setStage('waiting-for-pro');
+  }
+
+  function serviceState() {
+    const raw = String(el('proServiceStateText')?.textContent || el('pillTxt')?.textContent || 'Checking…').trim();
+    const value = raw.toLowerCase();
+    if (value.includes('error') || value.includes('failed') || value.includes('attention')) {
+      return { name: 'error', label: 'Needs attention' };
+    }
+    if (value.includes('starting') || value.includes('stopping') || value.includes('working') || value.includes('repair')) {
+      return { name: 'working', label: raw || 'Working…' };
+    }
+    if (value.includes('running') && !value.includes('not running')) {
+      return { name: 'running', label: 'Running' };
+    }
+    if (value.includes('stopped') || value.includes('inactive') || value.includes('not running')) {
+      return { name: 'stopped', label: 'Stopped' };
+    }
+    return { name: 'loading', label: raw || 'Checking…' };
+  }
+
   function serviceIsRunning() {
-    const text = String(el('pillTxt')?.textContent || '').toLowerCase();
-    return text.includes('running') && !text.includes('not running');
+    return serviceState().name === 'running';
+  }
+
+  function syncHeaderStatus() {
+    const status = el('proHeaderStatus');
+    if (!status) return;
+    const state = serviceState();
+    status.dataset.state = state.name;
+    setText(status, state.label);
   }
 
   function savingState(state, text) {
@@ -113,6 +254,7 @@
   }
 
   function scheduleSave(markRestart = true) {
+    if (!isAdvancedMode()) return;
     if (markRestart && serviceIsRunning()) restartRequired = true;
     savingState('saving', 'Saving changes…');
     if (saveTimer) window.clearTimeout(saveTimer);
@@ -123,9 +265,8 @@
     const primary = el('btnStart');
     if (!primary) return;
     if (serviceIsRunning() && restartRequired) {
-      primary.dataset.proServiceAction = 'start';
       primary.dataset.proGuidedAction = 'apply';
-      primary.textContent = 'Apply Changes & Restart';
+      setText(primary, 'Apply Changes & Restart');
       primary.classList.remove('danger', 'secondary');
       primary.classList.add('primary');
       primary.disabled = false;
@@ -142,14 +283,22 @@
       if (!event.isTrusted) return;
       scheduleSave(true);
       updateDependencies();
+      syncPerformanceSelection();
     });
     root.addEventListener('input', (event) => {
       if (!(event.target instanceof HTMLInputElement)) return;
       if (!event.isTrusted) return;
       scheduleSave(true);
     });
-    root.querySelectorAll('.preset-bar .btn').forEach((button) => {
-      button.addEventListener('click', () => window.setTimeout(() => scheduleSave(true), 0));
+    root.addEventListener('click', (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest('.preset-bar .btn')
+        : null;
+      if (!button || !root.contains(button)) return;
+      window.setTimeout(() => {
+        scheduleSave(true);
+        syncPerformanceSelection();
+      }, 0);
     });
   }
 
@@ -166,45 +315,24 @@
     }
   }
 
-  function enforceNavigation() {
-    addStyles();
-    const overviewNav = document.querySelector('.nav-item[data-tab="overview"]');
-    replaceNav(overviewNav, 'wifi', 'Set Up Hotspot');
-
-    document.querySelector('.nav-item[data-tab="telemetry"]')?.remove();
-    const logsNav = document.querySelector('.nav-item[data-tab="logs"]');
-    logsNav?.remove();
-
-    const troubleshootingNav = document.querySelector(
-      '.nav-item[data-tab="troubleshooting"], .nav-item[data-tab="diagnostics"]',
-    );
-    if (troubleshootingNav) {
-      troubleshootingNav.dataset.tab = 'troubleshooting';
-      replaceNav(troubleshootingNav, 'trouble', 'Troubleshooting');
-    }
-
-    const diagnosticsPane = el('tab-diagnostics');
-    if (diagnosticsPane) diagnosticsPane.id = 'tab-troubleshooting';
-  }
-
-  function guidedPrerequisitesReady() {
+  function prerequisitesReady() {
     const overview = el('tab-overview');
     const configuration = el('proHotspotConfiguration');
     const serviceCard = overview?.querySelector('.pro-service-card');
     const requiredIds = [
       'ap_adapter',
+      'btnUseRecommended',
       'btnReloadAdapters',
       'btnApplyVrProfileUltra',
       'btnApplyVrProfile',
       'btnApplyVrProfileHigh',
       'btnApplyVrProfileStable',
       'qos_preset',
-      'ssid',
-      'wpa2_passphrase',
-      'enable_internet',
+      ...CONNECTION_FIELDS,
       'btnStart',
       'btnSaveConfig',
       'btnSaveRestart',
+      'btnRepair',
     ];
     return !!overview
       && !!configuration
@@ -213,39 +341,146 @@
       && requiredIds.every((id) => !!el(id));
   }
 
-  function buildGuidedSetup() {
-    if (el('proGuidedWorkflow')) return true;
-    if (!guidedPrerequisitesReady()) return false;
-    const overview = el('tab-overview');
-    const configuration = el('proHotspotConfiguration');
-    const serviceCard = overview.querySelector('.pro-service-card');
+  function ensureWorkflowShell() {
+    const existing = el('proGuidedWorkflow');
+    if (existing) return existing;
+    if (!prerequisitesReady()) return null;
 
+    const overview = el('tab-overview');
+    const originalNodes = Array.from(overview.children);
     const shell = make('div', 'pro-guided-shell');
     shell.id = 'proGuidedWorkflow';
+
     const card = make('section', 'pro-guided-card');
     const header = make('div', 'pro-guided-header');
-    header.append(
+    const headerCopy = make('div', 'pro-guided-header-copy');
+    headerCopy.append(
       make('h2', '', 'Set Up Hotspot'),
       make('p', '', 'Configure the hotspot in order, then start it or apply changes safely.'),
     );
+    const headerMeta = make('div', 'pro-guided-header-meta');
+    const status = make('div', 'pro-header-status', 'Checking…');
+    status.id = 'proHeaderStatus';
+    status.setAttribute('aria-live', 'polite');
+    const saveState = make('div', 'pro-save-state', 'All changes saved.');
+    saveState.id = 'proSaveState';
+    saveState.setAttribute('aria-live', 'polite');
+    headerMeta.append(status, saveState);
+    header.append(headerCopy, headerMeta);
+    header.dataset.proDensityReady = '1';
+
     const steps = make('div', 'pro-guided-steps');
     steps.append(
-      step(1, 'Choose Wi-Fi adapter', 'Select the adapter VRhotspot should use. Recommended choices are labeled automatically.', 'proStepAdapter'),
-      step(2, 'Choose performance mode', 'Choose the behavior that best matches your VR workflow.', 'proStepPerformance'),
-      step(3, 'Configure hotspot', 'Set the network name, password, and internet-sharing preference.', 'proStepHotspot'),
-      step(4, 'Fine-tune hotspot', 'Optional expert settings are grouped by purpose and can be left at their recommended defaults.', 'proStepAdvanced'),
-      step(5, 'Start hotspot', 'Start, stop, or safely apply saved changes to a running hotspot.', 'proStepAction'),
+      step(1, 'Choose Wi-Fi adapter', 'Select the adapter VRhotspot should use. Recommendation and readiness details stay beside the selector.', 'proStepAdapter'),
+      step(2, 'Choose performance mode', 'Choose the tradeoff that best matches latency, throughput, balance, or stability.', 'proStepPerformance'),
+      step(3, 'Configure hotspot', 'Set the hotspot name, password, band, security, country, and internet-sharing behavior.', 'proStepHotspot'),
+      step(4, 'Fine-tune hotspot', 'Review detailed Wireless, Network, and System & Performance options or keep the recommended defaults.', 'proStepAdvanced'),
+      step(5, 'Start hotspot', 'Review pending changes, start or stop the hotspot, save safely, or repair the network.', 'proStepAction'),
     );
     card.append(header, steps);
+
+    const staging = make('div', 'pro-guided-hidden');
+    staging.id = 'proGuidedStaging';
+    originalNodes.forEach((node) => staging.appendChild(node));
+    card.appendChild(staging);
     shell.appendChild(card);
+    overview.replaceChildren(shell);
 
-    const adapter = document.querySelector('[data-field="ap_adapter"]');
-    const adapterLabel = adapter.querySelector('label');
-    if (adapterLabel) adapterLabel.textContent = 'Wi-Fi adapter';
-    el('proStepAdapter').appendChild(adapter);
+    wireAutosave(card);
+    syncHeaderStatus();
+    return shell;
+  }
 
-    const preset = configuration.querySelector('.preset-bar');
+  function syncStepCopy(shell) {
+    const copy = {
+      proStepAdapter: [
+        'Choose Wi-Fi adapter',
+        'Select the adapter VRhotspot should use. Recommendation and readiness details stay beside the selector.',
+      ],
+      proStepPerformance: [
+        'Choose performance mode',
+        'Choose the tradeoff that best matches latency, throughput, balance, or stability.',
+      ],
+      proStepHotspot: [
+        'Configure hotspot',
+        'Set the hotspot name, password, band, security, country, and internet-sharing behavior.',
+      ],
+      proStepAdvanced: [
+        'Fine-tune hotspot',
+        'Review detailed Wireless, Network, and System & Performance options or keep the recommended defaults.',
+      ],
+      proStepAction: [
+        'Start hotspot',
+        'Review pending changes, start or stop the hotspot, save safely, or repair the network.',
+      ],
+    };
+    for (const [id, [title, help]] of Object.entries(copy)) {
+      const content = guidedSlot(shell, id).closest('.pro-guided-content');
+      setText(content?.querySelector('.pro-guided-title'), title);
+      setText(content?.querySelector('.pro-guided-help'), help);
+    }
+  }
+
+  function decorateAdapter(shell) {
+    const field = document.querySelector('[data-field="ap_adapter"]');
+    const select = el('ap_adapter');
+    const recommended = el('btnUseRecommended');
+    const rescan = el('btnReloadAdapters');
+    if (!field || !select || !recommended || !rescan) return false;
+
+    prependIfNeeded(guidedSlot(shell, 'proStepAdapter'), field);
+    field.classList.add('pro-adapter-field');
+    field.dataset.proDensityReady = '1';
+    if (field.dataset.proComposerDecorated !== '1') {
+      rememberInternalHome(select);
+      rememberInternalHome(recommended);
+      rememberInternalHome(rescan);
+      const row = make('div', 'pro-adapter-row pro-runtime-wrapper');
+      row.append(select, recommended, rescan);
+      const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
+      if (label?.nextSibling) field.insertBefore(row, label.nextSibling);
+      else field.prepend(row);
+      recommended.hidden = false;
+      recommended.removeAttribute('aria-hidden');
+      recommended.textContent = 'Recommended';
+      rescan.textContent = 'Rescan adapters';
+      field.dataset.proComposerDecorated = '1';
+    }
+
+    const readiness = document.querySelector('[data-adapter-readiness-card]');
+    if (readiness) {
+      readiness.classList.add('pro-adapter-readiness');
+      appendIfNeeded(guidedSlot(shell, 'proStepAdapter'), readiness);
+    }
+    return true;
+  }
+
+  function syncPerformanceSelection() {
+    const qos = el('qos_preset');
+    const description = el('proPerformanceDescription');
+    if (!qos || !description) return;
+    const selected = String(qos.value || 'off');
+    let selectedCopy = 'Choose the performance behavior that best matches this hotspot.';
+    for (const [id, profile] of Object.entries(PROFILE_COPY)) {
+      const button = el(id);
+      if (!button) continue;
+      const active = selected === profile.value;
+      button.classList.toggle('is-selected', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      if (active) selectedCopy = profile.description;
+    }
+    setText(description, selectedCopy);
+  }
+
+  function decoratePerformance(shell) {
+    const configuration = el('proHotspotConfiguration');
+    const preset = configuration?.querySelector('.preset-bar')
+      || shell.querySelector('.pro-performance-picker');
+    const qosField = document.querySelector('[data-field="qos_preset"]');
+    if (!preset || !qosField) return false;
+
     preset.classList.add('pro-performance-picker');
+    preset.dataset.proDensityReady = '1';
     const group = preset.querySelector('.btn-group');
     const order = [
       el('btnApplyVrProfileUltra'),
@@ -253,84 +488,157 @@
       el('btnApplyVrProfileHigh'),
       el('btnApplyVrProfileStable'),
     ];
-    if (group) order.forEach((button) => group.appendChild(button));
-    el('proStepPerformance').appendChild(preset);
+    if (group) ensureChildOrder(group, order);
 
-    const qos = document.querySelector('[data-field="qos_preset"]');
-    qos.classList.add('pro-guided-hidden');
-    el('proStepPerformance').appendChild(qos);
+    let description = el('proPerformanceDescription');
+    if (!description) {
+      description = make('p', 'pro-performance-description');
+      description.id = 'proPerformanceDescription';
+      preset.appendChild(description);
+    }
+    appendIfNeeded(guidedSlot(shell, 'proStepPerformance'), preset);
 
-    const hotspotFields = make('div', 'pro-hotspot-fields');
-    for (const key of ['ssid', 'wpa2_passphrase', 'enable_internet']) {
+    qosField.classList.add('pro-guided-hidden');
+    appendIfNeeded(el('proGuidedStaging'), qosField);
+    syncPerformanceSelection();
+    return true;
+  }
+
+  function decoratePassword(field) {
+    const input = el('wpa2_passphrase');
+    const reveal = el('btnRevealPass');
+    const qr = el('btnShowQr');
+    if (!field || !input || !reveal || !qr) return;
+    field.classList.add('pro-password-field');
+    field.dataset.proDensityReady = '1';
+    if (field.dataset.proComposerDecorated === '1') return;
+
+    rememberInternalHome(input);
+    rememberInternalHome(reveal);
+    rememberInternalHome(qr);
+    const row = make('div', 'pro-password-row pro-runtime-wrapper');
+    reveal.type = 'button';
+    reveal.classList.add('icon-only');
+    reveal.title = 'Show or hide password';
+    reveal.setAttribute('aria-label', 'Show or hide password');
+    qr.type = 'button';
+    qr.textContent = 'QR';
+    qr.className = 'btn icon-only';
+    qr.title = 'Show QR code';
+    qr.setAttribute('aria-label', 'Show QR code');
+    row.append(input, reveal, qr);
+    const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
+    if (label?.nextSibling) field.insertBefore(row, label.nextSibling);
+    else field.prepend(row);
+    field.dataset.proComposerDecorated = '1';
+  }
+
+  function decorateHotspot(shell) {
+    let fields = shell.querySelector('.pro-hotspot-fields');
+    if (!fields) {
+      fields = make('div', 'pro-hotspot-fields');
+      guidedSlot(shell, 'proStepHotspot').appendChild(fields);
+    }
+    for (const key of CONNECTION_FIELDS) {
       const field = document.querySelector(`[data-field="${key}"]`);
-      if (key === 'ssid') {
-        const label = field.querySelector('label');
-        if (label) label.textContent = 'Hotspot name';
-      }
-      if (key === 'wpa2_passphrase') {
-        const label = field.querySelector('label');
-        if (label) label.textContent = 'Password';
-      }
-      hotspotFields.appendChild(field);
-    }
-    el('proStepHotspot').appendChild(hotspotFields);
-
-    const advanced = make('details', 'pro-advanced-settings');
-    const advancedSummary = make('summary', '', 'Advanced wireless, network, and system settings');
-    const advancedBody = make('div', 'pro-advanced-body');
-    configuration.querySelectorAll('.pro-config-details').forEach((details) => advancedBody.appendChild(details));
-    advanced.append(advancedSummary, advancedBody);
-    el('proStepAdvanced').appendChild(advanced);
-
-    const action = make('div', 'pro-guided-action');
-    const stateCopy = serviceCard.querySelector('.pro-service-state-copy');
-    const primary = el('btnStart');
-    if (stateCopy) action.appendChild(stateCopy);
-    action.appendChild(primary);
-    const actionSlot = el('proStepAction');
-    const saveState = make('div', 'pro-save-state', 'All changes saved.');
-    saveState.id = 'proSaveState';
-    actionSlot.append(action, saveState);
-
-    const hidden = make('div', 'pro-guided-hidden');
-    hidden.id = 'proGuidedHiddenControls';
-    const headerBar = configuration.querySelector('.settings-header');
-    const serviceSecondary = serviceCard.querySelector('.pro-service-secondary');
-    const serviceMeta = serviceCard.querySelector('.hero-meta');
-    const feedback = serviceCard.querySelectorAll('.hero-feedback');
-    for (const node of [headerBar, serviceSecondary, serviceMeta, ...feedback]) {
-      if (node) hidden.appendChild(node);
-    }
-    card.appendChild(hidden);
-
-    overview.replaceChildren(shell);
-    wireAutosave(card);
-    updateDependencies();
-
-    if (primary.dataset.proGuidedWired !== '1') {
-      primary.dataset.proGuidedWired = '1';
-      primary.addEventListener('click', async (event) => {
-        if (primary.dataset.proGuidedAction !== 'apply') return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        const saved = await saveConfiguration();
-        if (!saved) return;
-        restartRequired = false;
-        savingState('saving', 'Applying changes and restarting…');
-        el('btnSaveRestart')?.click();
-      }, true);
-    }
-
-    const statusSource = el('pillTxt');
-    if (statusSource && statusSource.dataset.proGuidedObserved !== '1') {
-      statusSource.dataset.proGuidedObserved = '1';
-      const statusObserver = new MutationObserver(() => {
-        if (!serviceIsRunning()) restartRequired = false;
-        syncPrimaryAction();
-      });
-      statusObserver.observe(statusSource, { childList: true, subtree: true, characterData: true });
+      if (!field) return false;
+      appendIfNeeded(fields, field);
+      if (key === 'wpa2_passphrase') decoratePassword(field);
     }
     return true;
+  }
+
+  function addAdvancedGroupHelp(details, text) {
+    const body = details.querySelector(':scope > .pro-config-body');
+    if (!body || body.querySelector(':scope > .pro-advanced-group-help')) return;
+    body.prepend(make('p', 'pro-advanced-group-help', text));
+  }
+
+  function decorateAdvanced(shell) {
+    const configuration = el('proHotspotConfiguration');
+    let groups = shell.querySelector('.pro-guided-advanced-groups');
+    if (!groups) {
+      groups = make('div', 'pro-guided-advanced-groups');
+      guidedSlot(shell, 'proStepAdvanced').appendChild(groups);
+    }
+    const copy = {
+      Wireless: 'Channels, width, radio timing, transmit power, automatic selection, and fallback behavior.',
+      Network: 'Gateway, DHCP, DNS, NAT acceleration, bridge mode, and firewall integration.',
+      'System & Performance': 'Startup behavior, interface strategy, power management, CPU tuning, kernel tuning, and debug logging.',
+    };
+    const candidates = configuration?.querySelectorAll('.pro-config-details') || [];
+    candidates.forEach((details) => {
+      const title = String(details.querySelector(':scope > summary')?.textContent || '').trim();
+      if (copy[title]) addAdvancedGroupHelp(details, copy[title]);
+      appendIfNeeded(groups, details);
+    });
+    return groups.children.length >= 3;
+  }
+
+  function wirePrimaryAction(primary) {
+    if (!primary || primary.dataset.proGuidedWired === '1') return;
+    primary.dataset.proGuidedWired = '1';
+    primary.addEventListener('click', async (event) => {
+      if (primary.dataset.proGuidedAction !== 'apply') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const saved = await saveConfiguration();
+      if (!saved) return;
+      restartRequired = false;
+      savingState('saving', 'Applying changes and restarting…');
+      el('btnSaveRestart')?.click();
+    }, true);
+  }
+
+  function decorateAction(shell) {
+    const serviceCard = el('proGuidedStaging')?.querySelector('.pro-service-card')
+      || document.querySelector('.pro-service-card');
+    const stateCopy = serviceCard?.querySelector('.pro-service-state-copy');
+    const primary = el('btnStart');
+    const save = el('btnSaveConfig');
+    const saveRestart = el('btnSaveRestart');
+    const repair = el('btnRepair');
+    if (!primary || !save || !saveRestart || !repair) return false;
+
+    let action = shell.querySelector('.pro-guided-action');
+    if (!action) {
+      action = make('div', 'pro-guided-action');
+      const buttons = make('div', 'pro-guided-action-buttons');
+      const saves = make('div', 'pro-guided-save-actions');
+      const secondary = make('div', 'pro-guided-secondary-actions');
+      buttons.append(primary, saves, secondary);
+      action.append(stateCopy || make('div'), buttons);
+      guidedSlot(shell, 'proStepAction').appendChild(action);
+    }
+    const buttons = action.querySelector('.pro-guided-action-buttons');
+    const saves = action.querySelector('.pro-guided-save-actions');
+    const secondary = action.querySelector('.pro-guided-secondary-actions');
+    prependIfNeeded(buttons, primary);
+    setText(save, 'Save Changes');
+    setText(saveRestart, 'Save & Restart');
+    ensureChildOrder(saves, [save, saveRestart]);
+    setText(repair, 'Repair Network');
+    appendIfNeeded(secondary, repair);
+    if (stateCopy) prependIfNeeded(action, stateCopy);
+    wirePrimaryAction(primary);
+    return true;
+  }
+
+  function rehydrateWorkflow(shell) {
+    if (!isAdvancedMode()) return false;
+    syncStepCopy(shell);
+    const ready = [
+      decorateAdapter(shell),
+      decoratePerformance(shell),
+      decorateHotspot(shell),
+      decorateAdvanced(shell),
+      decorateAction(shell),
+    ].every(Boolean);
+    wireAutosave(shell.querySelector('.pro-guided-card'));
+    updateDependencies();
+    syncHeaderStatus();
+    syncPrimaryAction();
+    return ready;
   }
 
   function qualityMessage() {
@@ -339,15 +647,13 @@
     return summary || 'Connection measurements will appear as clients begin using the hotspot.';
   }
 
-  function buildConnectionQuality() {
-    if (el('proConnectionQuality')) return true;
-    const overview = el('tab-overview');
-    const shell = overview?.querySelector('.pro-guided-shell');
+  function ensureConnectionQuality(shell) {
+    const existing = el('proConnectionQuality');
+    if (existing) return true;
     const telemetryPane = el('tab-telemetry');
     const telemetryCard = el('cardTelemetry');
-    if (!shell || !telemetryPane || !telemetryCard) return false;
+    if (!telemetryPane || !telemetryCard) return false;
 
-    document.querySelector('.nav-item[data-tab="telemetry"]')?.remove();
     const card = make('section', 'pro-quality-card');
     card.id = 'proConnectionQuality';
     const header = make('div', 'pro-quality-header');
@@ -359,29 +665,11 @@
     const body = make('div', 'pro-quality-body');
     const summary = make('div', 'pro-quality-summary', qualityMessage());
     summary.id = 'proQualitySummary';
-    const warning = el('telemetryWarnings');
     const details = make('details', 'pro-quality-details');
     details.appendChild(make('summary', '', 'View detailed charts and client measurements'));
-
     const telemetryBody = telemetryCard.querySelector('.card-body');
     if (telemetryBody) details.appendChild(telemetryBody);
-    const settings = details.querySelector('[data-field="telemetry_enable"]');
-    if (settings) {
-      settings.classList.add('pro-quality-settings');
-      const label = settings.querySelector(':scope > label');
-      if (label) label.textContent = 'Measurement options';
-      const toggles = settings.querySelectorAll('.tog');
-      for (const [toggle, text] of [
-        [toggles[0], 'Measure connection quality'],
-        [toggles[1], 'Watch for connection problems'],
-      ]) {
-        const input = toggle && toggle.querySelector('input');
-        if (toggle && input) toggle.replaceChildren(input, document.createTextNode(` ${text}`));
-      }
-    }
-    const interval = document.querySelector('[data-field="telemetry_interval_s"]');
-    if (interval) interval.classList.add('pro-guided-hidden');
-
+    const warning = el('telemetryWarnings');
     body.append(summary);
     if (warning) body.appendChild(warning);
     body.appendChild(details);
@@ -389,20 +677,22 @@
     shell.appendChild(card);
     telemetryPane.hidden = true;
 
-    const sources = [el('telemetrySummary'), el('telemetryWarnings'), el('pillTxt')].filter(Boolean);
-    const qualityObserver = new MutationObserver(() => {
+    if (qualityObserver) qualityObserver.disconnect();
+    qualityObserver = new MutationObserver(() => {
       setText(summary, qualityMessage());
       setText(status, serviceIsRunning() ? 'Live' : 'Waiting');
     });
-    sources.forEach((node) => qualityObserver.observe(node, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    }));
+    [el('telemetrySummary'), el('telemetryWarnings'), el('pillTxt')]
+      .filter(Boolean)
+      .forEach((node) => qualityObserver.observe(node, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      }));
     return true;
   }
 
-  function buildTroubleshooting() {
+  function ensureTroubleshooting() {
     const diagnosticsPane = el('tab-troubleshooting') || el('tab-diagnostics');
     const logsPane = el('tab-logs');
     const nav = document.querySelector(
@@ -414,18 +704,17 @@
     nav.dataset.tab = 'troubleshooting';
     diagnosticsPane.id = 'tab-troubleshooting';
     replaceNav(nav, 'trouble', 'Troubleshooting');
-    const logsNav = document.querySelector('.nav-item[data-tab="logs"]');
-    logsNav?.remove();
+    document.querySelector('.nav-item[data-tab="logs"]')?.remove();
 
     const shell = make('div', 'troubleshooting-shell');
     const header = make('section', 'troubleshooting-header');
     const copy = make('div');
     copy.append(
       make('h2', '', 'Troubleshooting'),
-      make('p', '', 'Check system health, repair problems, inspect runtime details, and collect support information.'),
+      make('p', '', 'Check system health, restart services, inspect runtime details, and collect support information.'),
     );
     const actions = make('div', 'troubleshooting-actions');
-    for (const id of ['btnRepair', 'btnRestart', 'btnRefreshPreflight']) {
+    for (const id of ['btnRestart', 'btnRefreshPreflight']) {
       const control = el(id);
       if (control) actions.appendChild(control);
     }
@@ -437,7 +726,6 @@
       preflight.querySelector('.preflight-header .action-group')?.remove();
       shell.appendChild(preflight);
     }
-
     shell.appendChild(make('h3', 'troubleshooting-section-label', 'Runtime Details, Logs & Support'));
     logsPane.querySelector('.pro-support-heading')?.remove();
     Array.from(logsPane.children).forEach((node) => shell.appendChild(node));
@@ -446,72 +734,67 @@
     return true;
   }
 
-  function initialize() {
-    enforceNavigation();
+  function ensureStatusObserver() {
+    const source = el('proServiceStateText') || el('pillTxt');
+    if (!source || source.dataset.proComposerObserved === '1') return;
+    source.dataset.proComposerObserved = '1';
+    statusObserver = new MutationObserver(() => {
+      if (!serviceIsRunning()) restartRequired = false;
+      syncHeaderStatus();
+      syncPrimaryAction();
+    });
+    statusObserver.observe(source, { childList: true, subtree: true, characterData: true });
+  }
+
+  function reconcile() {
+    reconcileQueued = false;
     try {
-      if (!guidedReady) guidedReady = buildGuidedSetup();
-      if (guidedReady && !qualityReady) qualityReady = buildConnectionQuality();
-      if (!troubleshootingReady) troubleshootingReady = buildTroubleshooting();
-      initialized = guidedReady && qualityReady && troubleshootingReady;
-      if (document.body) {
-        document.body.dataset.proGuidedStage = initialized
-          ? 'ready'
-          : guidedReady
-            ? 'guided-ready'
-            : 'waiting-for-base';
-        if (initialized) delete document.body.dataset.proGuidedError;
+      if (!isAdvancedMode()) {
+        restoreBasicPresentation();
+        return;
       }
-      return initialized;
+      enforceNavigation();
+      if (!prerequisitesReady()) {
+        setStage('waiting-for-base');
+        return;
+      }
+      const shell = ensureWorkflowShell();
+      if (!shell) {
+        setStage('waiting-for-base');
+        return;
+      }
+      const guidedReady = rehydrateWorkflow(shell);
+      const qualityReady = ensureConnectionQuality(shell);
+      const troubleshootingReady = ensureTroubleshooting();
+      ensureStatusObserver();
+      setStage(guidedReady && qualityReady && troubleshootingReady ? 'ready' : 'composing');
     } catch (error) {
-      if (document.body) {
-        document.body.dataset.proGuidedStage = 'error';
-        document.body.dataset.proGuidedError = String(error && error.message ? error.message : error);
-      }
-      console.error('VRhotspot Pro workflow retrying after UI error.', error);
-      return false;
+      const message = String(error && error.message ? error.message : error);
+      setStage('error', message);
+      console.error('VRhotspot Pro composer failed.', error);
     }
   }
 
-  function resetRetryBudget() {
-    if (initialized) return;
-    retryCount = 0;
-    scheduleRetry();
-  }
-
-  function scheduleRetry() {
-    if (retryQueued || initialized || retryCount >= RETRY_LIMIT) return;
-    retryQueued = true;
-    retryTimer = window.setTimeout(() => {
-      retryQueued = false;
-      retryCount += 1;
-      if (initialize()) {
-        if (observer) observer.disconnect();
-        if (retryTimer) window.clearTimeout(retryTimer);
-        return;
-      }
-      scheduleRetry();
-    }, 100);
+  function scheduleReconcile() {
+    if (reconcileQueued) return;
+    reconcileQueued = true;
+    window.setTimeout(reconcile, 0);
   }
 
   function start() {
-    enforceNavigation();
-    if (initialize()) return;
-    observer = new MutationObserver((records) => {
-      if (records.some((record) => record.type === 'attributes')) retryCount = 0;
-      scheduleRetry();
-    });
+    const observer = new MutationObserver(scheduleReconcile);
     observer.observe(document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['data-auth-state', 'data-ui-mode'],
     });
-    window.addEventListener('pageshow', resetRetryBudget);
-    window.addEventListener('load', resetRetryBudget, { once: true });
+    window.addEventListener('pageshow', scheduleReconcile);
+    window.addEventListener('load', scheduleReconcile, { once: true });
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) resetRetryBudget();
+      if (!document.hidden) scheduleReconcile();
     });
-    scheduleRetry();
+    scheduleReconcile();
   }
 
   if (document.readyState === 'loading') {
