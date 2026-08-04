@@ -152,11 +152,28 @@ body[data-ui-mode="advanced"] .pro-password-field > label {
 }
 
 body[data-ui-mode="advanced"] .pro-password-row {
+  /* Matches the effective control height basic_layout.css gives Step 3
+     inputs: 46px base, 48px at >=1200px via its min-height override. */
+  --pro-password-control: 46px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 46px 46px;
+  grid-template-columns: minmax(0, 1fr) var(--pro-password-control) var(--pro-password-control);
   gap: 8px;
   align-items: stretch;
   width: 100%;
+}
+
+@media (min-width: 1200px) {
+  body[data-ui-mode="advanced"] .pro-password-row {
+    --pro-password-control: 48px;
+  }
+}
+
+body[data-ui-mode="advanced"] .pro-password-row #wpa2_passphrase,
+body[data-ui-mode="advanced"] .pro-password-row #btnRevealPass,
+body[data-ui-mode="advanced"] .pro-password-row #btnShowQr {
+  box-sizing: border-box;
+  height: var(--pro-password-control);
+  min-height: var(--pro-password-control);
 }
 
 body[data-ui-mode="advanced"] .pro-password-row #wpa2_passphrase {
@@ -164,8 +181,10 @@ body[data-ui-mode="advanced"] .pro-password-row #wpa2_passphrase {
   margin: 0 !important;
 }
 
-body[data-ui-mode="advanced"] .pro-password-row .btn.icon-only {
-  min-width: 46px !important;
+body[data-ui-mode="advanced"] .pro-password-row #btnRevealPass,
+body[data-ui-mode="advanced"] .pro-password-row #btnShowQr {
+  width: var(--pro-password-control) !important;
+  min-width: var(--pro-password-control) !important;
   padding: 0 !important;
   margin: 0 !important;
 }
