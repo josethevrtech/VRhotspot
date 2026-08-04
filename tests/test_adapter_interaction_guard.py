@@ -74,9 +74,27 @@ def test_step_three_runtime_organizes_the_six_connection_fields() -> None:
     assert '"ssid password"' in style
     assert '"band security"' in style
     assert '"country internet"' in style
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in style
     assert "grid-template-columns: minmax(0, 1fr) 48px 48px" in style
     assert ".pro-password-action" in style
     assert '[data-field="enable_internet"]' in style
+
+
+def test_step_three_layout_does_not_resize_checkbox_as_a_text_input() -> None:
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert 'input:not([type="checkbox"])' in style
+    assert 'input[type="checkbox"]' in style
+    assert "width: auto;" in style
+    assert "height: auto;" in style
+
+
+def test_step_three_layout_keeps_optional_hints_from_creating_empty_space() -> None:
+    style = STYLE.read_text(encoding="utf-8")
+
+    assert "#passHint:empty" in style
+    assert "#bandHint:empty" in style
+    assert "display: none;" in style
 
 
 def test_step_three_layout_does_not_replace_original_qr_controller() -> None:
@@ -103,6 +121,7 @@ def test_password_visibility_survives_polling_until_user_hides_it() -> None:
     assert "setPassphraseVisibility(true)" in source
     assert "setPassphraseVisibility(show)" in source
     assert "passphraseRevealActive = false" in source
+
 
 def test_guard_parses_with_node() -> None:
     node = shutil.which("node")
