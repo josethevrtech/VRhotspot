@@ -278,7 +278,7 @@
 
   const assets = [
     '/assets/browser_session.js?v=139-session-hotfix',
-    '/assets/pro_guided_workflow.js?v=148-adapter-controls-3',
+    '/assets/pro_guided_workflow.js?v=148-adapter-source-labels-4',
   ];
   for (const src of assets) {
     const script = document.createElement('script');
@@ -291,9 +291,8 @@
 (function stabilizeProAdapterControl() {
   'use strict';
 
-  let observedSelect = null;
-  let optionsObserver = null;
-  let normalizing = false;
+  const STYLE_HREF = '/assets/pro_guided_authoritative.css?v=148-adapter-source-labels-4';
+  let wrapped = false;
   let reconcileQueued = false;
 
   function isProMode() {
@@ -304,7 +303,7 @@
     try {
       if (typeof getAdapterByIfname === 'function') return getAdapterByIfname(ifname);
     } catch {
-      // The Pro adapter surface can initialize before the inventory helper is ready.
+      // Adapter inventory can still be loading.
     }
     return null;
   }
@@ -317,105 +316,102 @@
     return adapter ? 'internal' : 'other';
   }
 
-  function ensureSelectedLabel(row) {
-    let label = row.querySelector(':scope > .pro-adapter-selected-label');
-    if (!label) {
-      label = document.createElement('span');
-      label.className = 'pro-adapter-selected-label pro-runtime-wrapper';
-      label.setAttribute('aria-hidden', 'true');
-      row.prepend(label);
-    }
-    return label;
-  }
-
-  function normalizeOptions(select) {
-    if (!isProMode()) return '';
-    const row = select.closest('.pro-adapter-row');
-    if (!row) return '';
+  function friendlyAdapterOptions() {
+    if (!isProMode()) return;
+    const select = document.getElementById('ap_adapter');
+    if (!select) return;
 
     const counters = { usb: 0, internal: 0, other: 0 };
     const recommended = String(select.dataset.recommended || '');
-    let selectedLabel = '';
-    normalizing = true;
-    try {
-      for (const option of Array.from(select.options)) {
-        const rawLabel = option.dataset.rawAdapterLabel || String(option.textContent || '').trim();
-        if (!option.dataset.rawAdapterLabel) option.dataset.rawAdapterLabel = rawLabel;
-        const adapter = adapterRecord(option.value);
-        const kind = adapterKind(adapter, rawLabel);
-        let label;
-        if (kind === 'usb') {
-          counters.usb += 1;
-          label = `USB Wi-Fi ${counters.usb}`;
-        } else if (kind === 'internal') {
-          label = `Internal Wi-Fi ${counters.internal}`;
-          counters.internal += 1;
-        } else {
-          counters.other += 1;
-          label = `Wi-Fi Adapter ${counters.other}`;
-        }
-        if (option.value === recommended) label += ' (Recommended)';
-        if (option.textContent !== label) option.textContent = label;
-        option.removeAttribute('title');
-        if (option.selected) selectedLabel = label;
+    for (const option of Array.from(select.options)) {
+      const rawLabel = option.dataset.rawAdapterLabel || String(option.textContent || '').trim();
+      if (!option.dataset.rawAdapterLabel) option.dataset.rawAdapterLabel = rawLabel;
+      const adapter = adapterRecord(option.value);
+      const kind = adapterKind(adapter, rawLabel);
+      let label;
+      if (kind === 'usb') {
+        counters.usb += 1;
+        label = `USB Wi-Fi ${counters.usb}`;
+      } else if (kind === 'internal') {
+        label = `Internal Wi-Fi ${counters.internal}`;
+        counters.internal += 1;
+      } else {
+        counters.other += 1;
+        label = `Wi-Fi Adapter ${counters.other}`;
       }
-    } finally {
-      normalizing = false;
+      if (option.value === recommended) label += ' (Recommended)';
+      option.textContent = label;
+      option.removeAttribute('title');
     }
-
-    const display = ensureSelectedLabel(row);
-    if (selectedLabel) display.textContent = selectedLabel;
-    return selectedLabel;
   }
 
-  function decorateDetailsButton(info) {
-    if (!info) return;
-    const expanded = info.getAttribute('aria-expanded') === 'true';
-    info.replaceChildren(document.createTextNode('Adapter details'));
-    info.classList.add('pro-adapter-details-button');
-    info.classList.remove('tip');
-    info.removeAttribute('data-tip');
-    info.title = expanded ? 'Hide adapter details' : 'Show adapter details';
-    info.setAttribute('aria-label', info.title);
+  function installLoadAdaptersWrapper() {
+    if (wrapped) return true;
+    const original = typeof loadAdapters === 'function'
+      ? loadAdapters
+      : window.loadAdapters;
+    if (typeof original !== 'function') return false;
+
+    const wrappedLoadAdapters = async function wrappedLoadAdapters(...args) {
+      const result = await original.apply(this, args);
+      friendlyAdapterOptions();
+      return result;
+    };
+    wrappedLoadAdapters.__vrhotspotFriendlyAdapters = true;
+    window.loadAdapters = wrappedLoadAdapters;
+    try {
+      loadAdapters = wrappedLoadAdapters;
+    } catch {
+      // window assignment is sufficient in a standard browser global scope.
+    }
+    wrapped = true;
+    return true;
+  }
+
+  function ensureCurrentStyles() {
+    let link = document.querySelector('link[data-pro-adapter-controls]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.dataset.proAdapterControls = '1';
+      document.head.appendChild(link);
+    }
+    if (!link.href.includes('148-adapter-source-labels-4')) link.href = STYLE_HREF;
   }
 
   function decorate() {
-    if (!isProMode()) return false;
-    const select = document.getElementById('ap_adapter');
-    const row = select?.closest('.pro-adapter-row');
-    const info = document.getElementById('proAdapterInfo');
+    installLoadAdaptersWrapper();
+    ensureCurrentStyles();
+
     const recommended = document.getElementById('btnUseRecommended');
-    if (!select || !row || !info) return false;
-
-    const stylesheet = document.querySelector('link[data-pro-guided-styles="authoritative"]');
-    if (stylesheet && !stylesheet.href.includes('148-adapter-controls-3')) {
-      stylesheet.href = '/assets/pro_guided_authoritative.css?v=148-adapter-controls-3';
-    }
-
     if (recommended) {
-      recommended.hidden = true;
-      recommended.setAttribute('aria-hidden', 'true');
-      recommended.tabIndex = -1;
+      if (isProMode()) {
+        recommended.hidden = true;
+        recommended.setAttribute('aria-hidden', 'true');
+        recommended.tabIndex = -1;
+        recommended.style.display = 'none';
+      } else {
+        recommended.hidden = false;
+        recommended.removeAttribute('aria-hidden');
+        recommended.tabIndex = 0;
+        recommended.style.removeProperty('display');
+      }
     }
 
-    decorateDetailsButton(info);
-    normalizeOptions(select);
+    if (!isProMode()) return;
 
-    if (observedSelect !== select) {
-      if (optionsObserver) optionsObserver.disconnect();
-      observedSelect = select;
-      optionsObserver = new MutationObserver(() => {
-        if (normalizing || !isProMode()) return;
-        normalizeOptions(select);
-      });
-      optionsObserver.observe(select, { childList: true, subtree: true });
-    }
+    document.querySelectorAll('.pro-adapter-selected-label').forEach((node) => node.remove());
+    friendlyAdapterOptions();
 
-    if (select.dataset.proStableLabelWired !== '1') {
-      select.dataset.proStableLabelWired = '1';
-      select.addEventListener('change', () => normalizeOptions(select));
+    const info = document.getElementById('proAdapterInfo');
+    if (info) {
+      const expanded = info.getAttribute('aria-expanded') === 'true';
+      info.replaceChildren(document.createTextNode('Adapter details'));
+      info.classList.remove('tip');
+      info.removeAttribute('data-tip');
+      info.title = expanded ? 'Hide adapter details' : 'Show adapter details';
+      info.setAttribute('aria-label', info.title);
     }
-    return true;
   }
 
   function reconcile() {
@@ -430,6 +426,8 @@
   }
 
   function start() {
+    installLoadAdaptersWrapper();
+    ensureCurrentStyles();
     const observer = new MutationObserver(schedule);
     observer.observe(document.documentElement, {
       childList: true,
@@ -441,9 +439,5 @@
     schedule();
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', start, { once: true });
-  } else {
-    start();
-  }
+  start();
 })();
