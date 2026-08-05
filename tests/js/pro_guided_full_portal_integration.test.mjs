@@ -257,8 +257,10 @@ function apiPayload(url, { passphraseSaved, enableInternet = true, running = fal
 
 function installBrowserStubs(window, options) {
   window.__fetchLog = [];
-  window.fetch = async (url) => {
-    window.__fetchLog.push(new URL(String(url), 'http://127.0.0.1:8732').pathname);
+  window.fetch = async (url, init) => {
+    window.__fetchLog.push(
+      `${(init && init.method) || 'GET'} ${new URL(String(url), 'http://127.0.0.1:8732').pathname}`,
+    );
     const payload = apiPayload(url, options);
     const body = JSON.stringify(payload);
     return {
@@ -320,7 +322,10 @@ async function waitFor(window, predicate, label, timeoutMs = 2500) {
     status: doc.getElementById('proServiceStateText')?.textContent || '',
     primary: doc.getElementById('btnStart')?.textContent || '',
     primaryAction: doc.getElementById('btnStart')?.dataset.proGuidedAction || '',
-    fetchTail: (window.__fetchLog || []).slice(-8),
+    primaryWired: doc.getElementById('btnStart')?.dataset.proGuidedWired || '',
+    saveRestartExists: !!doc.getElementById('btnSaveRestart'),
+    saveRestartParent: doc.getElementById('btnSaveRestart')?.parentElement?.className || '',
+    fetchTail: (window.__fetchLog || []).slice(-14),
   };
   throw new Error(`Timed out waiting for ${label} :: ${JSON.stringify(diag)}`);
 }
@@ -756,17 +761,19 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
     8000,
   );
   assert.equal(document.getElementById('btnStart').textContent, 'Apply Changes & Restart');
-  const restartsBefore = window.__fetchLog.filter((p) => p === '/v1/restart').length;
+  const restartsBefore = window.__fetchLog.filter((p) => p.endsWith('/v1/restart')).length;
+  window.__fetchLog.push('::click-primary');
   document.getElementById('btnStart').click();
+  window.__fetchLog.push('::clicked-primary');
   await waitFor(
     window,
-    () => window.__fetchLog.filter((p) => p === '/v1/restart').length === restartsBefore + 1,
+    () => window.__fetchLog.filter((p) => p.endsWith('/v1/restart')).length === restartsBefore + 1,
     'the apply action must trigger the save-and-restart workflow',
     8000,
   );
   await tick(window, 300);
   assert.equal(
-    window.__fetchLog.filter((p) => p === '/v1/restart').length,
+    window.__fetchLog.filter((p) => p.endsWith('/v1/restart')).length,
     restartsBefore + 1,
     'exactly one restart request may be issued',
   );
