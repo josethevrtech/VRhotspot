@@ -290,6 +290,14 @@ closeWizard();
 showPrecondition();
 return;
 }
+if (code === 'hotspot_configuration_incomplete') {
+closeWizard();
+showPrecondition({
+configurationError: true,
+message: resultMessage(response, 'The hotspot configuration is incomplete.'),
+});
+return;
+}
 if (
 code === 'wifi_control_unavailable'
 || data.requires_manual_join === true
@@ -409,16 +417,18 @@ stopTimer('usbTimer');
 stopTimer('joinTimer');
 el('devhubWirelessSetup')?.focus();
 }
-function showPrecondition() {
-text(el('devhubHotspotPreconditionStatus'), '');
-el('devhubHotspotPreconditionStatus').dataset.state = '';
-el('devhubStartHotspot').hidden = false;
+function showPrecondition(options = {}) {
+const configurationError = options.configurationError === true;
+const status = el('devhubHotspotPreconditionStatus');
+text(status, String(options.message || ''));
+status.dataset.state = configurationError ? 'error' : '';
+el('devhubStartHotspot').hidden = configurationError;
 el('devhubStartHotspot').disabled = false;
 text(el('devhubStartHotspot'), 'Start Hotspot');
-el('devhubOpenHotspotSetup').hidden = true;
+el('devhubOpenHotspotSetup').hidden = !configurationError;
 el('devhubHotspotPrecondition').hidden = false;
 document.body.classList.add('devhub-modal-open');
-el('devhubStartHotspot').focus();
+(configurationError ? el('devhubOpenHotspotSetup') : el('devhubStartHotspot')).focus();
 }
 function closePrecondition() {
 el('devhubHotspotPrecondition').hidden = true;
@@ -493,13 +503,42 @@ const connect = card(connectionPanel, 'Connect Headset');
 if (!devices || !discovery || !pairing || !connect) return false;
 devices.querySelector('.card-header h2').textContent = 'Headsets';
 const header = devices.querySelector('.card-header');
+header.classList.add('devhub-headsets-header');
+const actions = document.createElement('div');
+actions.className = 'devhub-headsets-actions';
 const setup = document.createElement('button');
 setup.id = 'devhubWirelessSetup';
 setup.type = 'button';
 setup.className = 'btn sm primary';
 setup.textContent = 'Set up wireless headset';
 setup.addEventListener('click', () => void beginSetup());
-header.appendChild(setup);
+const disconnect = el('devhubDisconnect');
+if (disconnect && disconnect.parentNode === header) {
+header.insertBefore(actions, disconnect);
+actions.append(setup, disconnect);
+} else {
+actions.appendChild(setup);
+header.appendChild(actions);
+}
+const connectionQuickAction = Array.from(
+workspace.querySelectorAll('.devhub-quick-action'),
+).find((item) => item.querySelector('strong')?.textContent.trim() === 'Connection');
+if (connectionQuickAction) {
+const oldButton = connectionQuickAction.querySelector('button');
+if (oldButton) {
+const replacement = oldButton.cloneNode(true);
+const label = replacement.querySelector('strong');
+if (label) label.textContent = 'Set up wireless headset';
+replacement.addEventListener('click', () => void beginSetup());
+oldButton.replaceWith(replacement);
+}
+const tip = connectionQuickAction.querySelector('.devhub-quick-action-tip');
+if (tip) {
+const help = 'Connect and authorize a headset only through the dedicated VRhotspot network.';
+tip.setAttribute('data-tip', help);
+tip.setAttribute('aria-label', help);
+}
+}
 const candidates = el('devhubCandidateList');
 if (candidates) {
 const section = document.createElement('section');
