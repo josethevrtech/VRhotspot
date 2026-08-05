@@ -403,23 +403,9 @@ body[data-ui-mode="advanced"] .pro-guided-action-buttons > #btnStart {
   justify-content: center;
 }
 
-body[data-ui-mode="advanced"] .pro-guided-save-actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-}
-
-body[data-ui-mode="advanced"] .pro-guided-hidden-staging {
+body[data-ui-mode="advanced"] .pro-guided-hidden-staging,
+body[data-ui-mode="advanced"] .pro-guided-hidden-staging .btn {
   display: none !important;
-}
-
-body[data-ui-mode="advanced"] .pro-guided-save-actions .btn {
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
-  padding-inline: 8px !important;
-  justify-content: center;
-  white-space: normal;
-  line-height: 1.2;
 }
 
 @media (max-width: 1050px) {

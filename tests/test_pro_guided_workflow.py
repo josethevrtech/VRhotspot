@@ -151,13 +151,15 @@ def test_step_five_keeps_start_save_restart_and_repair_actions() -> None:
         assert control in source
     assert "Save Changes" in source
     assert "Apply Changes & Restart" in source
-    # Step 5 shows only Start/Stop plus Save Changes: the live Save & Restart
-    # node is parked in hidden staging for the primary apply flow, and Repair
-    # Network lives in the Troubleshooting recovery actions.
+    # Step 5 exposes only the primary Start/Stop control: Pro autosaves, so
+    # both save controls stay live but parked in hidden staging for the apply
+    # flow, and Repair Network lives in the Troubleshooting recovery actions.
     assert "pro-guided-hidden-staging" in source
+    assert "applyHiddenStagedControl" in source
+    assert "ensureChildOrder(staging, [save, saveRestart])" in source
     assert "Repair Network" in source
-    assert ".pro-guided-save-actions" in style
     assert ".pro-guided-hidden-staging" in style
+    assert ".pro-guided-save-actions" not in style
     assert ".pro-guided-secondary-actions" not in style
 
 
@@ -171,7 +173,9 @@ def test_adapter_and_password_compaction_are_reversible() -> None:
     assert "rememberInternalHome(input)" in source
     assert "rememberInternalHome(reveal)" in source
     assert "rememberInternalHome(qr)" in source
-    assert "recommended.hidden = false" in source
+    # The Recommended button is redundant in both modes and stays hidden.
+    assert "applyRecommendedButtonState" in source
+    assert "recommended.hidden = true" in source
     assert "Rescan adapters" in source
     assert "USB Wi-Fi ${counters.usb}" in source
     assert "Internal Wi-Fi ${counters.internal}" in source

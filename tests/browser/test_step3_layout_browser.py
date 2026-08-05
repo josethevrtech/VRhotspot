@@ -327,12 +327,17 @@ def test_step_four_field_tips_and_icon_sizing(pro_page):
                 return {id, w: r.width, h: r.height,
                         text: tip.getAttribute('data-tip') || ''};
             });
-            const step3Tip = document.querySelector(
-                '[data-field="band_preference"] .tip').getBoundingClientRect();
+            const step3Node = document.querySelector('[data-field="band_preference"] .tip');
+            const step3Tip = step3Node.getBoundingClientRect();
+            const step3Cs = getComputedStyle(step3Node);
             return {
                 tips,
                 introGone: !document.querySelector('#proStepAdvanced .pro-advanced-group-help'),
-                step3: {w: step3Tip.width, h: step3Tip.height},
+                step3: {w: step3Tip.width, h: step3Tip.height,
+                        font: step3Cs.fontSize, lineHeight: step3Cs.lineHeight,
+                        padding: step3Cs.padding, border: step3Cs.borderTopWidth,
+                        boxSizing: step3Cs.boxSizing, transform: step3Cs.transform,
+                        zoom: step3Cs.zoom},
             };
         }""",
         STEP4_TIP_IDS,
@@ -345,6 +350,7 @@ def test_step_four_field_tips_and_icon_sizing(pro_page):
             f"{tip['id']}: icon is {tip['w']:.1f}x{tip['h']:.1f}, expected 16x16"
         )
     assert abs(data["step3"]["w"] - 16) < 1 and abs(data["step3"]["h"] - 16) < 1
+    step3_metrics = data["step3"]
 
     # Opening a tooltip must not shift the layout.
     shift = pro_page.evaluate(
@@ -373,19 +379,34 @@ def test_step_four_field_tips_and_icon_sizing(pro_page):
     )
     pro_page.wait_for_function("document.body.dataset.uiMode === 'basic'", timeout=15000)
     pro_page.wait_for_timeout(600)
-    basic_tip = pro_page.evaluate(
-        """() => {
-            const tip = Array.from(document.querySelectorAll('.tip')).find(
-                (node) => node.getBoundingClientRect().width > 0);
-            if (!tip) return null;
+    basic_tips = pro_page.evaluate(
+        """() => Array.from(document.querySelectorAll('.tip')).map((tip) => {
             const r = tip.getBoundingClientRect();
-            return {w: r.width, h: r.height};
-        }"""
+            if (r.width === 0 || r.height === 0) return null;
+            const cs = getComputedStyle(tip);
+            return {w: r.width, h: r.height, cy: r.top + r.height / 2,
+                    font: cs.fontSize, lineHeight: cs.lineHeight,
+                    padding: cs.padding, border: cs.borderTopWidth,
+                    boxSizing: cs.boxSizing, transform: cs.transform, zoom: cs.zoom};
+        }).filter(Boolean)"""
     )
-    assert basic_tip, "no visible info icon found in Basic mode"
-    assert abs(basic_tip["w"] - 16) < 1 and abs(basic_tip["h"] - 16) < 1, (
-        f"Basic icon is {basic_tip['w']:.1f}x{basic_tip['h']:.1f}, expected 16x16"
-    )
+    assert basic_tips, "no visible info icon found in Basic mode"
+    # Every Basic icon must match the Pro Step 3 icon exactly, not merely be
+    # numerically close: same box, glyph metrics, and no scaling.
+    reference = {"w": 16.0, "h": 16.0, "font": "11px", "lineHeight": "11px",
+                 "padding": "0px", "border": "1px", "boxSizing": "border-box"}
+    for tip in basic_tips + [{**t, "cy": 0} for t in [step3_metrics]]:
+        assert abs(tip["w"] - reference["w"]) < 0.5, f"icon width {tip['w']}"
+        assert abs(tip["h"] - reference["h"]) < 0.5, f"icon height {tip['h']}"
+        assert tip["font"] == reference["font"], f"glyph size {tip['font']}"
+        assert tip["lineHeight"] == reference["lineHeight"], f"line height {tip['lineHeight']}"
+        assert tip["padding"] == reference["padding"], f"padding {tip['padding']}"
+        assert tip["border"] == reference["border"], f"border {tip['border']}"
+        assert tip["boxSizing"] == reference["boxSizing"]
+        assert tip["transform"] in ("none", "matrix(1, 0, 0, 1, 0, 0)"), (
+            f"icons must not be scaled: {tip['transform']}"
+        )
+        assert tip["zoom"] in ("1", "normal"), f"icons must not be zoomed: {tip['zoom']}"
 
     pro_page.evaluate(
         """() => {
@@ -398,6 +419,176 @@ def test_step_four_field_tips_and_icon_sizing(pro_page):
         "document.body.dataset.proGuidedStage === 'ready'", timeout=15000
     )
     pro_page.wait_for_timeout(500)
+
+
+def test_basic_step_one_controls(pro_page):
+    """Basic hides the redundant Recommended button and shows Rescan as a
+    full-width button matching Pro, without adapter flicker."""
+    pro_rescan = pro_page.evaluate(
+        """() => {
+            const cs = getComputedStyle(document.getElementById('btnReloadAdapters'));
+            const r = document.getElementById('btnReloadAdapters').getBoundingClientRect();
+            return {h: r.height, border: cs.borderTopWidth, bg: cs.backgroundColor,
+                    font: cs.fontSize, weight: cs.fontWeight,
+                    transform: cs.textTransform, radius: cs.borderTopLeftRadius};
+        }"""
+    )
+    pro_page.evaluate(
+        """() => {
+            const t = document.getElementById('uiModeToggle');
+            t.checked = false;
+            t.dispatchEvent(new Event('change', {bubbles: true}));
+        }"""
+    )
+    pro_page.wait_for_function("document.body.dataset.uiMode === 'basic'", timeout=15000)
+    pro_page.wait_for_timeout(1200)
+
+    basic = pro_page.evaluate(
+        """() => {
+            const rec = document.getElementById('btnUseRecommended');
+            const recRect = rec ? rec.getBoundingClientRect() : null;
+            const rescan = document.getElementById('btnReloadAdapters');
+            const cs = getComputedStyle(rescan);
+            const r = rescan.getBoundingClientRect();
+            const select = document.getElementById('ap_adapter');
+            const sr = select.getBoundingClientRect();
+            const visibleRecommendedText = Array.from(
+                document.querySelectorAll('button, a')
+            ).filter((node) => {
+                const box = node.getBoundingClientRect();
+                return box.width > 0 && box.height > 0
+                    && /^\\s*recommended\\s*$/i.test(node.textContent || '');
+            }).length;
+            return {
+                recCount: document.querySelectorAll('[id="btnUseRecommended"]').length,
+                recVisible: !!recRect && recRect.width > 0 && recRect.height > 0,
+                recHidden: !rec || rec.hidden,
+                recAria: rec ? rec.getAttribute('aria-hidden') : null,
+                recTab: rec ? rec.tabIndex : null,
+                recDisplay: rec ? getComputedStyle(rec).display : null,
+                visibleRecommendedText,
+                rescan: {h: r.height, w: r.width, top: r.top, left: r.left,
+                         border: cs.borderTopWidth, bg: cs.backgroundColor,
+                         font: cs.fontSize, weight: cs.fontWeight,
+                         transform: cs.textTransform, radius: cs.borderTopLeftRadius,
+                         align: cs.justifyContent},
+                selector: {w: sr.width, left: sr.left, bottom: sr.bottom},
+                options: Array.from(select.options).map((o) => o.textContent),
+            };
+        }"""
+    )
+    assert basic["recCount"] == 1, "the live Recommended node must remain unique"
+    assert basic["recVisible"] is False, "Recommended must not be visible in Basic"
+    assert basic["recHidden"] and basic["recAria"] == "true"
+    assert basic["recTab"] == -1 and basic["recDisplay"] == "none"
+    assert basic["visibleRecommendedText"] == 0, "no visible control labelled Recommended"
+
+    rescan, selector = basic["rescan"], basic["selector"]
+    assert abs(rescan["w"] - selector["w"]) < 2, "Rescan must be as wide as the selector"
+    assert abs(rescan["left"] - selector["left"]) < 2
+    assert rescan["top"] >= selector["bottom"] - 1, "Rescan sits beneath the selector"
+    assert rescan["border"] == pro_rescan["border"], "border must match Pro"
+    assert rescan["bg"] == pro_rescan["bg"], "background must match Pro"
+    assert rescan["font"] == pro_rescan["font"], "typography must match Pro"
+    assert rescan["weight"] == pro_rescan["weight"]
+    assert rescan["transform"] == pro_rescan["transform"], "capitalization must match Pro"
+    assert rescan["radius"] == pro_rescan["radius"]
+    assert abs(rescan["h"] - pro_rescan["h"]) < 2, "height must match Pro"
+    assert rescan["align"] == "center", "label must be centered"
+
+    # A real rescan must not rebuild unchanged options or blank the selector.
+    pro_page.evaluate(
+        """() => {
+            const sel = document.getElementById('ap_adapter');
+            window.__rescanMuts = 0;
+            window.__rescanNodes = Array.from(sel.options);
+            new MutationObserver((records) => {
+                for (const r of records) {
+                    if (r.type === 'childList') window.__rescanMuts += 1;
+                }
+            }).observe(sel, {childList: true, subtree: true});
+        }"""
+    )
+    pro_page.click("#btnReloadAdapters")
+    pro_page.wait_for_timeout(2500)
+    after = pro_page.evaluate(
+        """() => {
+            const sel = document.getElementById('ap_adapter');
+            return {
+                muts: window.__rescanMuts,
+                same: Array.from(sel.options).every((o, i) => o === window.__rescanNodes[i]),
+                count: sel.options.length,
+                labels: Array.from(sel.options).map((o) => o.textContent),
+            };
+        }"""
+    )
+    assert after["muts"] == 0, f"rescan rebuilt options ({after['muts']} mutations)"
+    assert after["same"], "unchanged options must retain node identity"
+    assert after["count"] > 0, "the selector must never blank out"
+    assert after["labels"] == basic["options"], "labels must be unchanged"
+
+    pro_page.evaluate(
+        """() => {
+            const t = document.getElementById('uiModeToggle');
+            t.checked = true;
+            t.dispatchEvent(new Event('change', {bubbles: true}));
+        }"""
+    )
+    pro_page.wait_for_function(
+        "document.body.dataset.proGuidedStage === 'ready'", timeout=15000)
+    pro_page.wait_for_timeout(600)
+
+
+def test_apply_changes_and_restart_request_sequence(pro_page):
+    """The real click path must save the config and issue exactly one
+    /v1/restart, never /v1/stop."""
+    pro_page.evaluate(
+        """() => {
+            window.__reqLog = [];
+            if (!window.__origFetch) window.__origFetch = window.fetch;
+            window.fetch = (url, init) => {
+                window.__reqLog.push(
+                    `${(init && init.method) || 'GET'} ${new URL(String(url), location.origin).pathname}`);
+                return window.__origFetch(url, init);
+            };
+            document.getElementById('proServiceStateText').textContent = 'Running';
+        }"""
+    )
+    pro_page.wait_for_timeout(400)
+    original = pro_page.evaluate("document.getElementById('ssid').value")
+    pro_page.fill("#ssid", f"{original}X")
+    pro_page.wait_for_function(
+        "document.getElementById('btnStart').dataset.proGuidedAction === 'apply'",
+        timeout=8000,
+    )
+    assert pro_page.evaluate(
+        "document.getElementById('btnStart').textContent.trim()"
+    ) == "Apply Changes & Restart"
+
+    pro_page.evaluate("window.__reqLog = []")
+    pro_page.click("#btnStart")  # real user click, not a handler invocation
+    pro_page.wait_for_function(
+        "window.__reqLog.some((e) => e.endsWith('/v1/restart'))", timeout=15000
+    )
+    pro_page.wait_for_timeout(1500)
+    log = pro_page.evaluate("window.__reqLog")
+    restarts = [e for e in log if e.endswith("/v1/restart")]
+    stops = [e for e in log if e.endswith("/v1/stop")]
+    saves = [e for e in log if e == "POST /v1/config"]
+    assert len(restarts) == 1, f"expected exactly one restart, got {restarts} in {log}"
+    assert stops == [], f"the apply action must never stop the hotspot: {log}"
+    assert saves, f"the apply action must persist the configuration: {log}"
+    assert log.index(saves[0]) < log.index(restarts[0]), "config must save before restart"
+
+    pro_page.evaluate(
+        """(original) => {
+            document.getElementById('proServiceStateText').textContent = 'Stopped';
+            if (window.__origFetch) window.fetch = window.__origFetch;
+        }""",
+        original,
+    )
+    pro_page.fill("#ssid", original)
+    pro_page.wait_for_timeout(1500)
 
 
 def test_step_five_action_surface(pro_page):
@@ -415,7 +606,8 @@ def test_step_five_action_surface(pro_page):
                 startText: start.textContent.trim(),
                 startRect: {x: r(start).x, w: r(start).width, top: r(start).top},
                 saveRect: {x: r(save).x, w: r(save).width, top: r(save).top},
-                saveRestartVisible: r(saveRestart).width > 0,
+                saveVisible: r(save).width > 0 && r(save).height > 0,
+                saveRestartVisible: r(saveRestart).width > 0 && r(saveRestart).height > 0,
                 repairInStep5: !!document.querySelector('#proStepAction #btnRepair'),
                 repairInRecovery: !!document.querySelector(
                     '#tab-troubleshooting .troubleshooting-actions #btnRepair'),
@@ -425,21 +617,28 @@ def test_step_five_action_surface(pro_page):
                 dupes: ['btnStart', 'btnSaveConfig', 'btnSaveRestart', 'btnRepair'].map(
                     (id) => document.querySelectorAll(`[id="${id}"]`).length),
                 stateCopyLeft: r(action.firstElementChild).x < r(buttons).x,
+                columnWidth: r(buttons).width,
+                trailingGap: r(buttons).bottom - r(start).bottom,
             };
         }"""
     )
     assert data["startText"] in ("Start Hotspot", "Stop Hotspot")
+    assert data["saveVisible"] is False, "Save Changes must not be visible in Pro"
     assert data["saveRestartVisible"] is False, "Save & Restart must not be visible"
+    assert data["dupes"][:3] == [1, 1, 1], "save controls must exist exactly once"
     assert data["repairInStep5"] is False, "Repair Network must not be in Step 5"
     assert data["repairInRecovery"], "Repair Network must sit in Troubleshooting recovery actions"
-    assert data["visibleCount"] == 2, "action column must hold exactly primary + save row"
+    assert data["visibleCount"] == 1, "the action column exposes exactly one control"
     assert data["secondaryTrack"] is False, "no leftover secondary track"
     assert data["dupes"] == [1, 1, 1, 1]
     assert data["stateCopyLeft"], "status copy must stay aligned on the left"
-    # Primary is full-width in its column; Save Changes aligns beneath it.
-    assert abs(data["startRect"]["x"] - data["saveRect"]["x"]) < 1
-    assert data["saveRect"]["w"] <= data["startRect"]["w"] + 1
-    assert data["saveRect"]["top"] > data["startRect"]["top"]
+    # The primary fills its column with no detached space beneath it.
+    assert abs(data["startRect"]["w"] - data["columnWidth"]) < 2, (
+        "the primary must be full width in the action column"
+    )
+    assert data["trailingGap"] < 2, (
+        f"no empty row may follow the primary (gap {data['trailingGap']:.1f}px)"
+    )
 
     # Running + autosaved change: the primary must offer the apply action.
     state = pro_page.evaluate(

@@ -176,24 +176,28 @@
     internalHomes.delete(node);
   }
 
-  function applyRecommendedButtonState(recommended, advanced) {
-    // The composer is the sole Pro/Basic visibility owner for this button.
-    // Pro hides it (friendly adapter labels already carry the recommendation);
-    // the complete state must hold before the 'ready' stage is published.
+  function applyRecommendedButtonState(recommended) {
+    // The composer is the sole visibility owner for this button in BOTH
+    // modes: the friendly adapter labels already carry "(Recommended)", so
+    // the control is redundant everywhere. The node stays live and unique
+    // for any production code that still references it.
     if (!recommended) return;
-    if (advanced) {
-      if (!recommended.hidden) recommended.hidden = true;
-      if (recommended.getAttribute('aria-hidden') !== 'true') {
-        recommended.setAttribute('aria-hidden', 'true');
-      }
-      if (recommended.tabIndex !== -1) recommended.tabIndex = -1;
-      if (recommended.style.display !== 'none') recommended.style.display = 'none';
-      return;
+    if (!recommended.hidden) recommended.hidden = true;
+    if (recommended.getAttribute('aria-hidden') !== 'true') {
+      recommended.setAttribute('aria-hidden', 'true');
     }
-    if (recommended.hidden) recommended.hidden = false;
-    if (recommended.hasAttribute('aria-hidden')) recommended.removeAttribute('aria-hidden');
-    if (recommended.tabIndex !== 0) recommended.tabIndex = 0;
-    if (recommended.style.display) recommended.style.removeProperty('display');
+    if (recommended.tabIndex !== -1) recommended.tabIndex = -1;
+    if (recommended.style.display !== 'none') recommended.style.display = 'none';
+  }
+
+  function applyHiddenStagedControl(control) {
+    // Save/apply controls stay live and wired but never visible in Pro.
+    if (!control) return;
+    if (!control.hidden) control.hidden = true;
+    if (control.getAttribute('aria-hidden') !== 'true') {
+      control.setAttribute('aria-hidden', 'true');
+    }
+    if (control.tabIndex !== -1) control.tabIndex = -1;
   }
 
   function restoreBasicPresentation() {
@@ -212,7 +216,16 @@
       node.classList.remove('pro-adapter-field', 'pro-password-field', 'pro-connectivity-field');
       delete node.dataset.proComposerDecorated;
     });
-    applyRecommendedButtonState(el('btnUseRecommended'), false);
+    applyRecommendedButtonState(el('btnUseRecommended'));
+    // Pro parks the save controls in hidden staging; Basic owns its own
+    // save surface, so their Pro-only hidden state is cleared on the way out.
+    for (const id of ['btnSaveConfig', 'btnSaveRestart']) {
+      const control = el(id);
+      if (!control) continue;
+      if (control.hidden) control.hidden = false;
+      if (control.hasAttribute('aria-hidden')) control.removeAttribute('aria-hidden');
+      if (control.tabIndex !== 0) control.tabIndex = 0;
+    }
     setStage('waiting-for-pro');
   }
 
@@ -620,7 +633,7 @@
       field.appendChild(details);
     }
 
-    applyRecommendedButtonState(recommended, true);
+    applyRecommendedButtonState(recommended);
     setText(recommended, 'Recommended');
     setText(rescan, 'Rescan adapters');
     ensureChildOrder(row, [select, info, recommended, rescan]);
@@ -1012,24 +1025,24 @@
     if (!action) {
       action = make('div', 'pro-guided-action');
       const buttons = make('div', 'pro-guided-action-buttons');
-      const saves = make('div', 'pro-guided-save-actions');
-      // Save & Restart stays a live, wired node for the primary button's
-      // apply-and-restart flow (and the Basic proxy button), but it is not
-      // part of the visible Step 5 surface.
+      // Pro autosaves, so Save Changes and Save & Restart are not part of the
+      // visible surface. Both stay live and wired in hidden staging: the
+      // primary's apply flow clicks them, as does the Basic proxy button.
       const staging = make('div', 'pro-guided-hidden-staging');
       staging.hidden = true;
       staging.setAttribute('aria-hidden', 'true');
-      buttons.append(primary, saves, staging);
+      buttons.append(primary, staging);
       action.append(stateCopy || make('div'), buttons);
       guidedSlot(shell, 'proStepAction').appendChild(action);
     }
     const buttons = action.querySelector('.pro-guided-action-buttons');
-    const saves = action.querySelector('.pro-guided-save-actions');
+    action.querySelector('.pro-guided-save-actions')?.remove();
     const staging = action.querySelector('.pro-guided-hidden-staging');
     prependIfNeeded(buttons, primary);
     setText(save, 'Save Changes');
-    ensureChildOrder(saves, [save]);
-    appendIfNeeded(staging, saveRestart);
+    ensureChildOrder(staging, [save, saveRestart]);
+    applyHiddenStagedControl(save);
+    applyHiddenStagedControl(saveRestart);
     if (stateCopy) prependIfNeeded(action, stateCopy);
     wirePrimaryAction(primary);
     return true;

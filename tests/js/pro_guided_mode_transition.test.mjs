@@ -184,12 +184,14 @@ function assertProLayout(document) {
     'Connection Quality must be the final Troubleshooting section');
   assert.equal(document.querySelector('#proGuidedWorkflow #proConnectionQuality'), null);
   assert.equal(document.querySelectorAll('#proStepAdvanced .pro-config-details').length, 3);
-  for (const id of ['btnStart', 'btnSaveConfig']) {
-    assert.ok(document.querySelector(`#proStepAction #${id}`), `${id} should be in Step 5`);
-  }
+  assert.ok(document.querySelector('#proStepAction #btnStart'), 'btnStart should be in Step 5');
   const staging = document.querySelector('#proStepAction .pro-guided-hidden-staging');
   assert.ok(staging && staging.hidden);
-  assert.ok(staging.contains(document.getElementById('btnSaveRestart')));
+  for (const id of ['btnSaveConfig', 'btnSaveRestart']) {
+    assert.ok(staging.contains(document.getElementById(id)), `${id} parked in staging`);
+    assert.equal(document.getElementById(id).hidden, true);
+    assert.equal(document.querySelectorAll(`[id="${id}"]`).length, 1);
+  }
   assert.equal(document.querySelector('#proStepAction #btnRepair'), null);
   assert.ok(document.querySelector('#tab-troubleshooting .troubleshooting-actions #btnRepair'));
   assert.equal(document.querySelectorAll('[id="btnRepair"]').length, 1);
@@ -241,11 +243,19 @@ function assertPasswordRowComposed(document) {
 }
 
 function assertRecommendedRestoredForBasic(document) {
+  // Redundant in both modes: the adapter label already says "(Recommended)",
+  // so the live node stays hidden with deterministic state in Basic too.
   const recommended = document.getElementById('btnUseRecommended');
-  assert.equal(recommended.hidden, false);
-  assert.equal(recommended.hasAttribute('aria-hidden'), false);
-  assert.equal(recommended.tabIndex, 0);
-  assert.equal(recommended.style.display, '');
+  assert.equal(recommended.hidden, true);
+  assert.equal(recommended.getAttribute('aria-hidden'), 'true');
+  assert.equal(recommended.tabIndex, -1);
+  assert.equal(recommended.style.display, 'none');
+  for (const id of ['btnSaveConfig', 'btnSaveRestart']) {
+    const control = document.getElementById(id);
+    if (!control) continue;
+    assert.equal(control.hidden, false, `${id} must leave Pro staging state in Basic`);
+    assert.equal(control.tabIndex, 0);
+  }
 }
 
 // Captures btnUseRecommended state inside the MutationObserver microtask that

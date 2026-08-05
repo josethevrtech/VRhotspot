@@ -389,14 +389,27 @@ function assertBasicLayout(document) {
   assert.equal(document.querySelector('[data-ui-section="basic"] .pro-runtime-wrapper'), null);
   assert.equal(document.body.hasAttribute('data-pro-band'), false);
 
-  // The composer's Basic restore clears its Pro-only state; the `hidden`
-  // property itself is owned by basic_guided.js in the full portal, which
-  // hides the button as part of the Basic guided adapter presentation.
+  // The Recommended button is redundant in both modes (the adapter label
+  // already says "(Recommended)"), so it stays hidden with deterministic
+  // state everywhere while remaining a single live node.
+  assertRecommendedHidden(document);
+  // Basic owns its own save surface, so the Pro staging state is cleared.
+  for (const id of ['btnSaveConfig', 'btnSaveRestart']) {
+    const control = document.getElementById(id);
+    assert.equal(control.hidden, false, `${id} must not stay Pro-hidden in Basic`);
+    assert.equal(control.hasAttribute('aria-hidden'), false);
+    assert.equal(control.tabIndex, 0);
+  }
+}
+
+function assertRecommendedHidden(document) {
   const recommended = document.getElementById('btnUseRecommended');
-  assert.ok(recommended);
-  assert.equal(recommended.hasAttribute('aria-hidden'), false);
-  assert.equal(recommended.tabIndex, 0);
-  assert.equal(recommended.style.display, '');
+  assert.ok(recommended, 'the live Recommended node must still exist');
+  assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
+  assert.equal(recommended.hidden, true);
+  assert.equal(recommended.getAttribute('aria-hidden'), 'true');
+  assert.equal(recommended.tabIndex, -1);
+  assert.equal(recommended.style.display, 'none');
 }
 
 function assertProLayout(document) {
@@ -414,12 +427,7 @@ function assertProLayout(document) {
   assert.equal(adapterSelect?.selectedOptions[0]?.hasAttribute('title'), false);
   assert.equal(document.querySelector('.pro-adapter-selected-label'), null);
 
-  const recommended = document.getElementById('btnUseRecommended');
-  assert.ok(recommended);
-  assert.equal(recommended.hidden, true);
-  assert.equal(recommended.getAttribute('aria-hidden'), 'true');
-  assert.equal(recommended.tabIndex, -1);
-  assert.equal(recommended.style.display, 'none');
+  assertRecommendedHidden(document);
 
   const adapterInfo = document.getElementById('proAdapterInfo');
   const adapterDetails = document.getElementById('proAdapterDetails');
@@ -461,16 +469,21 @@ function assertProLayout(document) {
   assertPasswordPrivacy(document);
   assertAdvancedOrganization(document);
   assert.equal(document.querySelectorAll('#proStepAdvanced .pro-config-details').length, 3);
-  // Step 5 shows only the primary Start/Stop control and Save Changes.
-  for (const id of ['btnStart', 'btnSaveConfig']) {
-    assert.ok(document.querySelector(`#proStepAction #${id}`), `${id} should be in production Pro Step 5`);
-  }
+  // Step 5 exposes exactly one actionable control: the primary Start/Stop.
+  assert.ok(document.querySelector('#proStepAction #btnStart'));
   const staging = document.querySelector('#proStepAction .pro-guided-hidden-staging');
   assert.ok(staging && staging.hidden, 'hidden staging must exist and stay hidden');
   assert.equal(staging.getAttribute('aria-hidden'), 'true');
-  assert.ok(staging.contains(document.getElementById('btnSaveRestart')),
-    'the live Save & Restart node stays parked in hidden staging');
-  assert.equal(document.querySelectorAll('[id="btnSaveRestart"]').length, 1);
+  for (const id of ['btnSaveConfig', 'btnSaveRestart']) {
+    const control = document.getElementById(id);
+    assert.ok(staging.contains(control), `the live ${id} node stays parked in staging`);
+    assert.equal(control.hidden, true, `${id} must not be visible in Step 5`);
+    assert.equal(control.getAttribute('aria-hidden'), 'true');
+    assert.equal(control.tabIndex, -1);
+    assert.equal(document.querySelectorAll(`[id="${id}"]`).length, 1);
+  }
+  assert.equal(document.querySelector('#proStepAction .pro-guided-save-actions'), null,
+    'no leftover save-actions wrapper may remain');
   assert.equal(document.querySelector('#proStepAction #btnRepair'), null,
     'Repair Network must not be visible in Step 5');
   assert.ok(
@@ -482,8 +495,8 @@ function assertProLayout(document) {
     'no empty secondary action track may remain');
   const actionButtons = document.querySelector('#proStepAction .pro-guided-action-buttons');
   const visibleActions = Array.from(actionButtons.children).filter((node) => !node.hidden);
-  assert.equal(visibleActions.length, 2,
-    'the action column holds exactly the primary control and the save row');
+  assert.deepEqual(visibleActions.map((node) => node.id), ['btnStart'],
+    'the action column exposes exactly one actionable control');
   assert.ok(document.getElementById('proConnectionQuality'));
   assert.ok(document.getElementById('tab-troubleshooting'));
   assertPasswordRowComposed(document);
