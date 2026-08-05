@@ -256,7 +256,9 @@ function apiPayload(url, { passphraseSaved, enableInternet = true }) {
 }
 
 function installBrowserStubs(window, options) {
+  window.__fetchLog = [];
   window.fetch = async (url) => {
+    window.__fetchLog.push(new URL(String(url), 'http://127.0.0.1:8732').pathname);
     const payload = apiPayload(url, options);
     const body = JSON.stringify(payload);
     return {
@@ -435,9 +437,29 @@ function assertProLayout(document) {
   assertPasswordPrivacy(document);
   assertAdvancedOrganization(document);
   assert.equal(document.querySelectorAll('#proStepAdvanced .pro-config-details').length, 3);
-  for (const id of ['btnStart', 'btnSaveConfig', 'btnSaveRestart', 'btnRepair']) {
+  // Step 5 shows only the primary Start/Stop control and Save Changes.
+  for (const id of ['btnStart', 'btnSaveConfig']) {
     assert.ok(document.querySelector(`#proStepAction #${id}`), `${id} should be in production Pro Step 5`);
   }
+  const staging = document.querySelector('#proStepAction .pro-guided-hidden-staging');
+  assert.ok(staging && staging.hidden, 'hidden staging must exist and stay hidden');
+  assert.equal(staging.getAttribute('aria-hidden'), 'true');
+  assert.ok(staging.contains(document.getElementById('btnSaveRestart')),
+    'the live Save & Restart node stays parked in hidden staging');
+  assert.equal(document.querySelectorAll('[id="btnSaveRestart"]').length, 1);
+  assert.equal(document.querySelector('#proStepAction #btnRepair'), null,
+    'Repair Network must not be visible in Step 5');
+  assert.ok(
+    document.querySelector('#tab-troubleshooting .troubleshooting-actions #btnRepair'),
+    'Repair Network belongs to the Troubleshooting recovery actions',
+  );
+  assert.equal(document.querySelectorAll('[id="btnRepair"]').length, 1);
+  assert.equal(document.querySelector('#proStepAction .pro-guided-secondary-actions'), null,
+    'no empty secondary action track may remain');
+  const actionButtons = document.querySelector('#proStepAction .pro-guided-action-buttons');
+  const visibleActions = Array.from(actionButtons.children).filter((node) => !node.hidden);
+  assert.equal(visibleActions.length, 2,
+    'the action column holds exactly the primary control and the save row');
   assert.ok(document.getElementById('proConnectionQuality'));
   assert.ok(document.getElementById('tab-troubleshooting'));
   assertPasswordRowComposed(document);
@@ -704,6 +726,38 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
     'relocated NAT toggle must reach the save payload');
   assert.equal(typeof form.cpu_governor_performance, 'boolean',
     'tuning toggles must reach the save payload');
+
+  // Running hotspot + autosaved change: the primary action must offer Apply
+  // Changes & Restart and drive exactly one restart through the live
+  // (hidden) Save & Restart node.
+  const statusText = document.getElementById('proServiceStateText');
+  statusText.textContent = 'Running';
+  await tick(window, 150);
+  // Autosave's field listeners require trusted events, which jsdom cannot
+  // synthesize; the performance-preset click drives the identical
+  // scheduleSave(true) path and is a legitimate user edit.
+  document.getElementById('btnApplyVrProfileHigh').click();
+  await waitFor(
+    window,
+    () => document.getElementById('btnStart').dataset.proGuidedAction === 'apply',
+    'primary must switch to the apply action',
+  );
+  assert.equal(document.getElementById('btnStart').textContent, 'Apply Changes & Restart');
+  const restartsBefore = window.__fetchLog.filter((p) => p === '/v1/restart').length;
+  document.getElementById('btnStart').click();
+  await waitFor(
+    window,
+    () => window.__fetchLog.filter((p) => p === '/v1/restart').length === restartsBefore + 1,
+    'the apply action must trigger the save-and-restart workflow',
+  );
+  await tick(window, 300);
+  assert.equal(
+    window.__fetchLog.filter((p) => p === '/v1/restart').length,
+    restartsBefore + 1,
+    'exactly one restart request may be issued',
+  );
+  statusText.textContent = 'Stopped';
+  await tick(window, 150);
 
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);

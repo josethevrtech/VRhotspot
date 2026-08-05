@@ -388,27 +388,31 @@ body[data-ui-mode="advanced"] .pro-guided-action {
   align-items: center;
 }
 
+/* One action column: the full-width primary with Save Changes beneath it.
+   Save & Restart stays wired but parked in the hidden staging node. */
 body[data-ui-mode="advanced"] .pro-guided-action-buttons {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 9px;
   min-width: 0;
 }
 
 body[data-ui-mode="advanced"] .pro-guided-action-buttons > #btnStart {
-  grid-column: 1 / -1;
   width: 100%;
   min-height: 50px;
   justify-content: center;
 }
 
-body[data-ui-mode="advanced"] .pro-guided-save-actions,
-body[data-ui-mode="advanced"] .pro-guided-secondary-actions {
-  display: contents;
+body[data-ui-mode="advanced"] .pro-guided-save-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 
-body[data-ui-mode="advanced"] .pro-guided-save-actions .btn,
-body[data-ui-mode="advanced"] .pro-guided-secondary-actions .btn {
+body[data-ui-mode="advanced"] .pro-guided-hidden-staging {
+  display: none !important;
+}
+
+body[data-ui-mode="advanced"] .pro-guided-save-actions .btn {
   width: 100%;
   min-width: 0;
   min-height: 44px;

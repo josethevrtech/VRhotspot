@@ -400,6 +400,74 @@ def test_step_four_field_tips_and_icon_sizing(pro_page):
     pro_page.wait_for_timeout(500)
 
 
+def test_step_five_action_surface(pro_page):
+    data = pro_page.evaluate(
+        """() => {
+            const action = document.querySelector('#proStepAction .pro-guided-action');
+            const buttons = action.querySelector('.pro-guided-action-buttons');
+            const start = document.getElementById('btnStart');
+            const save = document.getElementById('btnSaveConfig');
+            const saveRestart = document.getElementById('btnSaveRestart');
+            const r = (el) => el.getBoundingClientRect();
+            const visible = Array.from(buttons.children).filter(
+                (node) => !node.hidden && node.getBoundingClientRect().height > 0);
+            return {
+                startText: start.textContent.trim(),
+                startRect: {x: r(start).x, w: r(start).width, top: r(start).top},
+                saveRect: {x: r(save).x, w: r(save).width, top: r(save).top},
+                saveRestartVisible: r(saveRestart).width > 0,
+                repairInStep5: !!document.querySelector('#proStepAction #btnRepair'),
+                repairInRecovery: !!document.querySelector(
+                    '#tab-troubleshooting .troubleshooting-actions #btnRepair'),
+                visibleCount: visible.length,
+                secondaryTrack: !!document.querySelector(
+                    '#proStepAction .pro-guided-secondary-actions'),
+                dupes: ['btnStart', 'btnSaveConfig', 'btnSaveRestart', 'btnRepair'].map(
+                    (id) => document.querySelectorAll(`[id="${id}"]`).length),
+                stateCopyLeft: r(action.firstElementChild).x < r(buttons).x,
+            };
+        }"""
+    )
+    assert data["startText"] in ("Start Hotspot", "Stop Hotspot")
+    assert data["saveRestartVisible"] is False, "Save & Restart must not be visible"
+    assert data["repairInStep5"] is False, "Repair Network must not be in Step 5"
+    assert data["repairInRecovery"], "Repair Network must sit in Troubleshooting recovery actions"
+    assert data["visibleCount"] == 2, "action column must hold exactly primary + save row"
+    assert data["secondaryTrack"] is False, "no leftover secondary track"
+    assert data["dupes"] == [1, 1, 1, 1]
+    assert data["stateCopyLeft"], "status copy must stay aligned on the left"
+    # Primary is full-width in its column; Save Changes aligns beneath it.
+    assert abs(data["startRect"]["x"] - data["saveRect"]["x"]) < 1
+    assert data["saveRect"]["w"] <= data["startRect"]["w"] + 1
+    assert data["saveRect"]["top"] > data["startRect"]["top"]
+
+    # Running + autosaved change: the primary must offer the apply action.
+    state = pro_page.evaluate(
+        """() => {
+            const status = document.getElementById('proServiceStateText');
+            const before = status.textContent;
+            status.textContent = 'Running';
+            return before;
+        }"""
+    )
+    pro_page.wait_for_timeout(400)
+    original_ssid = pro_page.evaluate("document.getElementById('ssid').value")
+    pro_page.fill("#ssid", f"{original_ssid}X")  # trusted user edit
+    pro_page.wait_for_function(
+        "document.getElementById('btnStart').dataset.proGuidedAction === 'apply'",
+        timeout=8000,
+    )
+    assert pro_page.evaluate(
+        "document.getElementById('btnStart').textContent.trim()"
+    ) == "Apply Changes & Restart"
+    pro_page.evaluate(
+        "(before) => { document.getElementById('proServiceStateText').textContent = before; }",
+        state,
+    )
+    pro_page.fill("#ssid", original_ssid)
+    pro_page.wait_for_timeout(1200)
+
+
 def _assert_row_geometry(pro_page, context):
     input_rect = _rect(pro_page, "#wpa2_passphrase")
     reveal_rect = _rect(pro_page, "#btnRevealPass")

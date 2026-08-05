@@ -150,13 +150,15 @@ def test_step_five_keeps_start_save_restart_and_repair_actions() -> None:
     for control in ("btnStart", "btnSaveConfig", "btnSaveRestart", "btnRepair"):
         assert control in source
     assert "Save Changes" in source
-    assert "Save & Restart" in source
-    assert "Repair Network" in source
     assert "Apply Changes & Restart" in source
+    # Step 5 shows only Start/Stop plus Save Changes: the live Save & Restart
+    # node is parked in hidden staging for the primary apply flow, and Repair
+    # Network lives in the Troubleshooting recovery actions.
+    assert "pro-guided-hidden-staging" in source
+    assert "Repair Network" in source
     assert ".pro-guided-save-actions" in style
-    assert ".pro-guided-secondary-actions" in style
-    assert "repeat(3, minmax(0, 1fr))" in style
-    assert "display: contents" in style
+    assert ".pro-guided-hidden-staging" in style
+    assert ".pro-guided-secondary-actions" not in style
 
 
 def test_adapter_and_password_compaction_are_reversible() -> None:

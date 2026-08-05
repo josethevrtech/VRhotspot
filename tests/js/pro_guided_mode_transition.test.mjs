@@ -184,9 +184,16 @@ function assertProLayout(document) {
     'Connection Quality must be the final Troubleshooting section');
   assert.equal(document.querySelector('#proGuidedWorkflow #proConnectionQuality'), null);
   assert.equal(document.querySelectorAll('#proStepAdvanced .pro-config-details').length, 3);
-  for (const id of ['btnStart', 'btnSaveConfig', 'btnSaveRestart', 'btnRepair']) {
+  for (const id of ['btnStart', 'btnSaveConfig']) {
     assert.ok(document.querySelector(`#proStepAction #${id}`), `${id} should be in Step 5`);
   }
+  const staging = document.querySelector('#proStepAction .pro-guided-hidden-staging');
+  assert.ok(staging && staging.hidden);
+  assert.ok(staging.contains(document.getElementById('btnSaveRestart')));
+  assert.equal(document.querySelector('#proStepAction #btnRepair'), null);
+  assert.ok(document.querySelector('#tab-troubleshooting .troubleshooting-actions #btnRepair'));
+  assert.equal(document.querySelectorAll('[id="btnRepair"]').length, 1);
+  assert.equal(document.querySelectorAll('[id="btnSaveRestart"]').length, 1);
   assert.equal(document.querySelector('.pro-guided-header')?.dataset.proDensityReady, '1');
   assert.equal(document.querySelector('[data-field="ap_adapter"]')?.dataset.proDensityReady, '1');
   assert.equal(document.querySelector('[data-field="wpa2_passphrase"]')?.dataset.proDensityReady, '1');

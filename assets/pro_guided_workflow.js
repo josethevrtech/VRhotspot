@@ -1013,20 +1013,23 @@
       action = make('div', 'pro-guided-action');
       const buttons = make('div', 'pro-guided-action-buttons');
       const saves = make('div', 'pro-guided-save-actions');
-      const secondary = make('div', 'pro-guided-secondary-actions');
-      buttons.append(primary, saves, secondary);
+      // Save & Restart stays a live, wired node for the primary button's
+      // apply-and-restart flow (and the Basic proxy button), but it is not
+      // part of the visible Step 5 surface.
+      const staging = make('div', 'pro-guided-hidden-staging');
+      staging.hidden = true;
+      staging.setAttribute('aria-hidden', 'true');
+      buttons.append(primary, saves, staging);
       action.append(stateCopy || make('div'), buttons);
       guidedSlot(shell, 'proStepAction').appendChild(action);
     }
     const buttons = action.querySelector('.pro-guided-action-buttons');
     const saves = action.querySelector('.pro-guided-save-actions');
-    const secondary = action.querySelector('.pro-guided-secondary-actions');
+    const staging = action.querySelector('.pro-guided-hidden-staging');
     prependIfNeeded(buttons, primary);
     setText(save, 'Save Changes');
-    setText(saveRestart, 'Save & Restart');
-    ensureChildOrder(saves, [save, saveRestart]);
-    setText(repair, 'Repair Network');
-    appendIfNeeded(secondary, repair);
+    ensureChildOrder(saves, [save]);
+    appendIfNeeded(staging, saveRestart);
     if (stateCopy) prependIfNeeded(action, stateCopy);
     wirePrimaryAction(primary);
     return true;
@@ -1216,6 +1219,15 @@
     const debugging = pane.querySelector('#proDebuggingCard');
     const debugField = document.querySelector('[data-field="debug"]');
     if (debugging && debugField) appendIfNeeded(debugging, debugField);
+
+    // Repair Network is a recovery action: it lives beside Restart Service
+    // in the Troubleshooting header, not in Step 5.
+    const recoveryActions = pane.querySelector('.troubleshooting-actions');
+    const repair = el('btnRepair');
+    if (recoveryActions && repair) {
+      setText(repair, 'Repair Network');
+      appendIfNeeded(recoveryActions, repair);
+    }
     return true;
   }
 
