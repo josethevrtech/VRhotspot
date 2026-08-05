@@ -31,6 +31,18 @@ body.devhub-modal-open {
   box-shadow: var(--shadow-lg);
 }
 
+body[data-ui-mode="advanced"] .devhub-wizard-dialog {
+  width: min(980px, 100%);
+}
+
+body[data-ui-mode="advanced"] .devhub-wizard-body {
+  min-height: 320px;
+}
+
+body[data-ui-mode="advanced"] .devhub-wizard-device select {
+  min-height: 48px;
+}
+
 .devhub-precondition-dialog {
   width: min(620px, 100%);
 }
