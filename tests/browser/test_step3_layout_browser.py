@@ -224,6 +224,62 @@ def test_information_architecture(pro_page):
     assert ia["workflowHasQuality"] is False
 
 
+def test_step_two_has_no_generic_helper(pro_page):
+    present = pro_page.evaluate(
+        "document.body.textContent.includes("
+        "'Choose the performance behavior that best matches this hotspot.')"
+    )
+    assert present is False
+
+
+def test_step_four_summaries_mirror_controls(pro_page):
+    data = pro_page.evaluate(
+        """() => {
+            const rows = [];
+            document.querySelectorAll('#proStepAdvanced .pro-config-details').forEach((d) => {
+                d.open = true;
+                const summary = d.querySelector(':scope > summary');
+                const chip = summary.querySelector('.pro-config-summary');
+                const chipRect = chip.getBoundingClientRect();
+                const headRect = summary.getBoundingClientRect();
+                rows.push({
+                    title: d.querySelector('.pro-config-title').textContent.trim(),
+                    mirror: chip.textContent.trim(),
+                    chipInsideHeader: chipRect.top >= headRect.top - 1
+                        && chipRect.bottom <= headRect.bottom + 1,
+                    chipSingleLine: chipRect.height < 24,
+                });
+            });
+            const v = (id) => document.getElementById(id)?.value?.trim() || '';
+            const c = (id) => !!document.getElementById(id)?.checked;
+            return {
+                rows,
+                values: {
+                    ch5: v('channel_5g'), width: v('channel_width'),
+                    beacon: v('beacon_interval'), dtim: v('dtim_period'),
+                    gateway: v('lan_gateway_ip'), dns: v('dhcp_dns'),
+                    timeout: v('ap_ready_timeout_s'),
+                    debug: c('debug'), firewall: c('firewalld_enabled'),
+                },
+            };
+        }"""
+    )
+    mirrors = {row["title"]: row["mirror"] for row in data["rows"]}
+    values = data["values"]
+    assert f"5 GHz {values['ch5'] or 'Auto'}" in mirrors["Wireless"]
+    assert f"Width {values['width'] or '80'} MHz" in mirrors["Wireless"]
+    assert f"Beacon {values['beacon'] or '—'}" in mirrors["Wireless"]
+    assert f"DTIM {values['dtim'] or '—'}" in mirrors["Wireless"]
+    assert f"Gateway {values['gateway'] or '—'}" in mirrors["Network"]
+    assert f"DNS {values['dns'] or '—'}" in mirrors["Network"]
+    assert ("Firewall on" if values["firewall"] else "Firewall off") in mirrors["Network"]
+    assert f"Timeout {values['timeout'] or '—'}s" in mirrors["System & Performance"]
+    assert ("Debug on" if values["debug"] else "Debug off") in mirrors["System & Performance"]
+    for row in data["rows"]:
+        assert row["chipInsideHeader"], f"{row['title']}: mirror overflows its header"
+        assert row["chipSingleLine"], f"{row['title']}: mirror wraps to a second line"
+
+
 def _assert_row_geometry(pro_page, context):
     input_rect = _rect(pro_page, "#wpa2_passphrase")
     reveal_rect = _rect(pro_page, "#btnRevealPass")

@@ -293,6 +293,88 @@ body[data-ui-mode="advanced"] .pro-advanced-group-help {
   line-height: 1.45;
 }
 
+/* Consistent accordion header: title left, applied-state mirror right. */
+body[data-ui-mode="advanced"] .pro-guided-advanced-groups .pro-config-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 52px;
+}
+
+body[data-ui-mode="advanced"] .pro-config-title {
+  flex: 0 0 auto;
+}
+
+body[data-ui-mode="advanced"] .pro-config-summary {
+  margin-left: auto;
+  min-width: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+@media (max-width: 760px) {
+  body[data-ui-mode="advanced"] .pro-config-summary {
+    display: none;
+  }
+}
+
+/* Step 4 subgroups: one card per topic, fields on a two-column grid. */
+body[data-ui-mode="advanced"] .pro-config-body > .pro-advanced-subgroup {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+body[data-ui-mode="advanced"] .pro-advanced-subgroup-title {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+body[data-ui-mode="advanced"] .pro-advanced-subgroup-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+
+body[data-ui-mode="advanced"] .pro-advanced-subgroup-body > .form-row {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+body[data-ui-mode="advanced"] .pro-advanced-subgroup-body > .tog-group {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+body[data-ui-mode="advanced"] .pro-advanced-subgroup-body .form-group {
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  body[data-ui-mode="advanced"] .pro-advanced-subgroup-body,
+  body[data-ui-mode="advanced"] .pro-advanced-subgroup-body > .tog-group {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 body[data-ui-mode="advanced"] .pro-guided-action {
   display: grid;
   grid-template-columns: minmax(140px, .7fr) minmax(0, 1.3fr);

@@ -36,6 +36,7 @@
 
   let reconcileQueued = false;
   let composeRetryTimer = null;
+  let summarySyncTimer = null;
   let saveTimer = null;
   let restartRequired = false;
   let statusObserver = null;
@@ -200,6 +201,10 @@
     if (composeRetryTimer) {
       window.clearTimeout(composeRetryTimer);
       composeRetryTimer = null;
+    }
+    if (summarySyncTimer) {
+      window.clearInterval(summarySyncTimer);
+      summarySyncTimer = null;
     }
     if (adapterOptionsObserver) {
       adapterOptionsObserver.disconnect();
@@ -676,7 +681,10 @@
     const description = el('proPerformanceDescription');
     if (!qos || !description) return;
     const selected = String(qos.value || 'off');
-    let selectedCopy = 'Choose the performance behavior that best matches this hotspot.';
+    // No generic filler line: the step help already explains the choice, so
+    // the description shows only an active profile's copy and otherwise
+    // collapses without leaving a spacer.
+    let selectedCopy = '';
     for (const [id, profile] of Object.entries(PROFILE_COPY)) {
       const button = el(id);
       if (!button) continue;
@@ -686,6 +694,7 @@
       if (active) selectedCopy = profile.description;
     }
     setText(description, selectedCopy);
+    if (description.hidden !== !selectedCopy) description.hidden = !selectedCopy;
   }
 
   function decoratePerformance(shell) {
@@ -845,6 +854,141 @@
     body.prepend(make('p', 'pro-advanced-group-help', text));
   }
 
+  const ADVANCED_LAYOUT = {
+    Wireless: {
+      help: 'Channels, width, radio timing, and transmit power.',
+      subgroups: [
+        { key: 'channels', title: 'Channel selection', fields: ['channel_5g', 'channel_6g', 'fallback_channel_2g', 'channel_auto_select'] },
+        { key: 'timing', title: 'Timing & throughput', fields: ['channel_width', 'beacon_interval', 'short_guard_interval'] },
+        { key: 'radio', title: 'Radio behavior', fields: ['tx_power'] },
+      ],
+    },
+    Network: {
+      help: 'Gateway, DHCP, DNS, bridging, and firewall integration.',
+      subgroups: [
+        { key: 'addressing', title: 'Addressing', fields: ['lan_gateway_ip', 'dhcp_dns', 'dhcp_start_ip', 'dhcp_end_ip'] },
+        { key: 'bridge', title: 'Bridge & acceleration', fields: ['nat_accel', 'bridge_mode'] },
+        { key: 'firewall', title: 'Firewall integration', fields: ['firewalld_enabled'] },
+      ],
+    },
+    'System & Performance': {
+      help: 'Startup behavior, interface strategy, power, tuning, and debugging.',
+      subgroups: [
+        { key: 'startup', title: 'Startup & interface behavior', fields: ['ap_ready_timeout_s', 'optimized_no_virt'] },
+        { key: 'power', title: 'Power & USB behavior', controls: ['wifi_power_save_disable', 'usb_autosuspend_disable'] },
+        { key: 'tuning', title: 'Performance tuning', controls: ['cpu_governor_performance', 'sysctl_tuning', 'interrupt_coalescing'] },
+        { key: 'debugging', title: 'Debugging', fields: ['debug'] },
+      ],
+    },
+  };
+
+  function advancedTopContainer(body, node) {
+    let current = node;
+    while (current && current.parentElement
+        && current.parentElement !== body
+        && !current.parentElement.classList.contains('pro-advanced-subgroup-body')) {
+      current = current.parentElement;
+    }
+    return current && current.parentElement ? current : null;
+  }
+
+  function organizeAdvancedGroup(details, spec) {
+    const body = details.querySelector(':scope > .pro-config-body');
+    if (!body) return;
+    const sections = [];
+    for (const sub of spec.subgroups) {
+      // Resolve the live nodes first; a subgroup with nothing to hold is
+      // never created (fixtures and older layouts may lack some fields).
+      const containers = [];
+      for (const key of sub.fields || []) {
+        const node = details.querySelector(`[data-field="${key}"]`);
+        if (!node) continue;
+        const container = advancedTopContainer(body, node);
+        if (container && !containers.includes(container)) containers.push(container);
+      }
+      const toggles = (sub.controls || [])
+        .map((id) => el(id)?.closest('label'))
+        .filter(Boolean);
+      if (!containers.length && !toggles.length) continue;
+
+      let section = body.querySelector(`:scope > .pro-advanced-subgroup[data-subgroup="${sub.key}"]`);
+      if (!section) {
+        section = make('section', 'pro-advanced-subgroup');
+        section.dataset.subgroup = sub.key;
+        section.appendChild(make('h4', 'pro-advanced-subgroup-title', sub.title));
+        section.appendChild(make('div', 'pro-advanced-subgroup-body'));
+        body.appendChild(section);
+      }
+      const target = section.querySelector(':scope > .pro-advanced-subgroup-body');
+      containers.forEach((container) => appendIfNeeded(target, container));
+      ensureChildOrder(target, containers);
+      if (toggles.length) {
+        let togWrap = target.querySelector(':scope > .tog-group');
+        if (!togWrap) {
+          togWrap = make('div', 'tog-group vertical');
+          target.appendChild(togWrap);
+        }
+        toggles.forEach((labelNode) => appendIfNeeded(togWrap, labelNode));
+        ensureChildOrder(togWrap, toggles);
+      }
+      sections.push(section);
+    }
+    ensureChildOrder(body, sections);
+  }
+
+  function advancedSummaryText(title) {
+    const val = (id, fallback) => {
+      const node = el(id);
+      const value = node ? String(node.value ?? '').trim() : '';
+      return value || fallback;
+    };
+    const chk = (id) => !!el(id)?.checked;
+    const octet = (id) => {
+      const value = val(id, '');
+      return value.includes('.') ? `.${value.split('.').pop()}` : value || '—';
+    };
+    if (title === 'Wireless') {
+      return `5 GHz ${val('channel_5g', 'Auto')} · Width ${val('channel_width', '80')} MHz`
+        + ` · Beacon ${val('beacon_interval', '—')} · DTIM ${val('dtim_period', '—')}`;
+    }
+    if (title === 'Network') {
+      return `Gateway ${val('lan_gateway_ip', '—')} · DHCP ${octet('dhcp_start_ip')}–${octet('dhcp_end_ip')}`
+        + ` · DNS ${val('dhcp_dns', '—')} · Firewall ${chk('firewalld_enabled') ? 'on' : 'off'}`;
+    }
+    if (title === 'System & Performance') {
+      return `Timeout ${val('ap_ready_timeout_s', '—')}s · Power save ${chk('wifi_power_save_disable') ? 'off' : 'on'}`
+        + ` · Debug ${chk('debug') ? 'on' : 'off'} · ${chk('optimized_no_virt') ? 'No-Virt' : 'Default'} interface`;
+    }
+    return '';
+  }
+
+  function advancedGroupTitle(details) {
+    const summaryNode = details.querySelector(':scope > summary');
+    if (!summaryNode) return '';
+    const titleEl = summaryNode.querySelector(':scope > .pro-config-title');
+    return String((titleEl || summaryNode).textContent || '').trim();
+  }
+
+  function syncAdvancedSummaries() {
+    document.querySelectorAll('#proStepAdvanced .pro-config-details').forEach((details) => {
+      const summaryNode = details.querySelector(':scope > summary');
+      if (!summaryNode) return;
+      let titleEl = summaryNode.querySelector(':scope > .pro-config-title');
+      if (!titleEl) {
+        const text = String(summaryNode.textContent || '').trim();
+        titleEl = make('span', 'pro-config-title', text);
+        summaryNode.textContent = '';
+        summaryNode.appendChild(titleEl);
+      }
+      let mirror = summaryNode.querySelector(':scope > .pro-config-summary');
+      if (!mirror) {
+        mirror = make('span', 'pro-config-summary');
+        summaryNode.appendChild(mirror);
+      }
+      setText(mirror, advancedSummaryText(titleEl.textContent.trim()));
+    });
+  }
+
   function decorateAdvanced(shell) {
     const configuration = el('proHotspotConfiguration');
     let groups = shell.querySelector('.pro-guided-advanced-groups');
@@ -852,17 +996,22 @@
       groups = make('div', 'pro-guided-advanced-groups');
       guidedSlot(shell, 'proStepAdvanced').appendChild(groups);
     }
-    const copy = {
-      Wireless: 'Channels, width, radio timing, transmit power, automatic selection, and fallback behavior.',
-      Network: 'Gateway, DHCP, DNS, NAT acceleration, bridge mode, and firewall integration.',
-      'System & Performance': 'Startup behavior, interface strategy, power management, CPU tuning, kernel tuning, and debug logging.',
-    };
     const candidates = configuration?.querySelectorAll('.pro-config-details') || [];
     candidates.forEach((details) => {
-      const title = String(details.querySelector(':scope > summary')?.textContent || '').trim();
-      if (copy[title]) addAdvancedGroupHelp(details, copy[title]);
+      const title = advancedGroupTitle(details);
+      const spec = ADVANCED_LAYOUT[title];
+      if (spec) {
+        addAdvancedGroupHelp(details, spec.help);
+        organizeAdvancedGroup(details, spec);
+      }
       appendIfNeeded(groups, details);
+      if (details.dataset.proSummaryWired !== '1') {
+        details.dataset.proSummaryWired = '1';
+        details.addEventListener('change', syncAdvancedSummaries);
+        details.addEventListener('input', syncAdvancedSummaries);
+      }
     });
+    syncAdvancedSummaries();
     return groups.children.length >= 3;
   }
 
@@ -1097,6 +1246,13 @@
       const troubleshootingReady = ensureTroubleshooting();
       const qualityReady = ensureConnectionQuality();
       ensureStatusObserver();
+      // Background config refreshes change control values without DOM events;
+      // a guarded resync keeps the header mirrors current and mutation-quiet.
+      if (!summarySyncTimer) {
+        summarySyncTimer = window.setInterval(() => {
+          if (isAdvancedMode()) syncAdvancedSummaries();
+        }, 2000);
+      }
       if (guidedReady && qualityReady && troubleshootingReady) {
         setStage('ready');
       } else {

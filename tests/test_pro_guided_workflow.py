@@ -122,6 +122,14 @@ def test_step_four_exposes_detailed_wireless_network_and_system_groups() -> None
     assert "pro-advanced-group-help" in source
     assert ".pro-guided-advanced-groups" in style
     assert ".pro-advanced-group-help" in style
+    # Step 4 is organized into titled subgroups with applied-state mirrors in
+    # each accordion header; Step 2 no longer renders the generic filler line.
+    assert "pro-advanced-subgroup" in source
+    assert "advancedSummaryText" in source
+    assert "pro-config-summary" in source
+    assert ".pro-advanced-subgroup" in style
+    assert ".pro-config-summary" in style
+    assert "Choose the performance behavior that best matches this hotspot." not in source
 
 
 def test_step_five_keeps_start_save_restart_and_repair_actions() -> None:

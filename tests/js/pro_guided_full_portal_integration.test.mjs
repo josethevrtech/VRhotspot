@@ -58,6 +58,58 @@ function assertInformationArchitecture(document) {
     'Connectivity must appear before Connection Quality');
 }
 
+function advancedSummaries(document) {
+  const summaries = {};
+  document.querySelectorAll('#proStepAdvanced .pro-config-details').forEach((details) => {
+    const title = details.querySelector('.pro-config-title')?.textContent.trim();
+    summaries[title] = details.querySelector('.pro-config-summary')?.textContent || '';
+  });
+  return summaries;
+}
+
+function assertAdvancedOrganization(document) {
+  // Step 2: the redundant generic helper line is gone.
+  assert.ok(
+    !document.body.textContent.includes(
+      'Choose the performance behavior that best matches this hotspot.',
+    ),
+    'the generic Step 2 helper line must not render',
+  );
+
+  // Step 4 subgroups hold the live fields.
+  const sub = (group, key, selector) => document.querySelector(
+    `#proStepAdvanced .pro-advanced-subgroup[data-subgroup="${key}"] ${selector}`,
+  );
+  assert.ok(sub('Wireless', 'channels', '[data-field="channel_5g"]'));
+  assert.ok(sub('Wireless', 'channels', '[data-field="channel_auto_select"]'));
+  assert.ok(sub('Wireless', 'timing', '#dtim_period'));
+  assert.ok(sub('Network', 'addressing', '#lan_gateway_ip'));
+  assert.ok(sub('Network', 'firewall', '#firewalld_enabled'));
+  assert.ok(sub('System', 'power', '#wifi_power_save_disable'));
+  assert.ok(sub('System', 'power', '#usb_autosuspend_disable'));
+  assert.ok(sub('System', 'tuning', '#cpu_governor_performance'));
+  assert.ok(sub('System', 'debugging', '#debug'));
+  for (const id of ['channel_5g', 'wifi_power_save_disable', 'usb_autosuspend_disable',
+                    'cpu_governor_performance', 'debug', 'firewalld_enabled']) {
+    assert.equal(document.querySelectorAll(`[id="${id}"]`).length, 1, `${id} must stay unique`);
+  }
+
+  // Header mirrors are derived from the live loaded values.
+  const summaries = advancedSummaries(document);
+  assert.match(summaries.Wireless, /5 GHz Auto/, 'empty channel must mirror as Auto');
+  assert.match(summaries.Wireless, /Width 80 MHz/);
+  assert.match(summaries.Wireless, /Beacon 50/);
+  assert.match(summaries.Wireless, /DTIM 1/);
+  assert.match(summaries.Network, /Gateway 192\.168\.68\.1/);
+  assert.match(summaries.Network, /DHCP \.10–\.250/);
+  assert.match(summaries.Network, /DNS gateway/);
+  assert.match(summaries.Network, /Firewall on/);
+  assert.match(summaries['System & Performance'], /Timeout 6s/);
+  assert.match(summaries['System & Performance'], /Power save on/);
+  assert.match(summaries['System & Performance'], /Debug off/);
+  assert.match(summaries['System & Performance'], /Default interface/);
+}
+
 function assertPasswordPrivacy(document) {
   const hint = document.getElementById('passHint');
   assert.equal(hint.textContent, '', 'no saved/length disclosure below the password field');
@@ -111,6 +163,17 @@ function apiPayload(url, { passphraseSaved, enableInternet = true }) {
       bridge_mode: false,
       telemetry_enable: true,
       connection_quality_monitoring: true,
+      beacon_interval: 50,
+      dtim_period: 1,
+      ap_ready_timeout_s: 6,
+      lan_gateway_ip: '192.168.68.1',
+      dhcp_start_ip: '192.168.68.10',
+      dhcp_end_ip: '192.168.68.250',
+      dhcp_dns: 'gateway',
+      firewalld_enabled: true,
+      debug: false,
+      wifi_power_save_disable: false,
+      optimized_no_virt: false,
       },
     };
   }
@@ -320,6 +383,7 @@ function assertProLayout(document) {
   }
   assertInformationArchitecture(document);
   assertPasswordPrivacy(document);
+  assertAdvancedOrganization(document);
   assert.equal(document.querySelectorAll('#proStepAdvanced .pro-config-details').length, 3);
   for (const id of ['btnStart', 'btnSaveConfig', 'btnSaveRestart', 'btnRepair']) {
     assert.ok(document.querySelector(`#proStepAction #${id}`), `${id} should be in production Pro Step 5`);
@@ -576,6 +640,28 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
       display: 'none',
     }, 'recommended button state must be complete when ready is published');
   }
+  // Header mirrors must track explicit user edits (and the save payload must
+  // still collect the relocated controls). This is a genuine edit, so it runs
+  // after the clean-dirty assertions above.
+  const debugToggle = document.getElementById('debug');
+  debugToggle.checked = true;
+  debugToggle.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await tick(window, 80);
+  assert.match(advancedSummaries(document)['System & Performance'], /Debug on/);
+  const channel5 = document.getElementById('channel_5g');
+  channel5.value = '36';
+  channel5.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await tick(window, 80);
+  assert.match(advancedSummaries(document).Wireless, /5 GHz 36/);
+  channel5.value = '';
+  channel5.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await tick(window, 80);
+  assert.match(advancedSummaries(document).Wireless, /5 GHz Auto/);
+  const form = window.getForm();
+  assert.equal(form.debug, true, 'relocated debug toggle must reach the save payload');
+  assert.equal(typeof form.wifi_power_save_disable, 'boolean',
+    'relocated power toggles must reach the save payload');
+
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);
   dom.window.close();
