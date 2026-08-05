@@ -146,6 +146,84 @@ def test_password_row_rendered_geometry(pro_page):
     assert qr_rect["left"] - reveal_rect["right"] <= max_gap
 
 
+def test_password_privacy_and_label_alignment(pro_page):
+    state = pro_page.evaluate(
+        """() => ({
+            hint: document.getElementById('passHint').textContent,
+            placeholder: document.getElementById('wpa2_passphrase').placeholder,
+            tip: document.querySelector(
+                '[data-field="wpa2_passphrase"] .field-label-with-tip .tip'
+            )?.getAttribute('data-tip'),
+            tabindex: document.querySelector(
+                '[data-field="wpa2_passphrase"] .field-label-with-tip .tip'
+            )?.getAttribute('tabindex'),
+        })"""
+    )
+    assert state["hint"] == "", "no saved-state text may appear below the password field"
+    assert "saved" not in state["placeholder"].lower()
+    assert not any(ch.isdigit() for ch in state["hint"])
+    assert state["tip"] == "Use 8–63 characters. Control characters are not allowed."
+    assert state["tabindex"] == "0"
+
+    rows = pro_page.evaluate(
+        """() => ['wpa2_passphrase', 'band_preference', 'ap_security'].map((key) => {
+            const wrap = document.querySelector(`[data-field="${key}"] > .field-label-with-tip`);
+            const label = wrap ? wrap.querySelector('label') : null;
+            const tip = wrap ? wrap.querySelector('.tip') : null;
+            const r = (el) => {
+                const b = el.getBoundingClientRect();
+                return {cy: b.top + b.height / 2, w: b.width, h: b.height, top: b.top};
+            };
+            return {key, exists: !!(wrap && label && tip),
+                    label: label ? r(label) : null, tip: tip ? r(tip) : null};
+        })"""
+    )
+    for row in rows:
+        assert row["exists"], f"{row['key']} must use the shared label-row structure"
+        # Within each label row the text and icon share one vertical center.
+        assert abs(row["label"]["cy"] - row["tip"]["cy"]) < 1, (
+            f"{row['key']}: label/icon centers differ "
+            f"({row['label']['cy']:.2f} vs {row['tip']['cy']:.2f})"
+        )
+    # All info icons share identical dimensions.
+    for row in rows[1:]:
+        assert abs(row["tip"]["w"] - rows[0]["tip"]["w"]) < 0.5
+        assert abs(row["tip"]["h"] - rows[0]["tip"]["h"]) < 0.5
+    # Band and Security sit on the same grid row with no baseline drift.
+    band, security = rows[1], rows[2]
+    assert abs(band["label"]["cy"] - security["label"]["cy"]) < 1
+    assert abs(band["tip"]["cy"] - security["tip"]["cy"]) < 1
+
+
+def test_information_architecture(pro_page):
+    ia = pro_page.evaluate(
+        """() => {
+            const shell = document.querySelector('#tab-troubleshooting .troubleshooting-shell');
+            const quality = document.getElementById('proConnectionQuality');
+            return {
+                step3Internet: !!document.querySelector(
+                    '#proStepHotspot [data-field="enable_internet"]'),
+                connectivity: !!document.querySelector(
+                    '#tab-troubleshooting #proConnectivityCard [data-field="enable_internet"]'),
+                internetCount: document.querySelectorAll('[id="enable_internet"]').length,
+                qualityParentIsShell: !!shell && !!quality && quality.parentElement === shell,
+                qualityLast: !!shell && shell.lastElementChild === quality,
+                qualityCount: document.querySelectorAll('[id="proConnectionQuality"]').length,
+                workflowHasQuality: !!document.querySelector(
+                    '#proGuidedWorkflow #proConnectionQuality'),
+            };
+        }"""
+    )
+    assert ia["step3Internet"] is False, "internet sharing must be out of Step 3"
+    assert ia["connectivity"], "internet sharing must live in Troubleshooting > Connectivity"
+    assert ia["internetCount"] == 1
+    assert ia["qualityParentIsShell"] and ia["qualityLast"], (
+        "Connection Quality must be the final Troubleshooting section"
+    )
+    assert ia["qualityCount"] == 1
+    assert ia["workflowHasQuality"] is False
+
+
 def _assert_row_geometry(pro_page, context):
     input_rect = _rect(pro_page, "#wpa2_passphrase")
     reveal_rect = _rect(pro_page, "#btnRevealPass")

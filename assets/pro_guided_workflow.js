@@ -30,6 +30,9 @@
     'country',
     'enable_internet',
   ];
+  // Step 3 carries only the core connection fields; internet sharing is an
+  // advanced recovery option that lives under Troubleshooting > Connectivity.
+  const STEP3_FIELDS = CONNECTION_FIELDS.filter((key) => key !== 'enable_internet');
 
   let reconcileQueued = false;
   let composeRetryTimer = null;
@@ -205,8 +208,8 @@
     if (document.body) delete document.body.dataset.proBand;
     for (const node of Array.from(internalHomes.keys())) restoreInternalNode(node);
     document.querySelectorAll('.pro-runtime-wrapper').forEach((node) => node.remove());
-    document.querySelectorAll('.pro-adapter-field, .pro-password-field').forEach((node) => {
-      node.classList.remove('pro-adapter-field', 'pro-password-field');
+    document.querySelectorAll('.pro-adapter-field, .pro-password-field, .pro-connectivity-field').forEach((node) => {
+      node.classList.remove('pro-adapter-field', 'pro-password-field', 'pro-connectivity-field');
       delete node.dataset.proComposerDecorated;
     });
     applyRecommendedButtonState(el('btnUseRecommended'), false);
@@ -404,7 +407,7 @@
     steps.append(
       step(1, 'Choose Wi-Fi adapter', 'Use Recommended for the best available adapter, or rescan after connecting new hardware.', 'proStepAdapter'),
       step(2, 'Choose performance mode', 'Choose the tradeoff that best matches latency, throughput, balance, or stability.', 'proStepPerformance'),
-      step(3, 'Configure hotspot', 'Set the hotspot name, password, band, security, country, and internet-sharing behavior.', 'proStepHotspot'),
+      step(3, 'Configure hotspot', 'Set the hotspot name, password, band, security, and country.', 'proStepHotspot'),
       step(4, 'Fine-tune hotspot', 'Review detailed Wireless, Network, and System & Performance options or keep the recommended defaults.', 'proStepAdvanced'),
       step(5, 'Start hotspot', 'Review pending changes, start or stop the hotspot, save safely, or repair the network.', 'proStepAction'),
     );
@@ -434,7 +437,7 @@
       ],
       proStepHotspot: [
         'Configure hotspot',
-        'Set the hotspot name, password, band, security, country, and internet-sharing behavior.',
+        'Set the hotspot name, password, band, security, and country.',
       ],
       proStepAdvanced: [
         'Fine-tune hotspot',
@@ -823,7 +826,7 @@
     };
     const ordered = [];
     let passwordReady = true;
-    for (const key of CONNECTION_FIELDS) {
+    for (const key of STEP3_FIELDS) {
       const field = document.querySelector(`[data-field="${key}"]`);
       if (!field) return false;
       field.classList.add('pro-hotspot-field');
@@ -936,9 +939,17 @@
     return summary || 'Connection measurements will appear as clients begin using the hotspot.';
   }
 
-  function ensureConnectionQuality(shell) {
+  function ensureConnectionQuality() {
+    // Connection Quality is the final section of the Troubleshooting shell.
+    const shell = document.querySelector('#tab-troubleshooting .troubleshooting-shell');
+    if (!shell) return false;
     const existing = el('proConnectionQuality');
-    if (existing) return true;
+    if (existing) {
+      if (existing.parentElement !== shell || shell.lastElementChild !== existing) {
+        shell.appendChild(existing);
+      }
+      return true;
+    }
     const telemetryPane = el('tab-telemetry');
     const telemetryCard = el('cardTelemetry');
     if (!telemetryPane || !telemetryCard) return false;
@@ -988,7 +999,9 @@
       '.nav-item[data-tab="troubleshooting"], .nav-item[data-tab="diagnostics"]',
     );
     if (!diagnosticsPane || !logsPane || !nav) return false;
-    if (diagnosticsPane.querySelector('.troubleshooting-shell')) return true;
+    if (diagnosticsPane.querySelector('.troubleshooting-shell')) {
+      return ensureConnectivityField(diagnosticsPane);
+    }
 
     nav.dataset.tab = 'troubleshooting';
     diagnosticsPane.id = 'tab-troubleshooting';
@@ -1018,8 +1031,36 @@
     shell.appendChild(make('h3', 'troubleshooting-section-label', 'Runtime Details, Logs & Support'));
     logsPane.querySelector('.pro-support-heading')?.remove();
     Array.from(logsPane.children).forEach((node) => shell.appendChild(node));
+
+    shell.appendChild(make('h3', 'troubleshooting-section-label', 'Connectivity'));
+    const connectivity = make('section', 'troubleshooting-connectivity');
+    connectivity.id = 'proConnectivityCard';
+    connectivity.appendChild(make(
+      'p',
+      'pro-connectivity-help',
+      'Disable this only when you want an isolated local hotspot without internet access.',
+    ));
+    shell.appendChild(connectivity);
+
     diagnosticsPane.replaceChildren(shell);
     logsPane.hidden = true;
+    return ensureConnectivityField(diagnosticsPane);
+  }
+
+  function ensureConnectivityField(pane) {
+    const card = pane.querySelector('#proConnectivityCard');
+    const field = document.querySelector('[data-field="enable_internet"]');
+    if (!card || !field) return false;
+    // Relocate the existing live checkbox field; its state stays whatever
+    // the configuration says and moving it must never mark anything dirty.
+    // Like every Step 3 field, the Basic layout reclaims it on mode switch,
+    // so it is not registered for internal-home restoration.
+    if (field.parentElement !== card) {
+      card.insertBefore(field, card.firstChild);
+    }
+    if (!field.classList.contains('pro-connectivity-field')) {
+      field.classList.add('pro-connectivity-field');
+    }
     return true;
   }
 
@@ -1053,8 +1094,8 @@
         return;
       }
       const guidedReady = rehydrateWorkflow(shell);
-      const qualityReady = ensureConnectionQuality(shell);
       const troubleshootingReady = ensureTroubleshooting();
+      const qualityReady = ensureConnectionQuality();
       ensureStatusObserver();
       if (guidedReady && qualityReady && troubleshootingReady) {
         setStage('ready');

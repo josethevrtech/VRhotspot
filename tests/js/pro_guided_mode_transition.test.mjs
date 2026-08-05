@@ -167,9 +167,22 @@ function assertProLayout(document) {
   assert.ok(document.querySelector('#proStepAdapter [data-field="ap_adapter"]'));
   assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);
   assert.ok(document.querySelector('#proStepPerformance .preset-bar'));
-  for (const key of CONNECTION_FIELDS) {
+  for (const key of CONNECTION_FIELDS.filter((field) => field !== 'enable_internet')) {
     assert.ok(document.querySelector(`#proStepHotspot [data-field="${key}"]`), `${key} should be in Step 3`);
   }
+  assert.equal(document.querySelector('#proStepHotspot [data-field="enable_internet"]'), null);
+  assert.ok(
+    document.querySelector('#tab-troubleshooting #proConnectivityCard [data-field="enable_internet"]'),
+    'internet sharing must live under Troubleshooting > Connectivity',
+  );
+  assert.equal(document.querySelectorAll('[id="enable_internet"]').length, 1);
+  const troubleshootingShell = document.querySelector('#tab-troubleshooting .troubleshooting-shell');
+  const quality = document.getElementById('proConnectionQuality');
+  assert.ok(troubleshootingShell && quality);
+  assert.equal(quality.parentElement, troubleshootingShell);
+  assert.equal(troubleshootingShell.lastElementChild, quality,
+    'Connection Quality must be the final Troubleshooting section');
+  assert.equal(document.querySelector('#proGuidedWorkflow #proConnectionQuality'), null);
   assert.equal(document.querySelectorAll('#proStepAdvanced .pro-config-details').length, 3);
   for (const id of ['btnStart', 'btnSaveConfig', 'btnSaveRestart', 'btnRepair']) {
     assert.ok(document.querySelector(`#proStepAction #${id}`), `${id} should be in Step 5`);

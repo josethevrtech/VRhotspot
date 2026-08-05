@@ -468,7 +468,10 @@ function resetPassphraseUi(cfg) {
   if (passEl) {
     passEl.type = 'password';
     passEl.value = '';
-    passEl.placeholder = hasSaved ? 'Type new passphrase to change (currently saved)' : 'Type a new passphrase to set it';
+    // Never disclose whether a passphrase is saved or how long it is: the
+    // placeholder stays neutral and identical in both states.
+    const neutral = 'Enter a new password to change it';
+    if (passEl.placeholder !== neutral) passEl.placeholder = neutral;
     passEl.readOnly = false;
   }
   if (passBasic) {
@@ -478,17 +481,7 @@ function resetPassphraseUi(cfg) {
     passBasic.readOnly = false;
   }
   const passHint = document.getElementById('passHint');
-  if (passHint) {
-    if (hasSaved) {
-      let hint = 'Passphrase is saved';
-      if (Number.isInteger(cfg.wpa2_passphrase_len)) {
-        hint = `Passphrase saved (${cfg.wpa2_passphrase_len} chars). Type to change.`;
-      }
-      passHint.textContent = hint;
-    } else {
-      passHint.textContent = '';
-    }
-  }
+  if (passHint && passHint.textContent !== '') passHint.textContent = '';
   const basicHint = document.getElementById('copyHint');
   if (basicHint) {
     basicHint.textContent = hasSaved ? 'Passphrase saved' : '';
@@ -3947,6 +3940,10 @@ function bootstrapAuthenticatedUi() {
   enforceBandRules();
   wireQr();
   wireTabs();
+  renderHintTip(
+    document.getElementById('passwordTip'),
+    'Use 8–63 characters. Control characters are not allowed.',
+  );
 
   // Load adapters first so the adapter select is populated before applying config.
   loadAdapters()

@@ -22,21 +22,80 @@ const CONNECTION_FIELDS = [
   'country',
   'enable_internet',
 ];
+const STEP3_FIELDS = CONNECTION_FIELDS.filter((key) => key !== 'enable_internet');
+const PASSWORD_RULES = 'Use 8–63 characters. Control characters are not allowed.';
+const NEUTRAL_PLACEHOLDER = 'Enter a new password to change it';
 
-function apiPayload(url, { passphraseSaved }) {
+function assertInformationArchitecture(document) {
+  // Internet sharing is out of Step 3 and lives under Troubleshooting.
+  assert.equal(document.querySelector('#proStepHotspot [data-field="enable_internet"]'), null);
+  assert.equal(document.querySelectorAll('[id="enable_internet"]').length, 1);
+  const connectivity = document.querySelector('#tab-troubleshooting #proConnectivityCard');
+  assert.ok(connectivity, 'Connectivity card must exist in Troubleshooting');
+  assert.ok(
+    connectivity.querySelector('[data-field="enable_internet"]'),
+    'internet sharing must live in the Connectivity card',
+  );
+  assert.match(
+    connectivity.textContent,
+    /Disable this only when you want an isolated local hotspot without internet access\./,
+  );
+
+  // Connection Quality is the final section of the Troubleshooting shell.
+  const shell = document.querySelector('#tab-troubleshooting .troubleshooting-shell');
+  const quality = document.getElementById('proConnectionQuality');
+  assert.ok(shell && quality);
+  assert.equal(document.querySelectorAll('[id="proConnectionQuality"]').length, 1);
+  assert.equal(quality.parentElement, shell, 'quality card must live in Troubleshooting');
+  assert.equal(shell.lastElementChild, quality, 'quality card must be the final section');
+  assert.equal(
+    document.querySelector('#proGuidedWorkflow #proConnectionQuality'),
+    null,
+    'the setup workflow must not contain Connection Quality',
+  );
+  // 4 === Node.DOCUMENT_POSITION_FOLLOWING
+  assert.ok(connectivity.compareDocumentPosition(quality) & 4,
+    'Connectivity must appear before Connection Quality');
+}
+
+function assertPasswordPrivacy(document) {
+  const hint = document.getElementById('passHint');
+  assert.equal(hint.textContent, '', 'no saved/length disclosure below the password field');
+  const input = document.getElementById('wpa2_passphrase');
+  assert.equal(input.placeholder, NEUTRAL_PLACEHOLDER, 'placeholder must stay neutral');
+  const tip = document.querySelector('[data-field="wpa2_passphrase"] .field-label-with-tip .tip');
+  assert.ok(tip, 'password label must carry the info tip');
+  assert.equal(tip.getAttribute('data-tip'), PASSWORD_RULES);
+  assert.equal(tip.getAttribute('aria-label'), PASSWORD_RULES);
+  assert.equal(tip.getAttribute('tabindex'), '0');
+  for (const key of ['wpa2_passphrase', 'band_preference', 'ap_security']) {
+    assert.ok(
+      document.querySelector(`[data-field="${key}"] > .field-label-with-tip`),
+      `${key} must use the shared label-row structure`,
+    );
+  }
+}
+
+function apiPayload(url, { passphraseSaved, enableInternet = true }) {
   const path = new URL(String(url), 'http://127.0.0.1:8732').pathname;
   if (path === '/v1/status') {
+    // The daemon wraps responses in an envelope; the app reads r.json.data.
     return {
-      running: false,
-      state: 'stopped',
-      adapter: 'wlan1',
-      band: '5ghz',
-      platform: { os: { id: 'cachyos', version_id: 'rolling' } },
-      telemetry: { clients: [] },
+      result_code: 'ok',
+      data: {
+        running: false,
+        state: 'stopped',
+        adapter: 'wlan1',
+        band: '5ghz',
+        platform: { os: { id: 'cachyos', version_id: 'rolling' } },
+        telemetry: { clients: [] },
+      },
     };
   }
   if (path === '/v1/config') {
     return {
+      result_code: 'ok',
+      data: {
       ssid: 'VR-Hotspot',
       ...(passphraseSaved
         ? { wpa2_passphrase_set: true, wpa2_passphrase_len: 12 }
@@ -44,7 +103,7 @@ function apiPayload(url, { passphraseSaved }) {
       band_preference: '5ghz',
       ap_security: 'wpa2',
       country: 'US',
-      enable_internet: true,
+      enable_internet: enableInternet,
       ap_adapter: 'wlan1',
       qos_preset: 'balanced',
       channel_width: '80',
@@ -52,6 +111,7 @@ function apiPayload(url, { passphraseSaved }) {
       bridge_mode: false,
       telemetry_enable: true,
       connection_quality_monitoring: true,
+      },
     };
   }
   if (path === '/v1/adapters') {
@@ -252,12 +312,14 @@ function assertProLayout(document) {
   assert.equal(adapterHint?.textContent, '');
   assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);
   assert.ok(document.querySelector('#proStepPerformance .preset-bar'));
-  for (const key of CONNECTION_FIELDS) {
+  for (const key of STEP3_FIELDS) {
     assert.ok(
       document.querySelector(`#proStepHotspot [data-field="${key}"]`),
       `${key} should be in production Pro Step 3`,
     );
   }
+  assertInformationArchitecture(document);
+  assertPasswordPrivacy(document);
   assert.equal(document.querySelectorAll('#proStepAdvanced .pro-config-details').length, 3);
   for (const id of ['btnStart', 'btnSaveConfig', 'btnSaveRestart', 'btnRepair']) {
     assert.ok(document.querySelector(`#proStepAction #${id}`), `${id} should be in production Pro Step 5`);
@@ -301,7 +363,7 @@ function assertPasswordRowComposed(document) {
   assert.ok(row.compareDocumentPosition(hint) & 4, 'passHint must follow the row');
 }
 
-async function runFullPortalScenario({ passphraseSaved }) {
+async function runFullPortalScenario({ passphraseSaved, enableInternet = true }) {
   const [html, fieldVisibility, ui, basicGuided, composer, portalExtensions] = await Promise.all([
     readAsset('assets/index.html'),
     readAsset('assets/field_visibility.js'),
@@ -318,7 +380,7 @@ async function runFullPortalScenario({ passphraseSaved }) {
   });
   const { window } = dom;
   const { document } = window;
-  installBrowserStubs(window, { passphraseSaved });
+  installBrowserStubs(window, { passphraseSaved, enableInternet });
   window.localStorage.setItem('vrhs_ui_mode', 'basic');
 
   const errors = [];
@@ -362,6 +424,10 @@ async function runFullPortalScenario({ passphraseSaved }) {
   }
 
   const recommendedNode = document.getElementById('btnUseRecommended');
+  const internetNode = document.getElementById('enable_internet');
+  const dirtyBaseline = document.getElementById('dirty')?.textContent || '';
+  assert.equal(internetNode.checked, enableInternet,
+    'the checkbox must reflect the saved configuration');
   const passwordNodes = {
     input: document.getElementById('wpa2_passphrase'),
     reveal: document.getElementById('btnRevealPass'),
@@ -385,6 +451,10 @@ async function runFullPortalScenario({ passphraseSaved }) {
     assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
     assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
     assertPasswordIdentity();
+    assert.equal(document.getElementById('enable_internet'), internetNode,
+      'the internet-sharing checkbox must be the same live node');
+    assert.equal(internetNode.checked, enableInternet,
+      'mode transitions must not change the saved internet-sharing state');
 
     if (cycle === 0) {
       await window.loadAdapters();
@@ -487,6 +557,13 @@ async function runFullPortalScenario({ passphraseSaved }) {
   );
   assert.equal(document.body.dataset.proGuidedStage, 'ready');
 
+  // Relocation and mode transitions alone must never dirty the config, and
+  // the saved internet-sharing state must survive untouched.
+  assert.equal(document.getElementById('dirty')?.textContent || '', dirtyBaseline,
+    'relocating fields must not mark the configuration dirty');
+  assert.equal(document.getElementById('enable_internet'), internetNode);
+  assert.equal(internetNode.checked, enableInternet);
+
   assert.ok(
     readyCaptures.length >= 4,
     `expected at least 4 ready publications, saw ${readyCaptures.length}`,
@@ -504,10 +581,10 @@ async function runFullPortalScenario({ passphraseSaved }) {
   dom.window.close();
 }
 
-test('real portal composes Pro across toggles with a saved passphrase', async () => {
-  await runFullPortalScenario({ passphraseSaved: true });
+test('real portal composes Pro across toggles with a saved passphrase and explicit internet-sharing false', async () => {
+  await runFullPortalScenario({ passphraseSaved: true, enableInternet: false });
 });
 
 test('real portal composes Pro across toggles on a clean install without a saved passphrase', async () => {
-  await runFullPortalScenario({ passphraseSaved: false });
+  await runFullPortalScenario({ passphraseSaved: false, enableInternet: true });
 });

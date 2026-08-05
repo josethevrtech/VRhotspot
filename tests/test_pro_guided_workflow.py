@@ -98,12 +98,17 @@ def test_step_three_contains_the_complete_connection_setup() -> None:
         "enable_internet",
     ):
         assert f"'{field}'" in source
-    assert "hotspot name, password, band, security, country" in source
+    assert "hotspot name, password, band, security, and country" in source
+    # Internet sharing is an advanced recovery option under Troubleshooting >
+    # Connectivity; Step 3 composes only the core connection fields.
+    assert "STEP3_FIELDS = CONNECTION_FIELDS.filter((key) => key !== 'enable_internet')" in source
+    assert "proConnectivityCard" in source
+    assert "Disable this only when you want an isolated local hotspot without internet access." in source
     assert ".pro-hotspot-fields" in style
     assert "repeat(6, minmax(0, 1fr))" in style
     assert "[data-field=\"ssid\"]" in style
     assert "[data-field=\"wpa2_passphrase\"]" in style
-    assert "[data-field=\"enable_internet\"]" in style
+    assert "#proConnectivityCard" in style
 
 
 def test_step_four_exposes_detailed_wireless_network_and_system_groups() -> None:

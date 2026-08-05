@@ -109,18 +109,48 @@ body[data-ui-mode="advanced"] .pro-hotspot-fields > [data-field="country"] {
   grid-column: 5 / 7;
 }
 
-body[data-ui-mode="advanced"] .pro-hotspot-fields > [data-field="enable_internet"] {
-  grid-column: 1 / 7;
-  padding: 10px 12px;
+/* Internet sharing lives under Troubleshooting > Connectivity in Pro. */
+body[data-ui-mode="advanced"] #proConnectivityCard {
+  padding: 12px 14px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-subtle);
 }
 
-body[data-ui-mode="advanced"] .pro-hotspot-fields > [data-field]:not([data-field="enable_internet"]) > label,
-body[data-ui-mode="advanced"] .pro-hotspot-fields > [data-field] > .field-label-with-tip {
-  display: flex !important;
+body[data-ui-mode="advanced"] #proConnectivityCard > .pro-connectivity-field {
+  margin: 0;
+}
+
+body[data-ui-mode="advanced"] .pro-connectivity-help {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* One shared label-row structure for every Step 3 label: text and info icon
+   on one line, centered, with one restrained gap - no per-field margins. */
+body[data-ui-mode="advanced"] .pro-hotspot-fields .field-label-with-tip > label {
+  margin: 0;
+}
+
+body[data-ui-mode="advanced"] .pro-hotspot-fields .field-label-with-tip .hint.tip-only {
+  display: inline-flex;
   align-items: center;
+  margin: 0;
+}
+
+body[data-ui-mode="advanced"] .pro-hotspot-fields .field-label-with-tip .tip {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+body[data-ui-mode="advanced"] .pro-hotspot-fields > [data-field] > label,
+body[data-ui-mode="advanced"] .pro-hotspot-fields > [data-field] > .field-label-with-tip {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
   min-height: 18px;
   margin: 0 0 7px;
   color: var(--text-muted);

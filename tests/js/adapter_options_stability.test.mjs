@@ -29,19 +29,26 @@ function makeInventory() {
 function apiPayload(url, inventory) {
   const path = new URL(String(url), 'http://127.0.0.1:8732').pathname;
   if (path === '/v1/status') {
+    // The daemon wraps responses in an envelope; the app reads r.json.data.
     return {
-      running: false, state: 'stopped', adapter: 'wlan1', band: '5ghz',
-      platform: { os: { id: 'cachyos', version_id: 'rolling' } },
-      telemetry: { clients: [] },
+      result_code: 'ok',
+      data: {
+        running: false, state: 'stopped', adapter: 'wlan1', band: '5ghz',
+        platform: { os: { id: 'cachyos', version_id: 'rolling' } },
+        telemetry: { clients: [] },
+      },
     };
   }
   if (path === '/v1/config') {
     return {
-      ssid: 'VR-Hotspot', wpa2_passphrase_set: true, wpa2_passphrase_len: 12,
-      band_preference: '5ghz', ap_security: 'wpa2', country: 'US',
-      enable_internet: true, ap_adapter: 'wlan1', qos_preset: 'balanced',
-      channel_width: '80', channel_auto_select: false, bridge_mode: false,
-      telemetry_enable: true, connection_quality_monitoring: true,
+      result_code: 'ok',
+      data: {
+        ssid: 'VR-Hotspot', wpa2_passphrase_set: true, wpa2_passphrase_len: 12,
+        band_preference: '5ghz', ap_security: 'wpa2', country: 'US',
+        enable_internet: true, ap_adapter: 'wlan1', qos_preset: 'balanced',
+        channel_width: '80', channel_auto_select: false, bridge_mode: false,
+        telemetry_enable: true, connection_quality_monitoring: true,
+      },
     };
   }
   if (path === '/v1/adapters') {

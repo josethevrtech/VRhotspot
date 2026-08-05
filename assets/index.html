@@ -426,7 +426,10 @@
                 <input id="ssid" autocomplete="off" data-lpignore="true" data-1p-ignore data-bwignore />
               </div>
               <div class="form-group" data-field="wpa2_passphrase">
-                <label for="wpa2_passphrase">Passphrase</label>
+                <div class="field-label-with-tip">
+                  <label for="wpa2_passphrase">Passphrase</label>
+                  <span id="passwordTip" class="hint tip-only"></span>
+                </div>
                 <div class="input-with-action">
                   <input id="wpa2_passphrase" type="password" placeholder="Saved" autocomplete="off" data-lpignore="true" data-1p-ignore data-bwignore />
                   <button id="btnRevealPass" class="btn icon-only" title="Show">👁</button>
