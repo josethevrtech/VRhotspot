@@ -101,7 +101,8 @@ body[data-ui-mode="basic"] .basic-guided-step:last-child .basic-guided-step-cont
 body[data-ui-mode="basic"] .basic-guided-step-heading {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* Same label-to-icon gap as the Pro Step 3 label rows. */
+  gap: 6px;
   margin-bottom: 12px;
 }
 
@@ -127,12 +128,8 @@ body[data-ui-mode="basic"] .basic-guided-step-help:empty {
   display: none;
 }
 
-body[data-ui-mode="basic"] .basic-guided-tip {
-  border-color: var(--border-subtle);
-  color: var(--accent-primary);
-  font-family: var(--font-sans);
-  font-style: normal;
-}
+/* Basic info icons are the shared renderHintTip component from ui.js; no
+   Basic-specific icon styling exists on purpose. */
 
 body[data-ui-mode="basic"] .basic-guided-step-slot > [data-field],
 body[data-ui-mode="basic"] .basic-guided-pass-field {
@@ -147,31 +144,75 @@ body[data-ui-mode="basic"] .basic-guided-profile-field #basicQosBanner {
   display: none !important;
 }
 
-/* The rescan control sits directly beneath the selector as a full-width
-   button, matching the Pro treatment. */
+/* Step 1 desktop layout: [ selector, flexible ] [ RESCAN ADAPTERS, compact ]
+   on one aligned row, mirroring the Pro adapter-row grid. The field's label
+   is hidden in guided Basic, so the field itself is the grid. */
+body[data-ui-mode="basic"] .basic-guided-adapter-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: stretch;
+}
+
+body[data-ui-mode="basic"] .basic-guided-adapter-field #ap_adapter {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 40px;
+}
+
 body[data-ui-mode="basic"] .basic-guided-adapter-field .row {
-  display: block;
-  margin-top: 9px !important;
+  display: flex;
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0 !important;
 }
 
 body[data-ui-mode="basic"] #btnUseRecommended {
   display: none !important;
 }
 
-/* Mirrors the Pro rescan button exactly, including the per-breakpoint
-   typography Pro inherits from basic_layout.css's .btn density rules. */
 body[data-ui-mode="basic"] .basic-guided-adapter-field #btnReloadAdapters {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
   height: auto;
-  min-height: 40px;
+  min-width: 210px;
   padding: 0 20px !important;
   /* The base .btn size Pro's rescan button resolves to; this neutralizes the
      Basic-section 16px density rule so both modes render identically. */
   font-size: 14px !important;
   text-transform: uppercase;
+}
+
+body[data-ui-mode="basic"] .basic-guided-adapter-field #adapterHint {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+body[data-ui-mode="basic"] .basic-guided-adapter-field #adapterHint:empty {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  body[data-ui-mode="basic"] .basic-guided-adapter-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-ui-mode="basic"] .basic-guided-adapter-field .row {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  body[data-ui-mode="basic"] .basic-guided-adapter-field #btnReloadAdapters {
+    min-width: 0;
+    min-height: 40px;
+  }
+
+  body[data-ui-mode="basic"] .basic-guided-adapter-field #adapterHint {
+    grid-row: 3;
+  }
 }
 
 body[data-ui-mode="basic"] .basic-guided-adapter-field #adapterHint {
@@ -207,8 +248,12 @@ body[data-ui-mode="basic"] .basic-guided-profile-field .seg span {
   border-color: var(--border-subtle);
   background: var(--bg-subtle);
   color: var(--text-muted);
-  font-size: 16px;
-  font-weight: 700;
+  /* Same deliberate all-caps button language as the Pro action buttons. */
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: center;
 }
 
 body[data-ui-mode="basic"] .basic-guided-profile-field .seg input:checked + span {

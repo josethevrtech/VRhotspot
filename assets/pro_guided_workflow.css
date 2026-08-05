@@ -3,7 +3,8 @@ body[data-ui-mode="advanced"] .pro-nav-svg {
   height: 20px;
   flex: 0 0 20px;
   margin-right: 12px;
-  color: var(--accent-primary);
+  /* currentColor: icons inherit the nav item's state color (muted when
+     inactive, cyan only for the active/hovered item). */
 }
 
 body[data-ui-mode="advanced"] .pro-configuration > .settings-header,

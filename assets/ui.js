@@ -477,14 +477,18 @@ function resetPassphraseUi(cfg) {
   if (passBasic) {
     passBasic.type = 'password';
     passBasic.value = '';
-    passBasic.placeholder = hasSaved ? 'Saved (tap eye to reveal)' : 'Enter a passphrase (8-63 characters)';
+    // No saved-state or length disclosure; the placeholder stays neutral.
+    const basicPlaceholder = hasSaved
+      ? 'Saved — enter a new password to change it'
+      : 'Enter a password';
+    if (passBasic.placeholder !== basicPlaceholder) passBasic.placeholder = basicPlaceholder;
     passBasic.readOnly = false;
   }
   const passHint = document.getElementById('passHint');
   if (passHint && passHint.textContent !== '') passHint.textContent = '';
   const basicHint = document.getElementById('copyHint');
-  if (basicHint) {
-    basicHint.textContent = hasSaved ? 'Passphrase saved' : '';
+  if (basicHint && basicHint.textContent !== '') {
+    basicHint.textContent = '';
     basicHint.style.color = '';
   }
   passphraseDirty = false;
@@ -1170,6 +1174,70 @@ function safeText(el, text, colorVar) {
     if (colorVar) el.style.color = colorVar;
   } catch {
     // Ignore any DOM errors
+  }
+}
+
+function makeQrGlyph() {
+  // Shared QR-code glyph for the Basic and Pro QR buttons: finder squares in
+  // three corners plus data modules. Inline SVG, currentColor, no external
+  // assets; decorative (the host button carries the accessible name).
+  if (typeof document.createElementNS !== 'function') return null;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  svg.classList.add('qr-glyph');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', 'currentColor');
+  path.setAttribute('d', [
+    // finder squares (ring + core), top-left / top-right / bottom-left
+    'M2 2h8v8H2V2Zm2 2v4h4V4H4Zm1 1h2v2H5V5Z',
+    'M14 2h8v8h-8V2Zm2 2v4h4V4h-4Zm1 1h2v2h-2V5Z',
+    'M2 14h8v8H2v-8Zm2 2v4h4v-4H4Zm1 1h2v2H5v-2Z',
+    // data modules
+    'M12 12h2v2h-2v-2Z', 'M16 12h2v2h-2v-2Z', 'M20 12h2v2h-2v-2Z',
+    'M14 14h2v2h-2v-2Z', 'M18 14h2v2h-2v-2Z',
+    'M12 16h2v2h-2v-2Z', 'M16 16h2v2h-2v-2Z', 'M20 16h2v2h-2v-2Z',
+    'M14 18h2v2h-2v-2Z', 'M18 18h2v2h-2v-2Z',
+    'M12 20h2v2h-2v-2Z', 'M16 20h2v2h-2v-2Z', 'M20 20h2v2h-2v-2Z',
+  ].join(' '));
+  svg.appendChild(path);
+  return svg;
+}
+
+function makeShieldIcon() {
+  // Compact decorative shield for the Privacy Mode control.
+  if (typeof document.createElementNS !== 'function') return null;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  svg.classList.add('privacy-shield');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', 'currentColor');
+  path.setAttribute('d', 'M12 2 4 5v6c0 5.25 3.4 9.74 8 11 4.6-1.26 8-5.75 8-11V5l-8-3Zm0 2.15 6 2.25V11c0 4.22-2.6 7.9-6 9.1-3.4-1.2-6-4.88-6-9.1V6.4l6-2.25Zm3.3 4.35L11 12.8l-2.3-2.3-1.4 1.4 3.7 3.7 5.7-5.7-1.4-1.4Z');
+  svg.appendChild(path);
+  return svg;
+}
+
+function applyQrGlyph(button) {
+  if (!button || button.querySelector('.qr-glyph')) return;
+  const glyph = makeQrGlyph();
+  if (!glyph) return;
+  button.replaceChildren(glyph);
+  button.title = 'Show hotspot QR code';
+  button.setAttribute('aria-label', 'Show hotspot QR code');
+}
+
+function applyPrivacyShield(input) {
+  // Defensive against minimal DOM stubs used by contract harnesses.
+  const label = input && typeof input.closest === 'function'
+    ? input.closest('label')
+    : null;
+  if (!label || label.querySelector('.privacy-shield')) return;
+  const shield = makeShieldIcon();
+  if (shield && typeof input.insertAdjacentElement === 'function') {
+    input.insertAdjacentElement('afterend', shield);
   }
 }
 
@@ -3627,39 +3695,56 @@ if (refreshEveryBasic) refreshEveryBasic.addEventListener('change', () => {
   applyAutoRefresh();
 });
 
-function wireTabs() {
-  const tabs = document.querySelectorAll('.nav-item');
-  const panes = document.querySelectorAll('.tab-pane');
-
-  function switchTab(targetName) {
-    if (!isAuthenticated) return;
-    // Reset tabs
-    tabs.forEach(t => t.classList.remove('active'));
-    // Set active tab
-    tabs.forEach(t => {
-      if (t.dataset.tab === targetName) t.classList.add('active');
-    });
-
-    // Reset panes (hide all)
-    panes.forEach(p => p.classList.remove('active'));
-
-    // Show target pane
-    const targetPane = document.getElementById(`tab-${targetName}`);
-    if (targetPane) {
-      targetPane.classList.add('active');
+function applyNavSelection(targetName) {
+  // The single authoritative navigation-state writer. Live queries so items
+  // injected later (Developer Hub) are always included: exactly one item may
+  // carry the active treatment and aria-current at any time.
+  document.querySelectorAll('.nav-item').forEach((item) => {
+    const active = item.dataset.tab === targetName;
+    if (active) item.classList.add('active');
+    else item.classList.remove('active');
+    if (typeof item.setAttribute === 'function' && typeof item.removeAttribute === 'function') {
+      if (active) item.setAttribute('aria-current', 'page');
+      else item.removeAttribute('aria-current');
     }
-    if (targetName === 'diagnostics') {
+  });
+  document.querySelectorAll('.tab-pane').forEach((pane) => {
+    if (pane.id === `tab-${targetName}`) pane.classList.add('active');
+    else pane.classList.remove('active');
+  });
+}
+
+function wireTabs() {
+  const onNavigate = (item) => {
+    if (!isAuthenticated || !item || !item.dataset.tab) return;
+    applyNavSelection(item.dataset.tab);
+    if (item.dataset.tab === 'diagnostics') {
       void loadPreflightReport();
     }
-  }
-
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      if (!isAuthenticated) return;
-      const target = tab.dataset.tab;
-      if (target) switchTab(target);
+  };
+  const navList = document.querySelector('.nav-list');
+  if (navList) {
+    if (navList.dataset.navWired === '1') return;
+    navList.dataset.navWired = '1';
+    // Delegated so dynamically injected items (Developer Hub) participate
+    // without their own competing state writers.
+    navList.addEventListener('click', (event) => {
+      const target = event.target;
+      const item = target && typeof target.closest === 'function'
+        ? target.closest('.nav-item')
+        : null;
+      onNavigate(item);
     });
-  });
+  } else {
+    // Minimal harness DOMs carry bare .nav-item nodes without the list.
+    document.querySelectorAll('.nav-item').forEach((item) => {
+      if (item.dataset.navWired === '1') return;
+      item.dataset.navWired = '1';
+      item.addEventListener('click', () => onNavigate(item));
+    });
+  }
+  const active = document.querySelector('.nav-item.active');
+  applyNavSelection(active && active.dataset.tab ? active.dataset.tab : 'overview');
 }
 
 function bootstrapAuthenticatedUi() {
@@ -3814,9 +3899,10 @@ function bootstrapAuthenticatedUi() {
     }
 
     if (!passphraseDirty) {
+      // No status disclosure about existing/unchanged passwords.
       if (showHint && hint) {
-        hint.textContent = 'No passphrase changes to save';
-        hint.style.color = 'var(--text-muted)';
+        hint.textContent = '';
+        hint.style.color = '';
       }
       return { attempted: false, skippedReason: 'unchanged' };
     }
@@ -3841,7 +3927,7 @@ function bootstrapAuthenticatedUi() {
 
     if (showHint && hint) {
       if (res && res.ok) {
-        hint.textContent = 'Passphrase saved to config';
+        hint.textContent = 'Password saved';
         hint.style.color = 'var(--good)';
       } else {
         const code = (res && res.json && res.json.result_code) ? res.json.result_code : `HTTP ${res ? res.status : 'error'}`;
@@ -3944,6 +4030,9 @@ function bootstrapAuthenticatedUi() {
     document.getElementById('passwordTip'),
     'Use 8–63 characters. Control characters are not allowed.',
   );
+  applyQrGlyph(document.getElementById('btnShowQrBasic'));
+  applyPrivacyShield(document.getElementById('privacyMode'));
+  applyPrivacyShield(document.getElementById('privacyModeBasic'));
 
   // Load adapters first so the adapter select is populated before applying config.
   loadAdapters()

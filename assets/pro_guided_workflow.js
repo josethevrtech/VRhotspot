@@ -86,7 +86,9 @@
   }
 
   function replaceNav(item, kind, label) {
-    if (!item || item.dataset.proNavLabel === label) return;
+    // Re-applies when another script (field_visibility's emoji labels)
+    // clobbered the SVG even though the marker survived.
+    if (!item || (item.dataset.proNavLabel === label && item.querySelector('.pro-nav-svg'))) return;
     item.dataset.proNavLabel = label;
     item.replaceChildren(icon(kind), document.createTextNode(label));
   }
@@ -124,6 +126,18 @@
 
     const diagnosticsPane = el('tab-diagnostics');
     if (diagnosticsPane) diagnosticsPane.id = 'tab-troubleshooting';
+
+    // Sidebar order: Set Up Hotspot, Developer Hub, Troubleshooting. The
+    // Developer Hub item is injected late, so the order is re-asserted each
+    // reconcile with the existing idempotent helper (live nodes, no clones).
+    const navList = document.querySelector('.nav-list');
+    if (navList) {
+      ensureChildOrder(navList, [
+        overviewNav,
+        document.querySelector('.nav-item[data-tab="devhub"]'),
+        troubleshootingNav,
+      ]);
+    }
   }
 
   function step(number, title, help, id) {
@@ -806,11 +820,17 @@
       reveal.setAttribute('aria-label', 'Show or hide password');
     }
     if (qr.type !== 'button') qr.type = 'button';
-    setText(qr, 'QR');
+    // The shared QR glyph from ui.js; text fallback only when the base app
+    // is absent (synthetic fixtures). Guarded so reconciles stay quiet.
+    if (typeof makeQrGlyph === 'function') {
+      if (!qr.querySelector('.qr-glyph')) qr.replaceChildren(makeQrGlyph());
+    } else {
+      setText(qr, 'QR');
+    }
     if (qr.className !== 'btn icon-only') qr.className = 'btn icon-only';
-    if (qr.title !== 'Show QR code') qr.title = 'Show QR code';
-    if (qr.getAttribute('aria-label') !== 'Show QR code') {
-      qr.setAttribute('aria-label', 'Show QR code');
+    if (qr.title !== 'Show hotspot QR code') qr.title = 'Show hotspot QR code';
+    if (qr.getAttribute('aria-label') !== 'Show hotspot QR code') {
+      qr.setAttribute('aria-label', 'Show hotspot QR code');
     }
     ensureChildOrder(row, [cell, reveal, qr]);
 

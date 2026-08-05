@@ -30,11 +30,20 @@
   }
 
   function makeInfoTip(text) {
-    const tip = make('span', 'tip basic-guided-tip', 'i');
-    tip.setAttribute('data-tip', text);
-    tip.setAttribute('aria-label', text);
-    tip.setAttribute('tabindex', '0');
-    return tip;
+    // Basic uses the exact same info-icon component as Pro Step 3: the
+    // shared renderHintTip() markup, glyph, and tooltip wiring from ui.js.
+    // No parallel Basic implementation may drift from it again.
+    const holder = make('span', 'hint tip-only');
+    if (typeof renderHintTip === 'function') {
+      renderHintTip(holder, text);
+    } else {
+      const tip = make('span', 'tip', 'ⓘ');
+      tip.setAttribute('data-tip', text);
+      tip.setAttribute('aria-label', text);
+      tip.setAttribute('tabindex', '0');
+      holder.appendChild(tip);
+    }
+    return holder;
   }
 
   function setCardHeader(card, title, subtitle) {
@@ -126,7 +135,7 @@
       createStep(
         4,
         'Password',
-        'Use 8–63 characters. Press Enter or choose Save password.',
+        'Use 8–63 characters. Control characters are not allowed.',
         'This password protects the hotspot. You can reveal it or generate a QR code for easy connection.',
         'basicGuidedPassSlot',
       ),

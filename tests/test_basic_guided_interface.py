@@ -211,11 +211,15 @@ def test_guided_styles_match_existing_theme_and_avoid_page_scaling() -> None:
     assert "transform: scale(" not in styles
 
 
-def test_info_tips_use_one_native_circle_instead_of_a_circled_glyph() -> None:
+def test_info_tips_use_the_shared_pro_component() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
-    assert "make('span', 'tip basic-guided-tip', 'i')" in source
-    assert "make('span', 'tip basic-guided-tip', 'ⓘ')" not in source
+    # Basic renders info icons through the exact same renderHintTip component
+    # as Pro Step 3 - one glyph, one markup, one tooltip system. No parallel
+    # Basic-only icon implementation may return.
+    assert "renderHintTip(holder, text)" in source
+    assert "make('span', 'hint tip-only')" in source
+    assert "basic-guided-tip" not in source
 
 
 def test_connection_profiles_fill_the_available_width() -> None:

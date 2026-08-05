@@ -468,11 +468,13 @@ def test_basic_step_one_controls(pro_page):
                 recDisplay: rec ? getComputedStyle(rec).display : null,
                 visibleRecommendedText,
                 rescan: {h: r.height, w: r.width, top: r.top, left: r.left,
+                         bottom: r.bottom,
                          border: cs.borderTopWidth, bg: cs.backgroundColor,
                          font: cs.fontSize, weight: cs.fontWeight,
                          transform: cs.textTransform, radius: cs.borderTopLeftRadius,
                          align: cs.justifyContent},
-                selector: {w: sr.width, left: sr.left, bottom: sr.bottom},
+                selector: {w: sr.width, h: sr.height, left: sr.left, right: sr.right,
+                           top: sr.top, bottom: sr.bottom},
                 options: Array.from(select.options).map((o) => o.textContent),
             };
         }"""
@@ -484,16 +486,19 @@ def test_basic_step_one_controls(pro_page):
     assert basic["visibleRecommendedText"] == 0, "no visible control labelled Recommended"
 
     rescan, selector = basic["rescan"], basic["selector"]
-    assert abs(rescan["w"] - selector["w"]) < 2, "Rescan must be as wide as the selector"
-    assert abs(rescan["left"] - selector["left"]) < 2
-    assert rescan["top"] >= selector["bottom"] - 1, "Rescan sits beneath the selector"
+    # Desktop: one aligned row — selector flexible, Rescan compact.
+    assert 190 <= rescan["w"] <= 230, f"Rescan must be compact, got {rescan['w']:.0f}px"
+    assert rescan["w"] < selector["w"], "Rescan must not dominate the row"
+    assert rescan["left"] >= selector["right"] - 1, "Rescan sits beside the selector"
+    assert abs(rescan["top"] - selector["top"]) < 2, "row tops must align"
+    assert abs(rescan["bottom"] - selector["bottom"]) < 2, "row bottoms must align"
+    assert abs(rescan["h"] - selector["h"]) < 2, "selector and Rescan share one height"
     assert rescan["border"] == pro_rescan["border"], "border must match Pro"
     assert rescan["bg"] == pro_rescan["bg"], "background must match Pro"
     assert rescan["font"] == pro_rescan["font"], "typography must match Pro"
     assert rescan["weight"] == pro_rescan["weight"]
     assert rescan["transform"] == pro_rescan["transform"], "capitalization must match Pro"
     assert rescan["radius"] == pro_rescan["radius"]
-    assert abs(rescan["h"] - pro_rescan["h"]) < 2, "height must match Pro"
     assert rescan["align"] == "center", "label must be centered"
 
     # A real rescan must not rebuild unchanged options or blank the selector.
@@ -665,6 +670,246 @@ def test_step_five_action_surface(pro_page):
     )
     pro_page.fill("#ssid", original_ssid)
     pro_page.wait_for_timeout(1200)
+
+
+def test_sidebar_state_and_order(pro_page):
+    """One authoritative selection at a time, cyan only on the active item,
+    order Set Up Hotspot -> Developer Hub -> Troubleshooting."""
+    routes = ["overview", "devhub", "troubleshooting"]
+    order = pro_page.evaluate(
+        """() => Array.from(document.querySelectorAll('.nav-item')).map(
+            (item) => item.dataset.tab)"""
+    )
+    assert order == ["overview", "devhub", "troubleshooting"], f"nav order {order}"
+    for route in routes:
+        pro_page.click(f'.nav-item[data-tab="{route}"]')
+        pro_page.wait_for_timeout(300)
+        state = pro_page.evaluate(
+            """(route) => {
+                const items = Array.from(document.querySelectorAll('.nav-item'));
+                const activeItems = items.filter((i) => i.classList.contains('active'));
+                const ariaItems = items.filter((i) => i.getAttribute('aria-current') === 'page');
+                const accent = getComputedStyle(document.documentElement)
+                    .getPropertyValue('--accent-primary').trim();
+                const colors = items.map((i) => {
+                    const cs = getComputedStyle(i);
+                    const svg = i.querySelector('.pro-nav-svg');
+                    return {tab: i.dataset.tab, color: cs.color,
+                            svgColor: svg ? getComputedStyle(svg).color : null,
+                            active: i.classList.contains('active')};
+                });
+                const panes = Array.from(document.querySelectorAll('.tab-pane.active'))
+                    .map((p) => p.id);
+                return {activeTabs: activeItems.map((i) => i.dataset.tab),
+                        ariaTabs: ariaItems.map((i) => i.dataset.tab),
+                        colors, panes, accent};
+            }""",
+            route,
+        )
+        assert state["activeTabs"] == [route], (
+            f"{route}: expected one active item, got {state['activeTabs']}"
+        )
+        assert state["ariaTabs"] == [route], f"{route}: aria-current mismatch"
+        assert state["panes"] == [f"tab-{route}"], f"{route}: visible panes {state['panes']}"
+        active = [c for c in state["colors"] if c["active"]][0]
+        inactive = [c for c in state["colors"] if not c["active"]]
+        for item in inactive:
+            assert item["color"] != active["color"], (
+                f"{route}: inactive {item['tab']} shares the active color"
+            )
+            if item["svgColor"]:
+                assert item["svgColor"] == item["color"], (
+                    f"{route}: {item['tab']} icon does not inherit its item color"
+                )
+    pro_page.click('.nav-item[data-tab="overview"]')
+    pro_page.wait_for_timeout(300)
+
+
+def test_qr_glyph_and_privacy_shield(pro_page):
+    data = pro_page.evaluate(
+        """() => {
+            const pro = document.getElementById('btnShowQr');
+            const basic = document.getElementById('btnShowQrBasic');
+            const shieldLabel = document.getElementById('privacyMode').closest('label');
+            const shield = shieldLabel.querySelector('.privacy-shield');
+            const sr = shield ? shield.getBoundingClientRect() : null;
+            return {
+                proGlyph: !!pro.querySelector('.qr-glyph'),
+                proLabel: pro.getAttribute('aria-label'),
+                proText: pro.textContent.trim(),
+                basicGlyph: !!basic.querySelector('.qr-glyph'),
+                basicLabel: basic.getAttribute('aria-label'),
+                glyphHidden: pro.querySelector('.qr-glyph')?.getAttribute('aria-hidden'),
+                shieldExists: !!shield,
+                shieldSize: sr ? {w: sr.width, h: sr.height} : null,
+                shieldHidden: shield?.getAttribute('aria-hidden'),
+                privacyUnique: document.querySelectorAll('[id="privacyMode"]').length,
+            };
+        }"""
+    )
+    assert data["proGlyph"] and data["basicGlyph"], "both QR buttons must carry the glyph"
+    assert data["proLabel"] == "Show hotspot QR code"
+    assert data["basicLabel"] == "Show hotspot QR code"
+    assert data["proText"] == "", "no visible QR text remains"
+    assert data["glyphHidden"] == "true", "glyph must be decorative"
+    assert data["shieldExists"], "Privacy Mode must show the shield"
+    assert 14 <= data["shieldSize"]["w"] <= 18 and 14 <= data["shieldSize"]["h"] <= 18
+    assert data["shieldHidden"] == "true", "shield must be decorative"
+    assert data["privacyUnique"] == 1
+
+    # The real QR action still opens the existing modal.
+    pro_page.click("#btnShowQr")
+    pro_page.wait_for_function(
+        """() => {
+            const modal = document.getElementById('qrModal');
+            return modal && modal.style.display && modal.style.display !== 'none';
+        }""",
+        timeout=5000,
+    )
+    pro_page.click("#btnCloseQr")
+    pro_page.wait_for_function(
+        "document.getElementById('qrModal').style.display === 'none'", timeout=5000
+    )
+
+
+def test_basic_polish_icons_profiles_password(pro_page):
+    """Basic uses the shared Pro icon component, uppercase profile labels,
+    and discloses no password state."""
+    pro_ref = pro_page.evaluate(
+        """() => {
+            const tip = document.querySelector('[data-field="band_preference"] .tip');
+            const cs = getComputedStyle(tip);
+            return {glyph: tip.textContent, font: cs.fontSize, weight: cs.fontWeight,
+                    lh: cs.lineHeight, w: tip.getBoundingClientRect().width,
+                    h: tip.getBoundingClientRect().height, holder: tip.parentElement.className};
+        }"""
+    )
+    pro_page.evaluate(
+        """() => {
+            const t = document.getElementById('uiModeToggle');
+            t.checked = false;
+            t.dispatchEvent(new Event('change', {bubbles: true}));
+        }"""
+    )
+    pro_page.wait_for_function("document.body.dataset.uiMode === 'basic'", timeout=15000)
+    pro_page.wait_for_timeout(1200)
+
+    basic = pro_page.evaluate(
+        """() => {
+            const tips = Array.from(document.querySelectorAll(
+                '.basic-guided-step-heading .tip')).map((tip) => {
+                const cs = getComputedStyle(tip);
+                const r = tip.getBoundingClientRect();
+                const label = tip.closest('.basic-guided-step-heading')
+                    .querySelector('h3').getBoundingClientRect();
+                return {glyph: tip.textContent, font: cs.fontSize, weight: cs.fontWeight,
+                        lh: cs.lineHeight, w: r.width, h: r.height,
+                        holder: tip.parentElement.className,
+                        centerDelta: Math.abs((r.top + r.height / 2)
+                            - (label.top + label.height / 2)),
+                        legacyClass: tip.classList.contains('basic-guided-tip')};
+            });
+            const profiles = Array.from(document.querySelectorAll(
+                'input[name="qos_basic"]')).map((input) => {
+                const span = input.nextElementSibling;
+                const cs = getComputedStyle(span);
+                return {value: input.value, text: span.textContent.trim(),
+                        transform: cs.textTransform, spacing: cs.letterSpacing,
+                        weight: cs.fontWeight};
+            });
+            const pass = document.getElementById('wpa2_passphrase_basic');
+            const hint = document.getElementById('copyHint');
+            const help = document.getElementById('basicGuidedPassSlotHelp');
+            return {tips, profiles,
+                    passPlaceholder: pass.placeholder,
+                    passValue: pass.value,
+                    hintText: hint ? hint.textContent : '',
+                    helpText: help ? help.textContent : ''};
+        }"""
+    )
+    assert len(basic["tips"]) == 5, "all five Basic step headings carry a tip"
+    for tip in basic["tips"]:
+        assert tip["glyph"] == pro_ref["glyph"], (
+            f"Basic glyph {tip['glyph']!r} must equal Pro {pro_ref['glyph']!r}"
+        )
+        assert not tip["legacyClass"], "no legacy basic-guided-tip markup may remain"
+        assert "tip-only" in tip["holder"], "Basic tips must use the shared holder markup"
+        assert tip["font"] == pro_ref["font"] and tip["weight"] == pro_ref["weight"]
+        assert tip["lh"] == pro_ref["lh"]
+        assert abs(tip["w"] - pro_ref["w"]) < 0.5 and abs(tip["h"] - pro_ref["h"]) < 0.5
+        assert tip["centerDelta"] < 1, "icon must share the label's vertical center"
+
+    values = [p["value"] for p in basic["profiles"]]
+    assert values == ["off", "ultra_low_latency", "vr"], "preset values untouched"
+    assert [p["text"] for p in basic["profiles"]] == ["Standard", "Speed", "Stable"]
+    for p in basic["profiles"]:
+        assert p["transform"] == "uppercase", f"{p['text']} must render uppercase"
+        assert p["spacing"] not in ("normal", "0px"), "letter spacing must be deliberate"
+
+    assert "passphrase saved" not in basic["hintText"].lower()
+    assert not any(ch.isdigit() for ch in basic["hintText"])
+    assert basic["passValue"] == "", "real password stays out of the DOM until reveal"
+    assert basic["helpText"] == "Use 8–63 characters. Control characters are not allowed."
+
+    pro_page.evaluate(
+        """() => {
+            const t = document.getElementById('uiModeToggle');
+            t.checked = true;
+            t.dispatchEvent(new Event('change', {bubbles: true}));
+        }"""
+    )
+    pro_page.wait_for_function(
+        "document.body.dataset.proGuidedStage === 'ready'", timeout=15000
+    )
+    pro_page.wait_for_timeout(500)
+
+
+def test_basic_adapter_row_narrow_width(pro_page):
+    """At narrow width the selector and Rescan stack cleanly."""
+    page = pro_page.context.browser.new_page(
+        viewport={"width": 620, "height": 900}, bypass_csp=True
+    )
+    try:
+        page.route("**fonts.googleapis.com**", lambda route: route.abort())
+        page.route("**fonts.gstatic.com**", lambda route: route.abort())
+        page.goto(PORTAL_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(1200)
+        if page.locator("#loginToken").is_visible():
+            page.fill("#loginToken", TOKEN)
+            page.click("#btnLoginSubmit")
+        page.wait_for_selector("#uiModeToggle", state="attached", timeout=15000)
+        page.wait_for_timeout(1200)
+        page.evaluate(
+            """() => {
+                const t = document.getElementById('uiModeToggle');
+                t.checked = false;
+                t.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
+        )
+        page.wait_for_function("document.body.dataset.uiMode === 'basic'", timeout=15000)
+        page.wait_for_timeout(1200)
+        data = page.evaluate(
+            """() => {
+                const sel = document.getElementById('ap_adapter');
+                const rescan = document.getElementById('btnReloadAdapters');
+                const sr = sel.getBoundingClientRect();
+                const rr = rescan.getBoundingClientRect();
+                return {
+                    stacked: rr.top >= sr.bottom - 1,
+                    selWithin: sr.right <= innerWidth,
+                    rescanWithin: rr.right <= innerWidth,
+                    rescanVisible: rr.width > 0 && rr.height > 0,
+                    overflowX: document.documentElement.scrollWidth
+                        <= document.documentElement.clientWidth,
+                };
+            }"""
+        )
+    finally:
+        page.close()
+    assert data["stacked"], "Rescan must stack beneath the selector at narrow width"
+    assert data["selWithin"] and data["rescanWithin"], "no clipped controls"
+    assert data["rescanVisible"]
+    assert data["overflowX"], "no horizontal overflow at narrow width"
 
 
 def _assert_row_geometry(pro_page, context):

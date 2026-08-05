@@ -937,6 +937,22 @@ body[data-ui-mode="advanced"] .qos-advanced {
   overflow: visible;
 }
 
+/* Shared inline-SVG glyphs: QR button icon and the Privacy Mode shield. */
+.qr-glyph {
+  width: 22px;
+  height: 22px;
+  display: block;
+  pointer-events: none;
+}
+
+.privacy-shield {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--accent-primary);
+  pointer-events: none;
+}
+
 .tip {
   position: relative;
   display: inline-flex;
