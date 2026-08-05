@@ -312,7 +312,17 @@ async function waitFor(window, predicate, label, timeoutMs = 2500) {
     if (predicate()) return;
     await tick(window, 25);
   }
-  throw new Error(`Timed out waiting for ${label}`);
+  const doc = window.document;
+  const diag = {
+    dirty: doc.getElementById('dirty')?.textContent || '',
+    msg: doc.getElementById('msg')?.textContent || '',
+    saveState: doc.getElementById('proGuidedSaveState')?.textContent || '',
+    status: doc.getElementById('proServiceStateText')?.textContent || '',
+    primary: doc.getElementById('btnStart')?.textContent || '',
+    primaryAction: doc.getElementById('btnStart')?.dataset.proGuidedAction || '',
+    fetchTail: (window.__fetchLog || []).slice(-8),
+  };
+  throw new Error(`Timed out waiting for ${label} :: ${JSON.stringify(diag)}`);
 }
 
 function toggleMode(window, advanced) {
