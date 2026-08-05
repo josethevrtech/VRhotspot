@@ -29,14 +29,6 @@
     if (node && node.textContent !== text) node.textContent = text;
   }
 
-  function makeInfoTip(text) {
-    const tip = make('span', 'tip basic-guided-tip', 'i');
-    tip.setAttribute('data-tip', text);
-    tip.setAttribute('aria-label', text);
-    tip.setAttribute('tabindex', '0');
-    return tip;
-  }
-
   function setCardHeader(card, title, subtitle) {
     const header = card && card.querySelector(':scope > .card-header');
     if (!header || header.dataset.guidedReady === '1') return;
@@ -52,26 +44,29 @@
     header.appendChild(copy);
   }
 
-  function createStep(number, title, helper, tipText, slotId) {
+  function createStep(number, title, help, slotId) {
     const step = make('section', 'basic-guided-step');
     step.dataset.step = String(number);
 
+    // The numbered badge is the step-purpose help: same shared floating
+    // tooltip component as Pro, keyboard focusable, no static caption below.
     const badge = make('span', 'basic-guided-step-number', String(number));
-    badge.setAttribute('aria-hidden', 'true');
+    if (typeof attachStepHelp === 'function') {
+      attachStepHelp(badge, help);
+    } else {
+      badge.setAttribute('aria-hidden', 'true');
+    }
 
     const content = make('div', 'basic-guided-step-content');
     const heading = make('div', 'basic-guided-step-heading');
     const titleNode = make('h3', '', title);
     titleNode.id = `${slotId}Title`;
     heading.appendChild(titleNode);
-    if (tipText) heading.appendChild(makeInfoTip(tipText));
 
     const slot = make('div', 'basic-guided-step-slot');
     slot.id = slotId;
 
-    const helperNode = make('p', 'basic-guided-step-help', helper);
-    helperNode.id = `${slotId}Help`;
-    content.append(heading, slot, helperNode);
+    content.append(heading, slot);
     step.append(badge, content);
     return step;
   }
@@ -105,36 +100,31 @@
       createStep(
         1,
         'Choose Wi-Fi adapter',
-        'The recommended USB adapter gives the best VR performance.',
-        'Select the USB Wi-Fi adapter VRhotspot should use to create the hotspot.',
+        'Select the Wi-Fi adapter that will create the hotspot. The recommended USB adapter normally provides the best VR performance.',
         'basicGuidedAdapterSlot',
       ),
       createStep(
         2,
         'Choose performance mode',
-        'Speed prioritizes low latency for VR streaming.',
-        'Standard uses normal hotspot behavior. Speed prioritizes latency. Stable favors reliability.',
+        'Choose how aggressively VRHotspot tunes the network for performance, responsiveness, or stability.',
         'basicGuidedProfileSlot',
       ),
       createStep(
         3,
         'Hotspot name',
-        'This is the Wi-Fi network name other devices will see.',
-        'Choose the name shown in the Wi-Fi list on your headset and other devices.',
+        'Set the hotspot name and password used by connecting devices.',
         'basicGuidedSsidSlot',
       ),
       createStep(
         4,
         'Password',
-        'Use 8–63 characters. Press Enter or choose Save password.',
-        'This password protects the hotspot. You can reveal it or generate a QR code for easy connection.',
+        'Use 8–63 characters. Control characters are not allowed. Use the eye to reveal the password or the QR button to connect another device.',
         'basicGuidedPassSlot',
       ),
       createStep(
         5,
         'Start hotspot',
-        '',
-        'Start or stop the hotspot. VRhotspot saves pending Basic-mode changes before starting.',
+        'Review the selected adapter, profile, network name, and password, then start the hotspot.',
         'basicGuidedActionSlot',
       ),
     );
@@ -447,22 +437,6 @@
     if (passGroup) passGroup.classList.add('basic-guided-pass-field');
 
     renameProfileOptions();
-    updateProfileHelp();
-  }
-
-  function updateProfileHelp() {
-    const helper = el('basicGuidedProfileSlotHelp');
-    if (!helper) return;
-    const selected = document.querySelector('input[name="qos_basic"]:checked');
-    const copy = {
-      off: 'Standard uses normal hotspot behavior without extra performance tuning.',
-      ultra_low_latency: 'Speed prioritizes low latency for VR streaming.',
-      vr: 'Stable favors reliability on busy or noisy wireless networks.',
-    };
-    setTextIfChanged(
-      helper,
-      copy[selected?.value] || 'Choose the mode that matches how you use the hotspot.',
-    );
   }
 
   function hotspotState(rawStatus) {
@@ -550,7 +524,7 @@
         : 'Starting hotspot';
       summaryText = 'VRhotspot is applying the connection settings.';
     } else if (current.name === 'stopped') {
-      summaryText = 'Review your settings, then start the hotspot.';
+      summaryText = 'The hotspot is stopped.';
     }
 
     if (card && card.dataset.hotspotState !== current.name) {
@@ -655,11 +629,6 @@
   }
 
   function wireGuidedInteractions() {
-    document.addEventListener('change', (event) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (target.matches('input[name="qos_basic"]')) updateProfileHelp();
-    });
     wirePrimaryAction();
   }
 

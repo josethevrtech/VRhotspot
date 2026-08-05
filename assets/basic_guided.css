@@ -101,7 +101,8 @@ body[data-ui-mode="basic"] .basic-guided-step:last-child .basic-guided-step-cont
 body[data-ui-mode="basic"] .basic-guided-step-heading {
   display: flex;
   align-items: center;
-  gap: 8px;
+  /* Same label-to-icon gap as the Pro Step 3 label rows. */
+  gap: 6px;
   margin-bottom: 12px;
 }
 
@@ -116,23 +117,9 @@ body[data-ui-mode="basic"] .basic-guided-step-slot {
   min-width: 0;
 }
 
-body[data-ui-mode="basic"] .basic-guided-step-help {
-  margin: 9px 0 0;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-body[data-ui-mode="basic"] .basic-guided-step-help:empty {
-  display: none;
-}
-
-body[data-ui-mode="basic"] .basic-guided-tip {
-  border-color: var(--border-subtle);
-  color: var(--accent-primary);
-  font-family: var(--font-sans);
-  font-style: normal;
-}
+/* Static step captions were removed: step guidance now lives on the numbered
+   badges via the shared step-help tooltip. Dynamic messages (validation,
+   save results, status) keep their own elements and styles. */
 
 body[data-ui-mode="basic"] .basic-guided-step-slot > [data-field],
 body[data-ui-mode="basic"] .basic-guided-pass-field {
@@ -147,23 +134,75 @@ body[data-ui-mode="basic"] .basic-guided-profile-field #basicQosBanner {
   display: none !important;
 }
 
-body[data-ui-mode="basic"] .basic-guided-adapter-field .row {
-  justify-content: flex-end;
-  margin-top: 8px !important;
+/* Step 1 desktop layout: [ selector, flexible ] [ RESCAN ADAPTERS, compact ]
+   on one aligned row, mirroring the Pro adapter-row grid. The field's label
+   is hidden in guided Basic, so the field itself is the grid. */
+body[data-ui-mode="basic"] .basic-guided-adapter-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: stretch;
 }
 
-body[data-ui-mode="basic"] .basic-guided-adapter-field #btnUseRecommended[hidden] {
+body[data-ui-mode="basic"] .basic-guided-adapter-field #ap_adapter {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 40px;
+}
+
+body[data-ui-mode="basic"] .basic-guided-adapter-field .row {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0 !important;
+}
+
+body[data-ui-mode="basic"] #btnUseRecommended {
   display: none !important;
 }
 
 body[data-ui-mode="basic"] .basic-guided-adapter-field #btnReloadAdapters {
-  height: auto !important;
-  padding: 2px 0 !important;
-  border: 0;
-  background: transparent;
-  color: var(--accent-primary);
-  font-size: 13px !important;
-  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: auto;
+  min-width: 210px;
+  padding: 0 20px !important;
+  /* The base .btn size Pro's rescan button resolves to; this neutralizes the
+     Basic-section 16px density rule so both modes render identically. */
+  font-size: 14px !important;
+  text-transform: uppercase;
+}
+
+body[data-ui-mode="basic"] .basic-guided-adapter-field #adapterHint {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+body[data-ui-mode="basic"] .basic-guided-adapter-field #adapterHint:empty {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  body[data-ui-mode="basic"] .basic-guided-adapter-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-ui-mode="basic"] .basic-guided-adapter-field .row {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  body[data-ui-mode="basic"] .basic-guided-adapter-field #btnReloadAdapters {
+    min-width: 0;
+    min-height: 40px;
+  }
+
+  body[data-ui-mode="basic"] .basic-guided-adapter-field #adapterHint {
+    grid-row: 3;
+  }
 }
 
 body[data-ui-mode="basic"] .basic-guided-adapter-field #adapterHint {
@@ -199,8 +238,12 @@ body[data-ui-mode="basic"] .basic-guided-profile-field .seg span {
   border-color: var(--border-subtle);
   background: var(--bg-subtle);
   color: var(--text-muted);
-  font-size: 16px;
-  font-weight: 700;
+  /* Same deliberate all-caps button language as the Pro action buttons. */
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: center;
 }
 
 body[data-ui-mode="basic"] .basic-guided-profile-field .seg input:checked + span {
@@ -322,6 +365,13 @@ body[data-ui-mode="basic"] .basic-guided-primary-action {
   min-height: 56px;
   justify-content: center;
   font-size: 16px !important;
+  /* Pro button typography: uppercase presentation only, so every state
+     label from syncPrimaryAction (START/STOP/etc.) renders capitalized
+     without duplicating the state logic. !important beats the
+     higher-specificity Basic-section .btn reset in ui.css. */
+  font-weight: 600;
+  letter-spacing: 0.05em !important;
+  text-transform: uppercase !important;
 }
 
 body.basic-hotspot-modal-open {

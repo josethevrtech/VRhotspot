@@ -211,11 +211,55 @@ def test_guided_styles_match_existing_theme_and_avoid_page_scaling() -> None:
     assert "transform: scale(" not in styles
 
 
-def test_info_tips_use_one_native_circle_instead_of_a_circled_glyph() -> None:
+def test_step_guidance_lives_on_badges_via_the_shared_component() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
-    assert "make('span', 'tip basic-guided-tip', 'i')" in source
-    assert "make('span', 'tip basic-guided-tip', 'ⓘ')" not in source
+    # Step-purpose guidance uses the shared attachStepHelp badge component
+    # from ui.js - the same floating tooltip system as the Pro info icons.
+    # No parallel Basic-only tip implementation and no static step captions
+    # may return.
+    assert "attachStepHelp(badge, help)" in source
+    assert "makeInfoTip" not in source
+    assert "basic-guided-tip" not in source
+    assert "basic-guided-step-help" not in source
+    assert "updateProfileHelp" not in source
+    assert "The recommended USB adapter gives the best VR performance." not in source
+    assert "This is the Wi-Fi network name other devices will see." not in source
+    assert "Review your settings, then start the hotspot." not in source
+    # Exact step guidance copy for the Basic badges.
+    assert (
+        "Select the Wi-Fi adapter that will create the hotspot. "
+        "The recommended USB adapter normally provides the best VR performance." in source
+    )
+    assert (
+        "Choose how aggressively VRHotspot tunes the network for performance, "
+        "responsiveness, or stability." in source
+    )
+    assert "Set the hotspot name and password used by connecting devices." in source
+    assert (
+        "Use 8–63 characters. Control characters are not allowed. "
+        "Use the eye to reveal the password or the QR button to connect another device." in source
+    )
+    assert (
+        "Review the selected adapter, profile, network name, and password, "
+        "then start the hotspot." in source
+    )
+
+
+def test_primary_action_uppercases_via_typography_not_state_logic() -> None:
+    source = GUIDED_JS.read_text(encoding="utf-8")
+    styles = GUIDED_CSS.read_text(encoding="utf-8")
+
+    # Capitalization is presentation-only: syncPrimaryAction keeps its plain
+    # state labels and the shared CSS uppercases every state uniformly.
+    assert "action.textContent = 'Start hotspot';" in source
+    assert "action.textContent = 'Stop hotspot';" in source
+    assert "'START HOTSPOT'" not in source
+    assert "'STOP HOTSPOT'" not in source
+    primary = styles.split(".basic-guided-primary-action", 1)[1].split("}", 1)[0]
+    assert "text-transform: uppercase !important;" in primary
+    assert "letter-spacing: 0.05em !important;" in primary
+    assert "font-weight: 600;" in primary
 
 
 def test_connection_profiles_fill_the_available_width() -> None:

@@ -549,12 +549,8 @@
   }
 
   function activateTab() {
-    document.querySelectorAll('.nav-item').forEach((item) => {
-      item.classList.toggle('active', item.dataset.tab === 'devhub');
-    });
-    document.querySelectorAll('.tab-pane').forEach((pane) => {
-      pane.classList.toggle('active', pane.id === 'tab-devhub');
-    });
+    // Navigation state is owned by ui.js applyNavSelection (delegated on the
+    // nav list); this handler only refreshes the console data on entry.
     void refreshConsole();
   }
 

@@ -1,10 +1,15 @@
 import io
+import re
 from email.message import Message
+from pathlib import Path
 
 import pytest
 
+import vr_hotspotd.api as api
 import vr_hotspotd.devtools.devhub_api as devhub_api
 from vr_hotspotd.devtools.devhub_api import DevHubAPIHandler
+
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 
 @pytest.mark.parametrize(
@@ -65,6 +70,21 @@ def test_developer_hub_assets_are_served_without_api_auth(
     assert handler._last_code == 200
     assert handler._headers["content-type"] == content_type
     assert handler.wfile.getvalue() == payload
+
+
+def test_every_portal_asset_has_a_registered_content_type():
+    referenced = set()
+    for source in (*ASSETS_DIR.glob("*.js"), ASSETS_DIR / "index.html"):
+        referenced.update(
+            re.findall(r"/assets/([A-Za-z0-9_.-]+?\.[a-z]+)", source.read_text())
+        )
+
+    registered = {
+        path.rsplit("/", 1)[-1] for path in devhub_api._DEVHUB_ASSET_TYPES
+    } | set(api._ASSET_CONTENT_TYPES)
+
+    missing = sorted(referenced - registered)
+    assert not missing, f"portal references unregistered assets: {missing}"
 
 
 def test_missing_developer_hub_asset_returns_404(monkeypatch):

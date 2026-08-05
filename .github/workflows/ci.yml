@@ -49,6 +49,26 @@ jobs:
       - name: Shellcheck
         run: shellcheck backend/scripts/*.sh
 
+  pro-guided-dom:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install isolated DOM test dependency
+        run: npm install --no-save --ignore-scripts jsdom@24.1.3
+
+      - name: Exercise synthetic and full-portal mode transitions
+        run: |
+          node --test --test-force-exit \
+            tests/js/pro_guided_mode_transition.test.mjs \
+            tests/js/pro_guided_full_portal_integration.test.mjs
+
   install-matrix-check:
     runs-on: ubuntu-latest
     steps:

@@ -73,6 +73,10 @@ let bandOptionsCache = null;
 const FLOATING_TIP_LAYER_ID = 'floatingTipLayer';
 let floatingTipLayer = null;
 let activeTipTarget = null;
+// A click pins the tooltip open so it survives pointer-out (and so taps on
+// touch devices, where pointerover and click arrive together, keep it open
+// instead of hover-opening and click-closing in the same gesture).
+let floatingTipPinned = false;
 let floatingTipWired = false;
 let isAuthenticated = false;
 let authFlowLocked = false;
@@ -468,30 +472,27 @@ function resetPassphraseUi(cfg) {
   if (passEl) {
     passEl.type = 'password';
     passEl.value = '';
-    passEl.placeholder = hasSaved ? 'Type new passphrase to change (currently saved)' : 'Type a new passphrase to set it';
+    // Never disclose whether a passphrase is saved or how long it is: the
+    // placeholder stays neutral and identical in both states.
+    const neutral = 'Enter a new password to change it';
+    if (passEl.placeholder !== neutral) passEl.placeholder = neutral;
     passEl.readOnly = false;
   }
   if (passBasic) {
     passBasic.type = 'password';
     passBasic.value = '';
-    passBasic.placeholder = hasSaved ? 'Saved (tap eye to reveal)' : 'Enter a passphrase (8-63 characters)';
+    // No saved-state or length disclosure; the placeholder stays neutral.
+    const basicPlaceholder = hasSaved
+      ? 'Saved — enter a new password to change it'
+      : 'Enter a password';
+    if (passBasic.placeholder !== basicPlaceholder) passBasic.placeholder = basicPlaceholder;
     passBasic.readOnly = false;
   }
   const passHint = document.getElementById('passHint');
-  if (passHint) {
-    if (hasSaved) {
-      let hint = 'Passphrase is saved';
-      if (Number.isInteger(cfg.wpa2_passphrase_len)) {
-        hint = `Passphrase saved (${cfg.wpa2_passphrase_len} chars). Type to change.`;
-      }
-      passHint.textContent = hint;
-    } else {
-      passHint.textContent = '';
-    }
-  }
+  if (passHint && passHint.textContent !== '') passHint.textContent = '';
   const basicHint = document.getElementById('copyHint');
-  if (basicHint) {
-    basicHint.textContent = hasSaved ? 'Passphrase saved' : '';
+  if (basicHint && basicHint.textContent !== '') {
+    basicHint.textContent = '';
     basicHint.style.color = '';
   }
   passphraseDirty = false;
@@ -1180,6 +1181,70 @@ function safeText(el, text, colorVar) {
   }
 }
 
+function makeQrGlyph() {
+  // Shared QR-code glyph for the Basic and Pro QR buttons: finder squares in
+  // three corners plus data modules. Inline SVG, currentColor, no external
+  // assets; decorative (the host button carries the accessible name).
+  if (typeof document.createElementNS !== 'function') return null;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  svg.classList.add('qr-glyph');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', 'currentColor');
+  path.setAttribute('d', [
+    // finder squares (ring + core), top-left / top-right / bottom-left
+    'M2 2h8v8H2V2Zm2 2v4h4V4H4Zm1 1h2v2H5V5Z',
+    'M14 2h8v8h-8V2Zm2 2v4h4V4h-4Zm1 1h2v2h-2V5Z',
+    'M2 14h8v8H2v-8Zm2 2v4h4v-4H4Zm1 1h2v2H5v-2Z',
+    // data modules
+    'M12 12h2v2h-2v-2Z', 'M16 12h2v2h-2v-2Z', 'M20 12h2v2h-2v-2Z',
+    'M14 14h2v2h-2v-2Z', 'M18 14h2v2h-2v-2Z',
+    'M12 16h2v2h-2v-2Z', 'M16 16h2v2h-2v-2Z', 'M20 16h2v2h-2v-2Z',
+    'M14 18h2v2h-2v-2Z', 'M18 18h2v2h-2v-2Z',
+    'M12 20h2v2h-2v-2Z', 'M16 20h2v2h-2v-2Z', 'M20 20h2v2h-2v-2Z',
+  ].join(' '));
+  svg.appendChild(path);
+  return svg;
+}
+
+function makeShieldIcon() {
+  // Compact decorative shield for the Privacy Mode control.
+  if (typeof document.createElementNS !== 'function') return null;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  svg.classList.add('privacy-shield');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', 'currentColor');
+  path.setAttribute('d', 'M12 2 4 5v6c0 5.25 3.4 9.74 8 11 4.6-1.26 8-5.75 8-11V5l-8-3Zm0 2.15 6 2.25V11c0 4.22-2.6 7.9-6 9.1-3.4-1.2-6-4.88-6-9.1V6.4l6-2.25Zm3.3 4.35L11 12.8l-2.3-2.3-1.4 1.4 3.7 3.7 5.7-5.7-1.4-1.4Z');
+  svg.appendChild(path);
+  return svg;
+}
+
+function applyQrGlyph(button) {
+  if (!button || button.querySelector('.qr-glyph')) return;
+  const glyph = makeQrGlyph();
+  if (!glyph) return;
+  button.replaceChildren(glyph);
+  button.title = 'Show hotspot QR code';
+  button.setAttribute('aria-label', 'Show hotspot QR code');
+}
+
+function applyPrivacyShield(input) {
+  // Defensive against minimal DOM stubs used by contract harnesses.
+  const label = input && typeof input.closest === 'function'
+    ? input.closest('label')
+    : null;
+  if (!label || label.querySelector('.privacy-shield')) return;
+  const shield = makeShieldIcon();
+  if (shield && typeof input.insertAdjacentElement === 'function') {
+    input.insertAdjacentElement('afterend', shield);
+  }
+}
+
 function renderHintTip(el, text) {
   if (!el) return;
   const tipText = (text || '--').toString();
@@ -1243,7 +1308,12 @@ function showFloatingTipFor(target) {
 
   const layer = ensureFloatingTipLayer();
   if (!layer) return;
+  if (activeTipTarget && activeTipTarget !== target) {
+    activeTipTarget.classList.remove('is-tip-open');
+    floatingTipPinned = false;
+  }
   activeTipTarget = target;
+  if (!target.classList.contains('is-tip-open')) target.classList.add('is-tip-open');
   layer.textContent = tipText;
   layer.setAttribute('aria-hidden', 'false');
   layer.classList.add('is-visible');
@@ -1254,10 +1324,26 @@ function hideFloatingTipFor(target) {
   if (target && activeTipTarget && target !== activeTipTarget) return;
   const layer = ensureFloatingTipLayer();
   if (!layer) return;
+  if (activeTipTarget) activeTipTarget.classList.remove('is-tip-open');
   activeTipTarget = null;
+  floatingTipPinned = false;
   layer.classList.remove('is-visible');
   layer.setAttribute('aria-hidden', 'true');
   layer.style.transform = 'translate(-200vw, -200vh)';
+}
+
+const FLOATING_TIP_TRIGGERS = '.tip, .step-help-badge';
+
+function attachStepHelp(badge, text) {
+  // Shared step-number guidance for Basic and Pro badges: same floating
+  // tooltip system as the info icons, keyboard focusable, no native title.
+  // Guarded writes keep per-reconcile reapplication mutation-quiet.
+  if (!badge || !text) return;
+  if (!badge.classList.contains('step-help-badge')) badge.classList.add('step-help-badge');
+  if (badge.getAttribute('data-tip') !== text) badge.setAttribute('data-tip', text);
+  if (badge.getAttribute('aria-label') !== text) badge.setAttribute('aria-label', text);
+  if (badge.getAttribute('tabindex') !== '0') badge.setAttribute('tabindex', '0');
+  if (badge.hasAttribute('aria-hidden')) badge.removeAttribute('aria-hidden');
 }
 
 function wireFloatingTips() {
@@ -1266,29 +1352,51 @@ function wireFloatingTips() {
   ensureFloatingTipLayer();
 
   document.addEventListener('pointerover', (ev) => {
-    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    const target = ev.target instanceof Element ? ev.target.closest(FLOATING_TIP_TRIGGERS) : null;
     if (!target) return;
     showFloatingTipFor(target);
   }, true);
 
   document.addEventListener('pointerout', (ev) => {
-    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    const target = ev.target instanceof Element ? ev.target.closest(FLOATING_TIP_TRIGGERS) : null;
     if (!target) return;
     const related = ev.relatedTarget;
     if (related instanceof Node && target.contains(related)) return;
+    if (floatingTipPinned && target === activeTipTarget) return;
     hideFloatingTipFor(target);
   }, true);
 
   document.addEventListener('focusin', (ev) => {
-    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    const target = ev.target instanceof Element ? ev.target.closest(FLOATING_TIP_TRIGGERS) : null;
     if (!target) return;
     showFloatingTipFor(target);
   }, true);
 
   document.addEventListener('focusout', (ev) => {
-    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    const target = ev.target instanceof Element ? ev.target.closest(FLOATING_TIP_TRIGGERS) : null;
     if (!target) return;
     hideFloatingTipFor(target);
+  }, true);
+
+  // Click/tap pins the badge guidance open; a second click unpins and closes
+  // it. Escape closes any tooltip. (Hover alone never pins, so pointer-out
+  // still closes a hover-opened tip.)
+  document.addEventListener('click', (ev) => {
+    const target = ev.target instanceof Element ? ev.target.closest('.step-help-badge') : null;
+    if (!target) return;
+    const layer = ensureFloatingTipLayer();
+    const openHere = activeTipTarget === target
+      && !!layer && layer.classList.contains('is-visible');
+    if (openHere && floatingTipPinned) {
+      hideFloatingTipFor(target);
+    } else {
+      showFloatingTipFor(target);
+      floatingTipPinned = true;
+    }
+  }, true);
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') hideFloatingTipFor();
   }, true);
 
   window.addEventListener('resize', () => {
@@ -3259,6 +3367,67 @@ function applyConfig(cfg) {
   updateBasicQosBanner();
 }
 
+function adapterDisplayKind(adapter) {
+  const bus = String(adapter?.bus || '').trim().toLowerCase();
+  if (bus === 'usb') return 'usb';
+  if (['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)) return 'internal';
+  return 'other';
+}
+
+function buildAdapterOptionDefinitions(adapters, mode, recommended) {
+  const definitions = [];
+  let basicUsbCount = 0;
+  for (const a of adapters) {
+    // Basic Mode: Only show USB adapters (hide internal/PCI)
+    // Advanced Mode: Show all (internal + USB)
+    if (mode === 'basic' && a.bus !== 'usb') continue;
+
+    let label;
+    if (mode === 'basic') {
+      basicUsbCount++;
+      const recStr = (a.ifname === recommended) ? ' (Recommended)' : '';
+      label = `USB Wi-Fi ${basicUsbCount}${recStr}`;
+    } else {
+      const ap = a.supports_ap ? 'AP' : 'no-AP';
+      const caps = capsLabel(a);
+      const reg = a.regdom && a.regdom.country ? a.regdom.country : '--';
+      const star = (a.ifname === recommended) ? '* ' : '';
+      label = `${star}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
+    }
+    definitions.push({ value: a.ifname, label, disabled: false, kind: adapterDisplayKind(a) });
+  }
+  return definitions;
+}
+
+function adapterOptionsAreCurrent(select, definitions) {
+  if (select.options.length !== definitions.length) return false;
+  for (let i = 0; i < definitions.length; i++) {
+    const option = select.options[i];
+    const def = definitions[i];
+    if (option.value !== def.value) return false;
+    if (option.disabled !== def.disabled) return false;
+    // Pro decorators relabel options in place and keep the label this code
+    // wrote in data-raw-adapter-label; compare against the owned label so a
+    // decorated option with an unchanged inventory still counts as current.
+    const ownedLabel = option.dataset.rawAdapterLabel !== undefined
+      ? option.dataset.rawAdapterLabel
+      : option.textContent;
+    if (ownedLabel !== def.label) return false;
+  }
+  return true;
+}
+
+function replaceAdapterOptions(select, definitions) {
+  select.innerHTML = '';
+  for (const def of definitions) {
+    const opt = document.createElement('option');
+    opt.value = def.value;
+    opt.textContent = def.label;
+    opt.disabled = def.disabled;
+    select.appendChild(opt);
+  }
+}
+
 async function loadAdapters() {
   if (!isAuthenticated) return;
   let r;
@@ -3279,41 +3448,16 @@ async function loadAdapters() {
 
   // Preserve current selection if possible.
   const current = el.value;
-
-  el.innerHTML = '';
   const mode = getUiMode();
-  let basicUsbCount = 0;
 
-  for (const a of list) {
-    // Basic Mode: Only show USB adapters (hide internal/PCI)
-    // Advanced Mode: Show all (internal + USB)
-    if (mode === 'basic') {
-      // If we detected bus info, enforce USB-only.
-      // If bus detection failed (unknown), we might default to hiding it to be safe, 
-      // or showing it. Given the request "only surface USB", we hide unless confirmed USB.
-      if (a.bus !== 'usb') {
-        continue;
-      }
-    }
-
-    const opt = document.createElement('option');
-    opt.value = a.ifname;
-
-    if (mode === 'basic') {
-      basicUsbCount++;
-      const recStr = (a.ifname === rec) ? ' (Recommended)' : '';
-      opt.textContent = `USB Wi-Fi ${basicUsbCount}${recStr}`;
-    } else {
-      const ap = a.supports_ap ? 'AP' : 'no-AP';
-      const caps = capsLabel(a);
-      const reg = a.regdom && a.regdom.country ? a.regdom.country : '--';
-      const star = (a.ifname === rec) ? '* ' : '';
-      opt.textContent = `${star}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
-    }
-
-    el.appendChild(opt);
+  // A background inventory refresh with unchanged adapters must not destroy
+  // and recreate the option nodes: the native select visibly flashes and
+  // in-place Pro decorations are lost. Rebuild only on a semantic change.
+  const definitions = buildAdapterOptionDefinitions(list, mode, rec);
+  if (!adapterOptionsAreCurrent(el, definitions)) {
+    replaceAdapterOptions(el, definitions);
   }
-  el.dataset.recommended = rec;
+  if (el.dataset.recommended !== rec) el.dataset.recommended = rec;
 
   const trySet = (v) => {
     if (!v) return false;
@@ -3598,39 +3742,56 @@ if (refreshEveryBasic) refreshEveryBasic.addEventListener('change', () => {
   applyAutoRefresh();
 });
 
-function wireTabs() {
-  const tabs = document.querySelectorAll('.nav-item');
-  const panes = document.querySelectorAll('.tab-pane');
-
-  function switchTab(targetName) {
-    if (!isAuthenticated) return;
-    // Reset tabs
-    tabs.forEach(t => t.classList.remove('active'));
-    // Set active tab
-    tabs.forEach(t => {
-      if (t.dataset.tab === targetName) t.classList.add('active');
-    });
-
-    // Reset panes (hide all)
-    panes.forEach(p => p.classList.remove('active'));
-
-    // Show target pane
-    const targetPane = document.getElementById(`tab-${targetName}`);
-    if (targetPane) {
-      targetPane.classList.add('active');
+function applyNavSelection(targetName) {
+  // The single authoritative navigation-state writer. Live queries so items
+  // injected later (Developer Hub) are always included: exactly one item may
+  // carry the active treatment and aria-current at any time.
+  document.querySelectorAll('.nav-item').forEach((item) => {
+    const active = item.dataset.tab === targetName;
+    if (active) item.classList.add('active');
+    else item.classList.remove('active');
+    if (typeof item.setAttribute === 'function' && typeof item.removeAttribute === 'function') {
+      if (active) item.setAttribute('aria-current', 'page');
+      else item.removeAttribute('aria-current');
     }
-    if (targetName === 'diagnostics') {
+  });
+  document.querySelectorAll('.tab-pane').forEach((pane) => {
+    if (pane.id === `tab-${targetName}`) pane.classList.add('active');
+    else pane.classList.remove('active');
+  });
+}
+
+function wireTabs() {
+  const onNavigate = (item) => {
+    if (!isAuthenticated || !item || !item.dataset.tab) return;
+    applyNavSelection(item.dataset.tab);
+    if (item.dataset.tab === 'diagnostics') {
       void loadPreflightReport();
     }
-  }
-
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      if (!isAuthenticated) return;
-      const target = tab.dataset.tab;
-      if (target) switchTab(target);
+  };
+  const navList = document.querySelector('.nav-list');
+  if (navList) {
+    if (navList.dataset.navWired === '1') return;
+    navList.dataset.navWired = '1';
+    // Delegated so dynamically injected items (Developer Hub) participate
+    // without their own competing state writers.
+    navList.addEventListener('click', (event) => {
+      const target = event.target;
+      const item = target && typeof target.closest === 'function'
+        ? target.closest('.nav-item')
+        : null;
+      onNavigate(item);
     });
-  });
+  } else {
+    // Minimal harness DOMs carry bare .nav-item nodes without the list.
+    document.querySelectorAll('.nav-item').forEach((item) => {
+      if (item.dataset.navWired === '1') return;
+      item.dataset.navWired = '1';
+      item.addEventListener('click', () => onNavigate(item));
+    });
+  }
+  const active = document.querySelector('.nav-item.active');
+  applyNavSelection(active && active.dataset.tab ? active.dataset.tab : 'overview');
 }
 
 function bootstrapAuthenticatedUi() {
@@ -3785,9 +3946,10 @@ function bootstrapAuthenticatedUi() {
     }
 
     if (!passphraseDirty) {
+      // No status disclosure about existing/unchanged passwords.
       if (showHint && hint) {
-        hint.textContent = 'No passphrase changes to save';
-        hint.style.color = 'var(--text-muted)';
+        hint.textContent = '';
+        hint.style.color = '';
       }
       return { attempted: false, skippedReason: 'unchanged' };
     }
@@ -3812,7 +3974,7 @@ function bootstrapAuthenticatedUi() {
 
     if (showHint && hint) {
       if (res && res.ok) {
-        hint.textContent = 'Passphrase saved to config';
+        hint.textContent = 'Password saved';
         hint.style.color = 'var(--good)';
       } else {
         const code = (res && res.json && res.json.result_code) ? res.json.result_code : `HTTP ${res ? res.status : 'error'}`;
@@ -3911,6 +4073,13 @@ function bootstrapAuthenticatedUi() {
   enforceBandRules();
   wireQr();
   wireTabs();
+  renderHintTip(
+    document.getElementById('passwordTip'),
+    'Use 8–63 characters. Control characters are not allowed.',
+  );
+  applyQrGlyph(document.getElementById('btnShowQrBasic'));
+  applyPrivacyShield(document.getElementById('privacyMode'));
+  applyPrivacyShield(document.getElementById('privacyModeBasic'));
 
   // Load adapters first so the adapter select is populated before applying config.
   loadAdapters()

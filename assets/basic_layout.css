@@ -171,11 +171,7 @@
     height: 18px;
   }
 
-  body[data-ui-mode="basic"] .basic-card .tip {
-    width: 19px;
-    height: 19px;
-    font-size: 12px;
-  }
+  /* Info icons keep the canonical 16px .tip treatment from ui.css. */
 
   body[data-ui-mode="basic"] #basicTelemetryContainer {
     padding: 12px !important;
@@ -392,11 +388,7 @@
     height: 18px;
   }
 
-  body[data-ui-mode="advanced"] .tip {
-    width: 19px;
-    height: 19px;
-    font-size: 12px;
-  }
+  /* Info icons keep the canonical 16px .tip treatment from ui.css. */
 
   body[data-ui-mode="advanced"] .kv-grid {
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

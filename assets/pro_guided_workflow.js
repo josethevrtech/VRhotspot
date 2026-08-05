@@ -1,21 +1,53 @@
 (function buildProGuidedWorkflow() {
   'use strict';
 
+  const ADVANCED_MODE = 'advanced';
   const AUTOSAVE_DELAY_MS = 650;
   const SAVE_TIMEOUT_MS = 12000;
-  const RETRY_LIMIT = 600;
-  let initialized = false;
-  let guidedReady = false;
-  let qualityReady = false;
-  let troubleshootingReady = false;
+  const PROFILE_COPY = {
+    btnApplyVrProfileUltra: {
+      value: 'ultra_low_latency',
+      description: 'Prioritizes the lowest possible response time for demanding VR streaming.',
+    },
+    btnApplyVrProfile: {
+      value: 'balanced',
+      description: 'Recommended default for a strong balance of responsiveness and stability.',
+    },
+    btnApplyVrProfileHigh: {
+      value: 'high_throughput',
+      description: 'Prioritizes sustained transfer speed for large or bandwidth-heavy workloads.',
+    },
+    btnApplyVrProfileStable: {
+      value: 'vr',
+      description: 'Favors connection consistency when the wireless environment is unpredictable.',
+    },
+  };
+  const CONNECTION_FIELDS = [
+    'ssid',
+    'wpa2_passphrase',
+    'band_preference',
+    'ap_security',
+    'country',
+    'enable_internet',
+  ];
+  // Step 3 carries only the core connection fields; internet sharing is an
+  // advanced recovery option that lives under Troubleshooting > Connectivity.
+  const STEP3_FIELDS = CONNECTION_FIELDS.filter((key) => key !== 'enable_internet');
+
+  let reconcileQueued = false;
+  let composeRetryTimer = null;
   let saveTimer = null;
   let restartRequired = false;
-  let retryCount = 0;
-  let retryTimer = null;
-  let retryQueued = false;
-  let observer = null;
+  let statusObserver = null;
+  let qualityObserver = null;
+  let adapterOptionsObserver = null;
+  const internalHomes = new Map();
 
-  function el(id) { return document.getElementById(id); }
+  window.VRHOTSPOT_PRO_COMPOSER = 'authoritative-v1';
+
+  function el(id) {
+    return document.getElementById(id);
+  }
 
   function make(tag, className, text) {
     const node = document.createElement(tag);
@@ -26,6 +58,17 @@
 
   function setText(node, text) {
     if (node && node.textContent !== text) node.textContent = text;
+  }
+
+  function isAdvancedMode() {
+    return document.body?.dataset.uiMode === ADVANCED_MODE;
+  }
+
+  function setStage(stage, error) {
+    if (!document.body) return;
+    document.body.dataset.proGuidedStage = stage;
+    if (error) document.body.dataset.proGuidedError = error;
+    else delete document.body.dataset.proGuidedError;
   }
 
   function icon(kind) {
@@ -43,26 +86,67 @@
   }
 
   function replaceNav(item, kind, label) {
-    if (!item) return;
-    if (item.dataset.proNavLabel === label) return;
+    // Re-applies when another script (field_visibility's emoji labels)
+    // clobbered the SVG even though the marker survived.
+    if (!item || (item.dataset.proNavLabel === label && item.querySelector('.pro-nav-svg'))) return;
     item.dataset.proNavLabel = label;
     item.replaceChildren(icon(kind), document.createTextNode(label));
   }
 
-  function addStyles() {
-    if (document.querySelector('link[data-pro-guided-styles]')) return;
-    const stylesheet = document.createElement('link');
-    stylesheet.rel = 'stylesheet';
-    stylesheet.href = '/assets/pro_guided_workflow.css?v=141-pro-guided-recovery';
-    stylesheet.dataset.proGuidedStyles = '1';
-    document.head.appendChild(stylesheet);
+  function ensureStyles() {
+    const styles = [
+      ['/assets/pro_guided_workflow.css?v=148-authoritative-composer', 'base'],
+      ['/assets/pro_guided_authoritative.css?v=148-owned-cells-1', 'authoritative'],
+    ];
+    for (const [href, kind] of styles) {
+      if (document.querySelector(`link[data-pro-guided-styles="${kind}"]`)) continue;
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = href;
+      stylesheet.dataset.proGuidedStyles = kind;
+      document.head.appendChild(stylesheet);
+    }
+  }
+
+  function enforceNavigation() {
+    ensureStyles();
+    const overviewNav = document.querySelector('.nav-item[data-tab="overview"]');
+    replaceNav(overviewNav, 'wifi', 'Set Up Hotspot');
+
+    document.querySelector('.nav-item[data-tab="telemetry"]')?.remove();
+    document.querySelector('.nav-item[data-tab="logs"]')?.remove();
+
+    const troubleshootingNav = document.querySelector(
+      '.nav-item[data-tab="troubleshooting"], .nav-item[data-tab="diagnostics"]',
+    );
+    if (troubleshootingNav) {
+      troubleshootingNav.dataset.tab = 'troubleshooting';
+      replaceNav(troubleshootingNav, 'trouble', 'Troubleshooting');
+    }
+
+    const diagnosticsPane = el('tab-diagnostics');
+    if (diagnosticsPane) diagnosticsPane.id = 'tab-troubleshooting';
+
+    // Sidebar order: Set Up Hotspot, Developer Hub, Troubleshooting. The
+    // Developer Hub item is injected late, so the order is re-asserted each
+    // reconcile with the existing idempotent helper (live nodes, no clones).
+    const navList = document.querySelector('.nav-list');
+    if (navList) {
+      ensureChildOrder(navList, [
+        overviewNav,
+        document.querySelector('.nav-item[data-tab="devhub"]'),
+        troubleshootingNav,
+      ]);
+    }
   }
 
   function step(number, title, help, id) {
     const section = make('section', 'pro-guided-step');
+    section.dataset.step = String(number);
     const badge = make('span', 'pro-guided-number', String(number));
+    applyStepBadgeHelp(badge, help);
     const content = make('div', 'pro-guided-content');
-    content.append(make('h3', 'pro-guided-title', title), make('p', 'pro-guided-help', help));
+    content.append(make('h3', 'pro-guided-title', title));
     const slot = make('div', 'pro-guided-slot');
     slot.id = id;
     content.appendChild(slot);
@@ -70,9 +154,140 @@
     return section;
   }
 
+  function applyStepBadgeHelp(badge, text) {
+    // Step-purpose guidance lives on the numbered badge via the shared
+    // floating-tooltip component. attachStepHelp is the shared writer; the
+    // fallback keeps composer-only fixtures functional with the same
+    // attribute contract. Every write is guarded for reconcile quietness.
+    if (!badge || !text) return;
+    if (typeof attachStepHelp === 'function') {
+      attachStepHelp(badge, text);
+      return;
+    }
+    if (!badge.classList.contains('step-help-badge')) badge.classList.add('step-help-badge');
+    if (badge.getAttribute('data-tip') !== text) badge.setAttribute('data-tip', text);
+    if (badge.getAttribute('aria-label') !== text) badge.setAttribute('aria-label', text);
+    if (badge.getAttribute('tabindex') !== '0') badge.setAttribute('tabindex', '0');
+    if (badge.hasAttribute('aria-hidden')) badge.removeAttribute('aria-hidden');
+  }
+
+  function guidedSlot(shell, id) {
+    const node = shell?.querySelector(`#${id}`);
+    if (!node) throw new Error(`missing guided slot: ${id}`);
+    return node;
+  }
+
+  function appendIfNeeded(parent, node) {
+    if (parent && node && node.parentNode !== parent) parent.appendChild(node);
+  }
+
+  function prependIfNeeded(parent, node) {
+    if (!parent || !node) return;
+    if (node.parentNode !== parent || parent.firstElementChild !== node) parent.prepend(node);
+  }
+
+  function ensureChildOrder(parent, nodes) {
+    if (!parent) return;
+    const desired = nodes.filter(Boolean);
+    const current = Array.from(parent.children).filter((node) => desired.includes(node));
+    if (current.length === desired.length && current.every((node, index) => node === desired[index])) return;
+    desired.forEach((node) => parent.appendChild(node));
+  }
+
+  function rememberInternalHome(node) {
+    if (!node || internalHomes.has(node)) return;
+    internalHomes.set(node, { parent: node.parentNode, next: node.nextSibling });
+  }
+
+  function restoreInternalNode(node) {
+    const home = internalHomes.get(node);
+    if (!node || !home?.parent) return;
+    if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(node, home.next);
+    else home.parent.appendChild(node);
+    internalHomes.delete(node);
+  }
+
+  function applyRecommendedButtonState(recommended) {
+    // The composer is the sole visibility owner for this button in BOTH
+    // modes: the friendly adapter labels already carry "(Recommended)", so
+    // the control is redundant everywhere. The node stays live and unique
+    // for any production code that still references it.
+    if (!recommended) return;
+    if (!recommended.hidden) recommended.hidden = true;
+    if (recommended.getAttribute('aria-hidden') !== 'true') {
+      recommended.setAttribute('aria-hidden', 'true');
+    }
+    if (recommended.tabIndex !== -1) recommended.tabIndex = -1;
+    if (recommended.style.display !== 'none') recommended.style.display = 'none';
+  }
+
+  function applyHiddenStagedControl(control) {
+    // Save/apply controls stay live and wired but never visible in Pro.
+    if (!control) return;
+    if (!control.hidden) control.hidden = true;
+    if (control.getAttribute('aria-hidden') !== 'true') {
+      control.setAttribute('aria-hidden', 'true');
+    }
+    if (control.tabIndex !== -1) control.tabIndex = -1;
+  }
+
+  function restoreBasicPresentation() {
+    if (composeRetryTimer) {
+      window.clearTimeout(composeRetryTimer);
+      composeRetryTimer = null;
+    }
+    if (adapterOptionsObserver) {
+      adapterOptionsObserver.disconnect();
+      adapterOptionsObserver = null;
+    }
+    if (document.body) delete document.body.dataset.proBand;
+    for (const node of Array.from(internalHomes.keys())) restoreInternalNode(node);
+    document.querySelectorAll('.pro-runtime-wrapper').forEach((node) => node.remove());
+    document.querySelectorAll('.pro-adapter-field, .pro-password-field, .pro-connectivity-field').forEach((node) => {
+      node.classList.remove('pro-adapter-field', 'pro-password-field', 'pro-connectivity-field');
+      delete node.dataset.proComposerDecorated;
+    });
+    applyRecommendedButtonState(el('btnUseRecommended'));
+    // Pro parks the save controls in hidden staging; Basic owns its own
+    // save surface, so their Pro-only hidden state is cleared on the way out.
+    for (const id of ['btnSaveConfig', 'btnSaveRestart']) {
+      const control = el(id);
+      if (!control) continue;
+      if (control.hidden) control.hidden = false;
+      if (control.hasAttribute('aria-hidden')) control.removeAttribute('aria-hidden');
+      if (control.tabIndex !== 0) control.tabIndex = 0;
+    }
+    setStage('waiting-for-pro');
+  }
+
+  function serviceState() {
+    const raw = String(el('proServiceStateText')?.textContent || el('pillTxt')?.textContent || 'Checking…').trim();
+    const value = raw.toLowerCase();
+    if (value.includes('error') || value.includes('failed') || value.includes('attention')) {
+      return { name: 'error', label: 'Needs attention' };
+    }
+    if (value.includes('starting') || value.includes('stopping') || value.includes('working') || value.includes('repair')) {
+      return { name: 'working', label: raw || 'Working…' };
+    }
+    if (value.includes('running') && !value.includes('not running')) {
+      return { name: 'running', label: 'Running' };
+    }
+    if (value.includes('stopped') || value.includes('inactive') || value.includes('not running')) {
+      return { name: 'stopped', label: 'Stopped' };
+    }
+    return { name: 'loading', label: raw || 'Checking…' };
+  }
+
   function serviceIsRunning() {
-    const text = String(el('pillTxt')?.textContent || '').toLowerCase();
-    return text.includes('running') && !text.includes('not running');
+    return serviceState().name === 'running';
+  }
+
+  function syncHeaderStatus() {
+    const status = el('proHeaderStatus');
+    if (!status) return;
+    const state = serviceState();
+    status.dataset.state = state.name;
+    setText(status, state.label);
   }
 
   function savingState(state, text) {
@@ -113,6 +328,7 @@
   }
 
   function scheduleSave(markRestart = true) {
+    if (!isAdvancedMode()) return;
     if (markRestart && serviceIsRunning()) restartRequired = true;
     savingState('saving', 'Saving changes…');
     if (saveTimer) window.clearTimeout(saveTimer);
@@ -123,9 +339,8 @@
     const primary = el('btnStart');
     if (!primary) return;
     if (serviceIsRunning() && restartRequired) {
-      primary.dataset.proServiceAction = 'start';
       primary.dataset.proGuidedAction = 'apply';
-      primary.textContent = 'Apply Changes & Restart';
+      setText(primary, 'Apply Changes & Restart');
       primary.classList.remove('danger', 'secondary');
       primary.classList.add('primary');
       primary.disabled = false;
@@ -142,14 +357,24 @@
       if (!event.isTrusted) return;
       scheduleSave(true);
       updateDependencies();
+      syncPerformanceSelection();
+      syncAdapterBandNotice();
     });
     root.addEventListener('input', (event) => {
       if (!(event.target instanceof HTMLInputElement)) return;
       if (!event.isTrusted) return;
       scheduleSave(true);
     });
-    root.querySelectorAll('.preset-bar .btn').forEach((button) => {
-      button.addEventListener('click', () => window.setTimeout(() => scheduleSave(true), 0));
+    root.addEventListener('click', (event) => {
+      const button = event.target instanceof Element
+        ? event.target.closest('.preset-bar .btn')
+        : null;
+      if (!button || !root.contains(button)) return;
+      window.setTimeout(() => {
+        scheduleSave(true);
+        syncPerformanceSelection();
+        syncAdapterBandNotice();
+      }, 0);
     });
   }
 
@@ -166,86 +391,362 @@
     }
   }
 
-  function enforceNavigation() {
-    addStyles();
-    const overviewNav = document.querySelector('.nav-item[data-tab="overview"]');
-    replaceNav(overviewNav, 'wifi', 'Set Up Hotspot');
-
-    document.querySelector('.nav-item[data-tab="telemetry"]')?.remove();
-    const logsNav = document.querySelector('.nav-item[data-tab="logs"]');
-    logsNav?.remove();
-
-    const troubleshootingNav = document.querySelector(
-      '.nav-item[data-tab="troubleshooting"], .nav-item[data-tab="diagnostics"]',
-    );
-    if (troubleshootingNav) {
-      troubleshootingNav.dataset.tab = 'troubleshooting';
-      replaceNav(troubleshootingNav, 'trouble', 'Troubleshooting');
-    }
-
-    const diagnosticsPane = el('tab-diagnostics');
-    if (diagnosticsPane) diagnosticsPane.id = 'tab-troubleshooting';
-  }
-
-  function guidedPrerequisitesReady() {
+  function prerequisitesReady() {
     const overview = el('tab-overview');
     const configuration = el('proHotspotConfiguration');
     const serviceCard = overview?.querySelector('.pro-service-card');
     const requiredIds = [
       'ap_adapter',
+      'btnUseRecommended',
       'btnReloadAdapters',
       'btnApplyVrProfileUltra',
       'btnApplyVrProfile',
       'btnApplyVrProfileHigh',
       'btnApplyVrProfileStable',
       'qos_preset',
-      'ssid',
-      'wpa2_passphrase',
-      'enable_internet',
+      ...CONNECTION_FIELDS,
       'btnStart',
       'btnSaveConfig',
       'btnSaveRestart',
+      'btnRepair',
     ];
+    const preset = configuration?.querySelector('.preset-bar')
+      || overview?.querySelector('#proStepPerformance .preset-bar');
     return !!overview
       && !!configuration
       && !!serviceCard
-      && !!configuration.querySelector('.preset-bar')
+      && !!preset
       && requiredIds.every((id) => !!el(id));
   }
 
-  function buildGuidedSetup() {
-    if (el('proGuidedWorkflow')) return true;
-    if (!guidedPrerequisitesReady()) return false;
-    const overview = el('tab-overview');
-    const configuration = el('proHotspotConfiguration');
-    const serviceCard = overview.querySelector('.pro-service-card');
+  function ensureWorkflowShell() {
+    const existing = el('proGuidedWorkflow');
+    if (existing) return existing;
+    if (!prerequisitesReady()) return null;
 
+    const overview = el('tab-overview');
+    const originalNodes = Array.from(overview.children);
     const shell = make('div', 'pro-guided-shell');
     shell.id = 'proGuidedWorkflow';
+
     const card = make('section', 'pro-guided-card');
     const header = make('div', 'pro-guided-header');
-    header.append(
+    const headerCopy = make('div', 'pro-guided-header-copy');
+    headerCopy.append(
       make('h2', '', 'Set Up Hotspot'),
       make('p', '', 'Configure the hotspot in order, then start it or apply changes safely.'),
     );
+    const headerMeta = make('div', 'pro-guided-header-meta');
+    const status = make('div', 'pro-header-status', 'Checking…');
+    status.id = 'proHeaderStatus';
+    status.setAttribute('aria-live', 'polite');
+    const saveState = make('div', 'pro-save-state', 'All changes saved.');
+    saveState.id = 'proSaveState';
+    saveState.setAttribute('aria-live', 'polite');
+    headerMeta.append(status, saveState);
+    header.append(headerCopy, headerMeta);
+    header.dataset.proDensityReady = '1';
+
     const steps = make('div', 'pro-guided-steps');
     steps.append(
-      step(1, 'Choose Wi-Fi adapter', 'Select the adapter VRhotspot should use. Recommended choices are labeled automatically.', 'proStepAdapter'),
-      step(2, 'Choose performance mode', 'Choose the behavior that best matches your VR workflow.', 'proStepPerformance'),
-      step(3, 'Configure hotspot', 'Set the network name, password, and internet-sharing preference.', 'proStepHotspot'),
-      step(4, 'Fine-tune hotspot', 'Optional expert settings are grouped by purpose and can be left at their recommended defaults.', 'proStepAdvanced'),
-      step(5, 'Start hotspot', 'Start, stop, or safely apply saved changes to a running hotspot.', 'proStepAction'),
+      step(1, 'Choose Wi-Fi adapter', 'Select the Wi-Fi adapter that will create the hotspot. The recommended USB adapter normally provides the best VR performance.', 'proStepAdapter'),
+      step(2, 'Choose performance mode', 'Choose the latency, throughput, or stability profile that best matches the hotspot\'s workload.', 'proStepPerformance'),
+      step(3, 'Configure hotspot', 'Set the hotspot name, password, band, security mode, and country.', 'proStepHotspot'),
+      step(4, 'Fine-tune hotspot', 'Adjust wireless channels, network addressing, and performance behavior. The recommended defaults are appropriate for most installations.', 'proStepAdvanced'),
+      step(5, 'Start hotspot', 'Start or stop the hotspot. When autosaved changes require a restart, this action becomes Apply Changes & Restart.', 'proStepAction'),
     );
     card.append(header, steps);
+
+    const staging = make('div', 'pro-guided-hidden');
+    staging.id = 'proGuidedStaging';
+    originalNodes.forEach((node) => staging.appendChild(node));
+    card.appendChild(staging);
     shell.appendChild(card);
+    overview.replaceChildren(shell);
 
-    const adapter = document.querySelector('[data-field="ap_adapter"]');
-    const adapterLabel = adapter.querySelector('label');
-    if (adapterLabel) adapterLabel.textContent = 'Wi-Fi adapter';
-    el('proStepAdapter').appendChild(adapter);
+    wireAutosave(card);
+    syncHeaderStatus();
+    return shell;
+  }
 
-    const preset = configuration.querySelector('.preset-bar');
+  function syncStepCopy(shell) {
+    const copy = {
+      proStepAdapter: [
+        'Choose Wi-Fi adapter',
+        'Select the Wi-Fi adapter that will create the hotspot. The recommended USB adapter normally provides the best VR performance.',
+      ],
+      proStepPerformance: [
+        'Choose performance mode',
+        'Choose the latency, throughput, or stability profile that best matches the hotspot\'s workload.',
+      ],
+      proStepHotspot: [
+        'Configure hotspot',
+        'Set the hotspot name, password, band, security mode, and country.',
+      ],
+      proStepAdvanced: [
+        'Fine-tune hotspot',
+        'Adjust wireless channels, network addressing, and performance behavior. The recommended defaults are appropriate for most installations.',
+      ],
+      proStepAction: [
+        'Start hotspot',
+        'Start or stop the hotspot. When autosaved changes require a restart, this action becomes Apply Changes & Restart.',
+      ],
+    };
+    for (const [id, [title, help]] of Object.entries(copy)) {
+      const section = guidedSlot(shell, id).closest('.pro-guided-step');
+      setText(section?.querySelector('.pro-guided-title'), title);
+      const staleHelp = section?.querySelector('.pro-guided-help');
+      if (staleHelp) staleHelp.remove();
+      applyStepBadgeHelp(section?.querySelector('.pro-guided-number'), help);
+    }
+  }
+
+  function adapterTechnicalSummary(adapter, ifname, fallback = '') {
+    if (!adapter) return fallback || `Interface: ${ifname || '--'}`;
+    const parts = [];
+    const name = String(adapter.name || adapter.model || '').trim();
+    if (name) parts.push(name);
+    parts.push(`Interface: ${ifname || adapter.ifname || '--'}`);
+    if (adapter.phy) parts.push(`Radio: ${adapter.phy}`);
+    const bus = String(adapter.bus || '').trim();
+    if (bus) parts.push(`Bus: ${bus.toUpperCase()}`);
+    const bands = [];
+    if (adapter.supports_2ghz) bands.push('2.4 GHz');
+    if (adapter.supports_5ghz) bands.push('5 GHz');
+    if (adapter.supports_6ghz) bands.push('6 GHz');
+    if (bands.length) parts.push(`Bands: ${bands.join(', ')}`);
+    parts.push(adapter.supports_ap ? 'AP mode supported' : 'AP mode not supported');
+    const country = adapter.regdom?.country || adapter.country || '';
+    if (country) parts.push(`Regulatory: ${country}`);
+    if (Number.isFinite(Number(adapter.score))) parts.push(`Score: ${adapter.score}`);
+    return parts.join(' · ');
+  }
+
+  function adapterRecord(ifname) {
+    try {
+      if (typeof getAdapterByIfname === 'function') return getAdapterByIfname(ifname);
+    } catch {
+      // The synthetic DOM fixture intentionally has no adapter inventory.
+    }
+    return null;
+  }
+
+  function friendlyAdapterKind(adapter, rawLabel) {
+    const bus = String(adapter?.bus || '').trim().toLowerCase();
+    const identity = `${bus} ${adapter?.name || ''} ${rawLabel || ''}`.toLowerCase();
+    if (bus === 'usb' || identity.includes('usb')) return 'usb';
+    if (['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)) return 'internal';
+    return adapter ? 'internal' : 'other';
+  }
+
+  function adapterDetailsIcon() {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.classList.add('pro-adapter-details-icon');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('fill', 'currentColor');
+    path.setAttribute('d', 'M12 5c5.5 0 9.5 5.2 9.7 5.4a1 1 0 0 1 0 1.2C21.5 11.8 17.5 17 12 17S2.5 11.8 2.3 11.6a1 1 0 0 1 0-1.2C2.5 10.2 6.5 5 12 5Zm0 2c-3.7 0-6.8 3-7.6 4 .8 1 3.9 4 7.6 4s6.8-3 7.6-4c-.8-1-3.9-4-7.6-4Zm0 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z');
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function syncFriendlyAdapterOptions(select) {
+    const counters = { usb: 0, internal: 0, other: 0 };
+    const recommended = String(select.dataset.recommended || '');
+    let selected = null;
+
+    for (const option of Array.from(select.options)) {
+      const rawLabel = option.dataset.rawAdapterLabel || String(option.textContent || '').trim();
+      if (!option.dataset.rawAdapterLabel) option.dataset.rawAdapterLabel = rawLabel;
+      const adapter = adapterRecord(option.value);
+      const kind = friendlyAdapterKind(adapter, rawLabel);
+      let label;
+      if (kind === 'usb') {
+        counters.usb += 1;
+        label = `USB Wi-Fi ${counters.usb}`;
+      } else if (kind === 'internal') {
+        label = `Internal Wi-Fi ${counters.internal}`;
+        counters.internal += 1;
+      } else {
+        counters.other += 1;
+        label = `Wi-Fi Adapter ${counters.other}`;
+      }
+      if (option.value === recommended) label += ' (Recommended)';
+
+      const technical = adapterTechnicalSummary(adapter, option.value, rawLabel);
+      if (option.textContent !== label) option.textContent = label;
+      option.removeAttribute('title');
+      if (option.dataset.technicalLabel !== technical) option.dataset.technicalLabel = technical;
+      if (option.selected) selected = { label, technical };
+    }
+    return selected;
+  }
+
+  function syncAdapterPresentation(select, info, details) {
+    const selected = syncFriendlyAdapterOptions(select);
+    const technical = selected?.technical || 'Select a Wi-Fi adapter to view its technical identity.';
+    const expanded = info.getAttribute('aria-expanded') === 'true';
+    const action = expanded ? 'Hide adapter details' : 'Show adapter details';
+    const shouldHide = select.options.length === 0;
+    if (info.hidden !== shouldHide) info.hidden = shouldHide;
+    if (info.title !== action) info.title = action;
+    if (info.getAttribute('aria-label') !== action) info.setAttribute('aria-label', action);
+    info.removeAttribute('data-tip');
+    setText(details, technical);
+  }
+
+  function syncAdapterBandNotice() {
+    const hint = el('adapterHint');
+    const bandSelect = el('band_preference');
+    if (!hint || !bandSelect || !document.body) return;
+
+    let band = String(bandSelect.value || '');
+    try {
+      if (typeof resolveBandPref === 'function') band = resolveBandPref(band);
+    } catch {
+      // The isolated DOM fixture does not expose every production helper.
+    }
+    document.body.dataset.proBand = band;
+
+    if (band !== '6ghz') {
+      hint.textContent = '';
+      hint.hidden = true;
+      return;
+    }
+
+    hint.hidden = false;
+    try {
+      if (typeof maybeAutoPickAdapterForBand === 'function') maybeAutoPickAdapterForBand();
+    } catch {
+      // Keep the notice visible even when the production helper is unavailable.
+    }
+  }
+
+  function decorateAdapter(shell) {
+    const field = document.querySelector('[data-field="ap_adapter"]');
+    const select = el('ap_adapter');
+    const recommended = el('btnUseRecommended');
+    const rescan = el('btnReloadAdapters');
+    if (!field || !select || !recommended || !rescan) return false;
+
+    prependIfNeeded(guidedSlot(shell, 'proStepAdapter'), field);
+    field.classList.add('pro-adapter-field');
+    field.dataset.proDensityReady = '1';
+
+    let row = field.querySelector(':scope > .pro-adapter-row');
+    if (!row) {
+      rememberInternalHome(select);
+      rememberInternalHome(recommended);
+      rememberInternalHome(rescan);
+      row = make('div', 'pro-adapter-row pro-runtime-wrapper');
+      const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
+      if (label?.nextSibling) field.insertBefore(row, label.nextSibling);
+      else field.prepend(row);
+    }
+
+    let info = row.querySelector('#proAdapterInfo');
+    if (!info) {
+      info = make('button', 'btn pro-adapter-info');
+      info.id = 'proAdapterInfo';
+      info.type = 'button';
+      info.setAttribute('aria-expanded', 'false');
+      info.setAttribute('aria-controls', 'proAdapterDetails');
+      info.appendChild(adapterDetailsIcon());
+    }
+    info.classList.remove('tip');
+    info.removeAttribute('data-tip');
+
+    let details = field.querySelector(':scope > #proAdapterDetails');
+    if (!details) {
+      details = make('div', 'pro-adapter-details pro-runtime-wrapper');
+      details.id = 'proAdapterDetails';
+      details.hidden = true;
+      details.setAttribute('role', 'status');
+      field.appendChild(details);
+    }
+
+    applyRecommendedButtonState(recommended);
+    setText(recommended, 'Recommended');
+    setText(rescan, 'Rescan adapters');
+    ensureChildOrder(row, [select, info, recommended, rescan]);
+
+    if (row.dataset.proAdapterWired !== '1') {
+      row.dataset.proAdapterWired = '1';
+      row.addEventListener('click', (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const detailsControl = target?.closest('#proAdapterInfo');
+        if (detailsControl === info) {
+          const expanded = info.getAttribute('aria-expanded') === 'true';
+          info.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+          details.hidden = expanded;
+          syncAdapterPresentation(select, info, details);
+          return;
+        }
+        if (target === recommended || recommended.contains(target)) {
+          window.setTimeout(() => {
+            if (!isAdvancedMode()) return;
+            syncAdapterPresentation(select, info, details);
+            syncAdapterBandNotice();
+          }, 0);
+        }
+      });
+      row.addEventListener('change', (event) => {
+        if (event.target !== select || !isAdvancedMode()) return;
+        info.setAttribute('aria-expanded', 'false');
+        details.hidden = true;
+        syncAdapterPresentation(select, info, details);
+        syncAdapterBandNotice();
+      });
+    }
+
+    if (!adapterOptionsObserver) {
+      adapterOptionsObserver = new MutationObserver(() => {
+        if (!isAdvancedMode()) return;
+        syncAdapterPresentation(select, info, details);
+        syncAdapterBandNotice();
+      });
+      adapterOptionsObserver.observe(select, { childList: true, subtree: true });
+    }
+
+    syncAdapterPresentation(select, info, details);
+    syncAdapterBandNotice();
+    field.dataset.proComposerDecorated = '1';
+    document.querySelectorAll('#tab-overview [data-adapter-readiness-card]')
+      .forEach((node) => node.remove());
+    return true;
+  }
+
+  function syncPerformanceSelection() {
+    const qos = el('qos_preset');
+    const description = el('proPerformanceDescription');
+    if (!qos || !description) return;
+    const selected = String(qos.value || 'off');
+    // No generic filler line: the step help already explains the choice, so
+    // the description shows only an active profile's copy and otherwise
+    // collapses without leaving a spacer.
+    let selectedCopy = '';
+    for (const [id, profile] of Object.entries(PROFILE_COPY)) {
+      const button = el(id);
+      if (!button) continue;
+      const active = selected === profile.value;
+      button.classList.toggle('is-selected', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      if (active) selectedCopy = profile.description;
+    }
+    setText(description, selectedCopy);
+    if (description.hidden !== !selectedCopy) description.hidden = !selectedCopy;
+  }
+
+  function decoratePerformance(shell) {
+    const configuration = el('proHotspotConfiguration');
+    const preset = configuration?.querySelector('.preset-bar')
+      || shell.querySelector('.pro-performance-picker');
+    const qosField = document.querySelector('[data-field="qos_preset"]');
+    if (!preset || !qosField) return false;
+
     preset.classList.add('pro-performance-picker');
+    preset.dataset.proDensityReady = '1';
     const group = preset.querySelector('.btn-group');
     const order = [
       el('btnApplyVrProfileUltra'),
@@ -253,84 +754,355 @@
       el('btnApplyVrProfileHigh'),
       el('btnApplyVrProfileStable'),
     ];
-    if (group) order.forEach((button) => group.appendChild(button));
-    el('proStepPerformance').appendChild(preset);
+    if (group) ensureChildOrder(group, order);
 
-    const qos = document.querySelector('[data-field="qos_preset"]');
-    qos.classList.add('pro-guided-hidden');
-    el('proStepPerformance').appendChild(qos);
-
-    const hotspotFields = make('div', 'pro-hotspot-fields');
-    for (const key of ['ssid', 'wpa2_passphrase', 'enable_internet']) {
-      const field = document.querySelector(`[data-field="${key}"]`);
-      if (key === 'ssid') {
-        const label = field.querySelector('label');
-        if (label) label.textContent = 'Hotspot name';
-      }
-      if (key === 'wpa2_passphrase') {
-        const label = field.querySelector('label');
-        if (label) label.textContent = 'Password';
-      }
-      hotspotFields.appendChild(field);
+    let description = el('proPerformanceDescription');
+    if (!description) {
+      description = make('p', 'pro-performance-description');
+      description.id = 'proPerformanceDescription';
+      preset.appendChild(description);
     }
-    el('proStepHotspot').appendChild(hotspotFields);
+    appendIfNeeded(guidedSlot(shell, 'proStepPerformance'), preset);
 
-    const advanced = make('details', 'pro-advanced-settings');
-    const advancedSummary = make('summary', '', 'Advanced wireless, network, and system settings');
-    const advancedBody = make('div', 'pro-advanced-body');
-    configuration.querySelectorAll('.pro-config-details').forEach((details) => advancedBody.appendChild(details));
-    advanced.append(advancedSummary, advancedBody);
-    el('proStepAdvanced').appendChild(advanced);
+    qosField.classList.add('pro-guided-hidden');
+    appendIfNeeded(el('proGuidedStaging'), qosField);
+    syncPerformanceSelection();
+    return true;
+  }
 
-    const action = make('div', 'pro-guided-action');
-    const stateCopy = serviceCard.querySelector('.pro-service-state-copy');
-    const primary = el('btnStart');
-    if (stateCopy) action.appendChild(stateCopy);
-    action.appendChild(primary);
-    const actionSlot = el('proStepAction');
-    const saveState = make('div', 'pro-save-state', 'All changes saved.');
-    saveState.id = 'proSaveState';
-    actionSlot.append(action, saveState);
+  function setHotspotFieldLabel(field, text) {
+    const label = field?.querySelector(':scope > label, :scope > .field-label-with-tip > label');
+    if (label) setText(label, text);
+  }
 
-    const hidden = make('div', 'pro-guided-hidden');
-    hidden.id = 'proGuidedHiddenControls';
-    const headerBar = configuration.querySelector('.settings-header');
-    const serviceSecondary = serviceCard.querySelector('.pro-service-secondary');
-    const serviceMeta = serviceCard.querySelector('.hero-meta');
-    const feedback = serviceCard.querySelectorAll('.hero-feedback');
-    for (const node of [headerBar, serviceSecondary, serviceMeta, ...feedback]) {
-      if (node) hidden.appendChild(node);
-    }
-    card.appendChild(hidden);
-
-    overview.replaceChildren(shell);
-    wireAutosave(card);
-    updateDependencies();
-
-    if (primary.dataset.proGuidedWired !== '1') {
-      primary.dataset.proGuidedWired = '1';
-      primary.addEventListener('click', async (event) => {
-        if (primary.dataset.proGuidedAction !== 'apply') return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        const saved = await saveConfiguration();
-        if (!saved) return;
-        restartRequired = false;
-        savingState('saving', 'Applying changes and restarting…');
-        el('btnSaveRestart')?.click();
-      }, true);
-    }
-
-    const statusSource = el('pillTxt');
-    if (statusSource && statusSource.dataset.proGuidedObserved !== '1') {
-      statusSource.dataset.proGuidedObserved = '1';
-      const statusObserver = new MutationObserver(() => {
-        if (!serviceIsRunning()) restartRequired = false;
-        syncPrimaryAction();
-      });
-      statusObserver.observe(statusSource, { childList: true, subtree: true, characterData: true });
+  function passwordRowComplete(field, input, reveal, qr, hint) {
+    // Verify only the application-owned nodes. Password managers and other
+    // extensions may inject siblings, wrappers, or shadow hosts at any time;
+    // those must never demote readiness or trigger a DOM fight.
+    const row = field.querySelector(':scope > .pro-password-row');
+    if (!row) return false;
+    const cell = row.querySelector(':scope > .pro-password-input-cell');
+    if (!cell || !cell.contains(input)) return false;
+    if (reveal.parentElement !== row || qr.parentElement !== row) return false;
+    const children = Array.from(row.children);
+    const cellIndex = children.indexOf(cell);
+    const revealIndex = children.indexOf(reveal);
+    const qrIndex = children.indexOf(qr);
+    if (!(cellIndex > -1 && cellIndex < revealIndex && revealIndex < qrIndex)) return false;
+    if (hint) {
+      if (!field.contains(hint) || row.contains(hint)) return false;
+      if (!(row.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
     }
     return true;
+  }
+
+  function decoratePassword(field) {
+    const input = el('wpa2_passphrase');
+    const reveal = el('btnRevealPass');
+    const qr = el('btnShowQr');
+    const hint = el('passHint');
+    if (!field || !input || !reveal || !qr) return false;
+    field.classList.add('pro-password-field');
+    field.dataset.proDensityReady = '1';
+    setHotspotFieldLabel(field, 'Password');
+
+    let row = field.querySelector(':scope > .pro-password-row');
+    if (!row) {
+      rememberInternalHome(input);
+      rememberInternalHome(reveal);
+      rememberInternalHome(qr);
+      if (hint) rememberInternalHome(hint);
+      row = make('div', 'pro-password-row pro-runtime-wrapper');
+      const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
+      if (label?.nextSibling) field.insertBefore(row, label.nextSibling);
+      else field.prepend(row);
+    }
+
+    let cell = row.querySelector(':scope > .pro-password-input-cell');
+    if (!cell) {
+      cell = make('div', 'pro-password-input-cell pro-runtime-wrapper');
+      row.prepend(cell);
+    }
+    // The input stays wherever it lives inside the application-owned cell:
+    // if a password manager wraps it there, moving it back would start a
+    // mutation fight. Only reclaim it when it left the cell entirely.
+    if (!cell.contains(input)) cell.appendChild(input);
+
+    // Idempotent writes only: this runs from a childList observer on every
+    // reconcile, so a same-value rewrite would observe itself and loop.
+    if (reveal.type !== 'button') reveal.type = 'button';
+    // classList.add serializes the attribute even for present tokens, which
+    // still queues a mutation record — guard to stay observer-quiet.
+    if (!reveal.classList.contains('icon-only')) reveal.classList.add('icon-only');
+    if (reveal.title !== 'Show or hide password') reveal.title = 'Show or hide password';
+    if (reveal.getAttribute('aria-label') !== 'Show or hide password') {
+      reveal.setAttribute('aria-label', 'Show or hide password');
+    }
+    if (qr.type !== 'button') qr.type = 'button';
+    // The shared QR glyph from ui.js; text fallback only when the base app
+    // is absent (synthetic fixtures). Guarded so reconciles stay quiet.
+    if (typeof makeQrGlyph === 'function') {
+      if (!qr.querySelector('.qr-glyph')) qr.replaceChildren(makeQrGlyph());
+    } else {
+      setText(qr, 'QR');
+    }
+    if (qr.className !== 'btn icon-only') qr.className = 'btn icon-only';
+    if (qr.title !== 'Show hotspot QR code') qr.title = 'Show hotspot QR code';
+    if (qr.getAttribute('aria-label') !== 'Show hotspot QR code') {
+      qr.setAttribute('aria-label', 'Show hotspot QR code');
+    }
+    ensureChildOrder(row, [cell, reveal, qr]);
+
+    if (hint) {
+      hint.classList.add('pro-password-hint');
+      appendIfNeeded(field, hint);
+    }
+    // Ready may only be published once the composed row is verifiably
+    // complete; a transient DOM state must fail the pass, not go silent.
+    const complete = passwordRowComplete(field, input, reveal, qr, hint);
+    if (complete) field.dataset.proComposerDecorated = '1';
+    else delete field.dataset.proComposerDecorated;
+    return complete;
+  }
+
+  function decorateHotspot(shell) {
+    let fields = shell.querySelector('.pro-hotspot-fields');
+    if (!fields) {
+      fields = make('div', 'pro-hotspot-fields');
+      guidedSlot(shell, 'proStepHotspot').appendChild(fields);
+    }
+    fields.dataset.proLayout = 'organized';
+
+    const labels = {
+      ssid: 'Hotspot name (SSID)',
+      wpa2_passphrase: 'Password',
+      band_preference: 'Band',
+      ap_security: 'Security',
+      country: 'Country',
+    };
+    const ordered = [];
+    let passwordReady = true;
+    for (const key of STEP3_FIELDS) {
+      const field = document.querySelector(`[data-field="${key}"]`);
+      if (!field) return false;
+      field.classList.add('pro-hotspot-field');
+      field.dataset.proHotspotKey = key;
+      if (labels[key]) setHotspotFieldLabel(field, labels[key]);
+      if (key === 'wpa2_passphrase') passwordReady = decoratePassword(field);
+      ordered.push(field);
+    }
+    ensureChildOrder(fields, ordered);
+    return passwordReady;
+  }
+
+  // Fine-tune keeps only genuine hotspot-tuning controls, arranged on a
+  // clean two-column grid. Compatibility/recovery controls live under
+  // Troubleshooting (see ensureTroubleshootingControls).
+  const ADVANCED_LAYOUT = {
+    Wireless: {
+      fields: [
+        'channel_5g', 'channel_6g',
+        'fallback_channel_2g', 'channel_auto_select',
+        'channel_width', 'tx_power',
+        'beacon_interval',
+        'short_guard_interval',
+      ],
+    },
+    Network: {
+      fields: [
+        'lan_gateway_ip', 'dhcp_dns',
+        'dhcp_start_ip', 'dhcp_end_ip',
+      ],
+    },
+    'System & Performance': {
+      fields: ['ap_ready_timeout_s'],
+      toggles: ['cpu_governor_performance', 'sysctl_tuning', 'interrupt_coalescing'],
+    },
+  };
+
+  // Every Fine-tune label carries the same accessible info tip used across
+  // the app; the sections need no introductory copy beyond these.
+  const ADVANCED_FIELD_TIPS = {
+    channel_5g: 'Choose the primary 5 GHz Wi-Fi channel. Auto lets VRHotspot select it automatically.',
+    channel_6g: 'Choose the primary 6 GHz Wi-Fi channel when 6 GHz is available. Auto selects it automatically.',
+    fallback_channel_2g: 'Choose the fallback 2.4 GHz channel used when fallback operation is needed.',
+    channel_auto_select: 'Scan available channels at startup and choose the best one automatically.',
+    channel_width: 'Choose how wide the wireless channel is. Wider channels can improve throughput but may be less reliable in crowded environments.',
+    tx_power: 'Set transmit power for the hotspot radio. Auto lets the system choose.',
+    beacon_interval: 'Set how often the hotspot broadcasts beacon frames. Lower values announce the network more frequently.',
+    dtim_period: 'Set how often buffered broadcast and multicast traffic is announced to connected devices.',
+    short_guard_interval: 'Enable a shorter guard interval to improve throughput when the wireless environment supports it.',
+    lan_gateway_ip: 'Set the hotspot gateway IP address used by connected devices.',
+    dhcp_dns: 'Set which DNS server connected devices should use.',
+    dhcp_start_ip: 'Set the first IP address in the DHCP range handed out to clients.',
+    dhcp_end_ip: 'Set the last IP address in the DHCP range handed out to clients.',
+    ap_ready_timeout_s: 'Set how long VRHotspot waits during startup before timing out.',
+    cpu_governor_performance: 'Prioritize CPU performance for hotspot operation at the cost of higher power usage.',
+    sysctl_tuning: 'Apply recommended kernel tuning values for hotspot and networking performance.',
+    interrupt_coalescing: 'Reduce interrupt frequency to improve efficiency on supported hardware.',
+  };
+
+  function ensureAdvancedFieldTips() {
+    if (typeof renderHintTip !== 'function') return;
+    for (const [id, text] of Object.entries(ADVANCED_FIELD_TIPS)) {
+      const control = el(id);
+      if (!control) continue;
+      const labelEl = document.querySelector(`label[for="${id}"]`) || control.closest('label');
+      if (!labelEl || labelEl.querySelector(':scope .hint.tip-only')) continue;
+      const holder = make('span', 'hint tip-only');
+      labelEl.appendChild(holder);
+      renderHintTip(holder, text);
+      // The icon lives inside the label: keep pointer use on the tip from
+      // activating the labeled control (focus steal / checkbox toggle).
+      holder.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+    }
+  }
+
+  function advancedTopContainer(body, node) {
+    let current = node;
+    while (current && current.parentElement
+        && current.parentElement !== body
+        && !current.parentElement.classList.contains('pro-advanced-toggles')) {
+      current = current.parentElement;
+    }
+    return current && current.parentElement ? current : null;
+  }
+
+  function layoutAdvancedGroup(details, spec) {
+    const body = details.querySelector(':scope > .pro-config-body');
+    if (!body) return;
+    const ordered = [];
+    // The sections are self-explanatory now: any leftover intro copy from an
+    // earlier composition is dropped rather than reordered.
+    body.querySelector(':scope > .pro-advanced-group-help')?.remove();
+    const banner = body.querySelector(':scope > .info-banner');
+    if (banner) ordered.push(banner);
+    for (const key of spec.fields || []) {
+      const node = details.querySelector(`[data-field="${key}"]`);
+      if (!node) continue;
+      const container = advancedTopContainer(body, node);
+      if (container && !ordered.includes(container)) ordered.push(container);
+    }
+    if (spec.toggles) {
+      const labels = spec.toggles.map((id) => el(id)?.closest('label')).filter(Boolean);
+      if (labels.length) {
+        let toggles = body.querySelector(':scope > .pro-advanced-toggles');
+        if (!toggles) {
+          toggles = make('div', 'pro-advanced-toggles tog-group');
+          body.appendChild(toggles);
+        }
+        labels.forEach((labelNode) => appendIfNeeded(toggles, labelNode));
+        ensureChildOrder(toggles, labels);
+        ordered.push(toggles);
+      }
+    }
+    ensureChildOrder(body, ordered);
+    // Anything left over was relocated to Troubleshooting; hide the empty
+    // shells the moves leave behind so no stray gaps remain.
+    Array.from(body.children).forEach((child) => {
+      if (ordered.includes(child)) {
+        if (child.hidden) child.hidden = false;
+        return;
+      }
+      const empty = !child.querySelector('input, select, textarea, button');
+      if (child.hidden !== empty) child.hidden = empty;
+    });
+  }
+
+  function decorateAdvanced(shell) {
+    const configuration = el('proHotspotConfiguration');
+    let groups = shell.querySelector('.pro-guided-advanced-groups');
+    if (!groups) {
+      groups = make('div', 'pro-guided-advanced-groups');
+      guidedSlot(shell, 'proStepAdvanced').appendChild(groups);
+    }
+    const candidates = configuration?.querySelectorAll('.pro-config-details') || [];
+    candidates.forEach((details) => {
+      const summaryNode = details.querySelector(':scope > summary');
+      // Headers carry only the title: the live field values are the mirror
+      // of applied state, so no summary chips are rendered.
+      summaryNode?.querySelector(':scope > .pro-config-summary')?.remove();
+      const titleEl = summaryNode?.querySelector(':scope > .pro-config-title');
+      const title = String((titleEl || summaryNode)?.textContent || '').trim();
+      const spec = ADVANCED_LAYOUT[title];
+      if (spec) layoutAdvancedGroup(details, spec);
+      appendIfNeeded(groups, details);
+    });
+    ensureAdvancedFieldTips();
+    return groups.children.length >= 3;
+  }
+
+  function wirePrimaryAction(primary) {
+    if (!primary || primary.dataset.proGuidedWired === '1') return;
+    primary.dataset.proGuidedWired = '1';
+    primary.addEventListener('click', async (event) => {
+      if (primary.dataset.proGuidedAction !== 'apply') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const saved = await saveConfiguration();
+      if (!saved) return;
+      restartRequired = false;
+      savingState('saving', 'Applying changes and restarting…');
+      el('btnSaveRestart')?.click();
+    }, true);
+  }
+
+  function decorateAction(shell) {
+    const serviceCard = el('proGuidedStaging')?.querySelector('.pro-service-card')
+      || document.querySelector('.pro-service-card');
+    const stateCopy = serviceCard?.querySelector('.pro-service-state-copy');
+    const primary = el('btnStart');
+    const save = el('btnSaveConfig');
+    const saveRestart = el('btnSaveRestart');
+    const repair = el('btnRepair');
+    if (!primary || !save || !saveRestart || !repair) return false;
+
+    let action = shell.querySelector('.pro-guided-action');
+    if (!action) {
+      action = make('div', 'pro-guided-action');
+      const buttons = make('div', 'pro-guided-action-buttons');
+      // Pro autosaves, so Save Changes and Save & Restart are not part of the
+      // visible surface. Both stay live and wired in hidden staging: the
+      // primary's apply flow clicks them, as does the Basic proxy button.
+      const staging = make('div', 'pro-guided-hidden-staging');
+      staging.hidden = true;
+      staging.setAttribute('aria-hidden', 'true');
+      buttons.append(primary, staging);
+      action.append(stateCopy || make('div'), buttons);
+      guidedSlot(shell, 'proStepAction').appendChild(action);
+    }
+    const buttons = action.querySelector('.pro-guided-action-buttons');
+    action.querySelector('.pro-guided-save-actions')?.remove();
+    const staging = action.querySelector('.pro-guided-hidden-staging');
+    prependIfNeeded(buttons, primary);
+    setText(save, 'Save Changes');
+    ensureChildOrder(staging, [save, saveRestart]);
+    applyHiddenStagedControl(save);
+    applyHiddenStagedControl(saveRestart);
+    if (stateCopy) prependIfNeeded(action, stateCopy);
+    wirePrimaryAction(primary);
+    return true;
+  }
+
+  function rehydrateWorkflow(shell) {
+    if (!isAdvancedMode()) return false;
+    syncStepCopy(shell);
+    const ready = [
+      decorateAdapter(shell),
+      decoratePerformance(shell),
+      decorateHotspot(shell),
+      decorateAdvanced(shell),
+      decorateAction(shell),
+    ].every(Boolean);
+    wireAutosave(shell.querySelector('.pro-guided-card'));
+    updateDependencies();
+    syncAdapterBandNotice();
+    syncHeaderStatus();
+    syncPrimaryAction();
+    return ready;
   }
 
   function qualityMessage() {
@@ -339,15 +1111,21 @@
     return summary || 'Connection measurements will appear as clients begin using the hotspot.';
   }
 
-  function buildConnectionQuality() {
-    if (el('proConnectionQuality')) return true;
-    const overview = el('tab-overview');
-    const shell = overview?.querySelector('.pro-guided-shell');
+  function ensureConnectionQuality() {
+    // Connection Quality is the final section of the Troubleshooting shell.
+    const shell = document.querySelector('#tab-troubleshooting .troubleshooting-shell');
+    if (!shell) return false;
+    const existing = el('proConnectionQuality');
+    if (existing) {
+      if (existing.parentElement !== shell || shell.lastElementChild !== existing) {
+        shell.appendChild(existing);
+      }
+      return true;
+    }
     const telemetryPane = el('tab-telemetry');
     const telemetryCard = el('cardTelemetry');
-    if (!shell || !telemetryPane || !telemetryCard) return false;
+    if (!telemetryPane || !telemetryCard) return false;
 
-    document.querySelector('.nav-item[data-tab="telemetry"]')?.remove();
     const card = make('section', 'pro-quality-card');
     card.id = 'proConnectionQuality';
     const header = make('div', 'pro-quality-header');
@@ -359,29 +1137,11 @@
     const body = make('div', 'pro-quality-body');
     const summary = make('div', 'pro-quality-summary', qualityMessage());
     summary.id = 'proQualitySummary';
-    const warning = el('telemetryWarnings');
     const details = make('details', 'pro-quality-details');
     details.appendChild(make('summary', '', 'View detailed charts and client measurements'));
-
     const telemetryBody = telemetryCard.querySelector('.card-body');
     if (telemetryBody) details.appendChild(telemetryBody);
-    const settings = details.querySelector('[data-field="telemetry_enable"]');
-    if (settings) {
-      settings.classList.add('pro-quality-settings');
-      const label = settings.querySelector(':scope > label');
-      if (label) label.textContent = 'Measurement options';
-      const toggles = settings.querySelectorAll('.tog');
-      for (const [toggle, text] of [
-        [toggles[0], 'Measure connection quality'],
-        [toggles[1], 'Watch for connection problems'],
-      ]) {
-        const input = toggle && toggle.querySelector('input');
-        if (toggle && input) toggle.replaceChildren(input, document.createTextNode(` ${text}`));
-      }
-    }
-    const interval = document.querySelector('[data-field="telemetry_interval_s"]');
-    if (interval) interval.classList.add('pro-guided-hidden');
-
+    const warning = el('telemetryWarnings');
     body.append(summary);
     if (warning) body.appendChild(warning);
     body.appendChild(details);
@@ -389,43 +1149,46 @@
     shell.appendChild(card);
     telemetryPane.hidden = true;
 
-    const sources = [el('telemetrySummary'), el('telemetryWarnings'), el('pillTxt')].filter(Boolean);
-    const qualityObserver = new MutationObserver(() => {
+    if (qualityObserver) qualityObserver.disconnect();
+    qualityObserver = new MutationObserver(() => {
       setText(summary, qualityMessage());
       setText(status, serviceIsRunning() ? 'Live' : 'Waiting');
     });
-    sources.forEach((node) => qualityObserver.observe(node, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    }));
+    [el('telemetrySummary'), el('telemetryWarnings'), el('pillTxt')]
+      .filter(Boolean)
+      .forEach((node) => qualityObserver.observe(node, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      }));
     return true;
   }
 
-  function buildTroubleshooting() {
+  function ensureTroubleshooting() {
     const diagnosticsPane = el('tab-troubleshooting') || el('tab-diagnostics');
     const logsPane = el('tab-logs');
     const nav = document.querySelector(
       '.nav-item[data-tab="troubleshooting"], .nav-item[data-tab="diagnostics"]',
     );
     if (!diagnosticsPane || !logsPane || !nav) return false;
-    if (diagnosticsPane.querySelector('.troubleshooting-shell')) return true;
+    if (diagnosticsPane.querySelector('.troubleshooting-shell')) {
+      return ensureTroubleshootingControls(diagnosticsPane);
+    }
 
     nav.dataset.tab = 'troubleshooting';
     diagnosticsPane.id = 'tab-troubleshooting';
     replaceNav(nav, 'trouble', 'Troubleshooting');
-    const logsNav = document.querySelector('.nav-item[data-tab="logs"]');
-    logsNav?.remove();
+    document.querySelector('.nav-item[data-tab="logs"]')?.remove();
 
     const shell = make('div', 'troubleshooting-shell');
     const header = make('section', 'troubleshooting-header');
     const copy = make('div');
     copy.append(
       make('h2', '', 'Troubleshooting'),
-      make('p', '', 'Check system health, repair problems, inspect runtime details, and collect support information.'),
+      make('p', '', 'Check system health, restart services, inspect runtime details, and collect support information.'),
     );
     const actions = make('div', 'troubleshooting-actions');
-    for (const id of ['btnRepair', 'btnRestart', 'btnRefreshPreflight']) {
+    for (const id of ['btnRestart', 'btnRefreshPreflight']) {
       const control = el(id);
       if (control) actions.appendChild(control);
     }
@@ -437,81 +1200,165 @@
       preflight.querySelector('.preflight-header .action-group')?.remove();
       shell.appendChild(preflight);
     }
-
     shell.appendChild(make('h3', 'troubleshooting-section-label', 'Runtime Details, Logs & Support'));
     logsPane.querySelector('.pro-support-heading')?.remove();
     Array.from(logsPane.children).forEach((node) => shell.appendChild(node));
+
+    shell.appendChild(make('h3', 'troubleshooting-section-label', 'Connectivity'));
+    const connectivity = make('section', 'troubleshooting-connectivity');
+    connectivity.id = 'proConnectivityCard';
+    connectivity.appendChild(make(
+      'p',
+      'pro-connectivity-help',
+      'Disable this only when you want an isolated local hotspot without internet access.',
+    ));
+    shell.appendChild(connectivity);
+
+    shell.appendChild(make('h3', 'troubleshooting-section-label', 'Compatibility & Recovery'));
+    const compat = make('section', 'troubleshooting-compat');
+    compat.id = 'proCompatibilityCard';
+    compat.appendChild(make(
+      'p',
+      'pro-connectivity-help',
+      'Adjust these only when the defaults do not work with your hardware or network.',
+    ));
+    compat.appendChild(make('div', 'pro-compat-toggles tog-group'));
+    compat.appendChild(make('div', 'pro-compat-blocks'));
+    shell.appendChild(compat);
+
+    shell.appendChild(make('h3', 'troubleshooting-section-label', 'Debugging'));
+    const debugging = make('section', 'troubleshooting-debugging');
+    debugging.id = 'proDebuggingCard';
+    shell.appendChild(debugging);
+
     diagnosticsPane.replaceChildren(shell);
     logsPane.hidden = true;
+    return ensureTroubleshootingControls(diagnosticsPane);
+  }
+
+  function ensureTroubleshootingControls(pane) {
+    // Relocate the existing live nodes; their state stays whatever the
+    // configuration says, and moving them must never mark anything dirty.
+    // Basic-owned fields (enable_internet) are reclaimed by the Basic layout
+    // on mode switch; the advanced-only nodes simply stay here.
+    const connectivity = pane.querySelector('#proConnectivityCard');
+    const internet = document.querySelector('[data-field="enable_internet"]');
+    if (!connectivity || !internet) return false;
+    if (internet.parentElement !== connectivity) {
+      connectivity.insertBefore(internet, connectivity.firstChild);
+    }
+    if (!internet.classList.contains('pro-connectivity-field')) {
+      internet.classList.add('pro-connectivity-field');
+    }
+
+    const compat = pane.querySelector('#proCompatibilityCard');
+    if (compat) {
+      const toggles = compat.querySelector(':scope > .pro-compat-toggles');
+      const compatToggles = ['wifi_power_save_disable', 'usb_autosuspend_disable']
+        .map((id) => el(id)?.closest('label'))
+        .filter(Boolean);
+      compatToggles.forEach((labelNode) => appendIfNeeded(toggles, labelNode));
+      ensureChildOrder(toggles, compatToggles);
+
+      const blocks = compat.querySelector(':scope > .pro-compat-blocks');
+      const compatBlocks = ['nat_accel', 'bridge_mode', 'firewalld_enabled', 'optimized_no_virt']
+        .map((key) => document.querySelector(`[data-field="${key}"]`))
+        .filter(Boolean);
+      compatBlocks.forEach((node) => appendIfNeeded(blocks, node));
+      ensureChildOrder(blocks, compatBlocks);
+    }
+
+    const debugging = pane.querySelector('#proDebuggingCard');
+    const debugField = document.querySelector('[data-field="debug"]');
+    if (debugging && debugField) appendIfNeeded(debugging, debugField);
+
+    // Repair Network is a recovery action: it lives beside Restart Service
+    // in the Troubleshooting header, not in Step 5.
+    const recoveryActions = pane.querySelector('.troubleshooting-actions');
+    const repair = el('btnRepair');
+    if (recoveryActions && repair) {
+      setText(repair, 'Repair Network');
+      appendIfNeeded(recoveryActions, repair);
+    }
     return true;
   }
 
-  function initialize() {
-    enforceNavigation();
+  function ensureStatusObserver() {
+    const source = el('proServiceStateText') || el('pillTxt');
+    if (!source || source.dataset.proComposerObserved === '1') return;
+    source.dataset.proComposerObserved = '1';
+    statusObserver = new MutationObserver(() => {
+      if (!serviceIsRunning()) restartRequired = false;
+      syncHeaderStatus();
+      syncPrimaryAction();
+    });
+    statusObserver.observe(source, { childList: true, subtree: true, characterData: true });
+  }
+
+  function reconcile() {
+    reconcileQueued = false;
     try {
-      if (!guidedReady) guidedReady = buildGuidedSetup();
-      if (guidedReady && !qualityReady) qualityReady = buildConnectionQuality();
-      if (!troubleshootingReady) troubleshootingReady = buildTroubleshooting();
-      initialized = guidedReady && qualityReady && troubleshootingReady;
-      if (document.body) {
-        document.body.dataset.proGuidedStage = initialized
-          ? 'ready'
-          : guidedReady
-            ? 'guided-ready'
-            : 'waiting-for-base';
-        if (initialized) delete document.body.dataset.proGuidedError;
+      if (!isAdvancedMode()) {
+        restoreBasicPresentation();
+        return;
       }
-      return initialized;
+      enforceNavigation();
+      if (!prerequisitesReady()) {
+        setStage('waiting-for-base');
+        return;
+      }
+      const shell = ensureWorkflowShell();
+      if (!shell) {
+        setStage('waiting-for-base');
+        return;
+      }
+      const guidedReady = rehydrateWorkflow(shell);
+      const troubleshootingReady = ensureTroubleshooting();
+      const qualityReady = ensureConnectionQuality();
+      ensureStatusObserver();
+      if (guidedReady && qualityReady && troubleshootingReady) {
+        setStage('ready');
+      } else {
+        // A failed pass may leave no observable mutation behind, so the
+        // observer alone cannot guarantee another attempt.
+        setStage('composing');
+        scheduleComposeRetry();
+      }
     } catch (error) {
-      if (document.body) {
-        document.body.dataset.proGuidedStage = 'error';
-        document.body.dataset.proGuidedError = String(error && error.message ? error.message : error);
-      }
-      console.error('VRhotspot Pro workflow retrying after UI error.', error);
-      return false;
+      const message = String(error && error.message ? error.message : error);
+      setStage('error', message);
+      console.error('VRhotspot Pro composer failed.', error);
     }
   }
 
-  function resetRetryBudget() {
-    if (initialized) return;
-    retryCount = 0;
-    scheduleRetry();
+  function scheduleReconcile() {
+    if (reconcileQueued) return;
+    reconcileQueued = true;
+    window.setTimeout(reconcile, 0);
   }
 
-  function scheduleRetry() {
-    if (retryQueued || initialized || retryCount >= RETRY_LIMIT) return;
-    retryQueued = true;
-    retryTimer = window.setTimeout(() => {
-      retryQueued = false;
-      retryCount += 1;
-      if (initialize()) {
-        if (observer) observer.disconnect();
-        if (retryTimer) window.clearTimeout(retryTimer);
-        return;
-      }
-      scheduleRetry();
-    }, 100);
+  function scheduleComposeRetry() {
+    if (composeRetryTimer) return;
+    composeRetryTimer = window.setTimeout(() => {
+      composeRetryTimer = null;
+      scheduleReconcile();
+    }, 150);
   }
 
   function start() {
-    enforceNavigation();
-    if (initialize()) return;
-    observer = new MutationObserver((records) => {
-      if (records.some((record) => record.type === 'attributes')) retryCount = 0;
-      scheduleRetry();
-    });
+    const observer = new MutationObserver(scheduleReconcile);
     observer.observe(document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ['data-auth-state', 'data-ui-mode'],
     });
-    window.addEventListener('pageshow', resetRetryBudget);
-    window.addEventListener('load', resetRetryBudget, { once: true });
+    window.addEventListener('pageshow', scheduleReconcile);
+    window.addEventListener('load', scheduleReconcile, { once: true });
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) resetRetryBudget();
+      if (!document.hidden) scheduleReconcile();
     });
-    scheduleRetry();
+    scheduleReconcile();
   }
 
   if (document.readyState === 'loading') {

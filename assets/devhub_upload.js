@@ -273,12 +273,12 @@
   }
 })();
 
-(function loadPortalHotfixAssets() {
+(function loadPortalExtensionAssets() {
   'use strict';
 
   const assets = [
     '/assets/browser_session.js?v=139-session-hotfix',
-    '/assets/pro_guided_workflow.js?v=141-pro-guided-recovery',
+    '/assets/pro_guided_workflow.js?v=148-owned-cells-1',
   ];
   for (const src of assets) {
     const script = document.createElement('script');
@@ -288,291 +288,147 @@
   }
 })();
 
-(function polishProSetupDensity() {
+(function stabilizeProAdapterControl() {
   'use strict';
 
-  const RETRY_LIMIT = 200;
-  const PROFILE_COPY = {
-    btnApplyVrProfileUltra: {
-      value: 'ultra_low_latency',
-      description: 'Prioritizes the lowest possible response time for demanding VR streaming.',
-    },
-    btnApplyVrProfile: {
-      value: 'balanced',
-      description: 'Recommended default for a strong balance of responsiveness and stability.',
-    },
-    btnApplyVrProfileHigh: {
-      value: 'high_throughput',
-      description: 'Prioritizes sustained transfer speed for large or bandwidth-heavy workloads.',
-    },
-    btnApplyVrProfileStable: {
-      value: 'vr',
-      description: 'Favors connection consistency when the wireless environment is unpredictable.',
-    },
-  };
+  const STYLE_HREF = '/assets/pro_guided_authoritative.css?v=148-owned-cells-1';
+  let wrapped = false;
+  let reconcileQueued = false;
 
-  let attempts = 0;
-  let retryTimer = null;
-  let observer = null;
-
-  function el(id) {
-    return document.getElementById(id);
+  function isProMode() {
+    return document.body?.dataset.uiMode === 'advanced';
   }
 
-  function make(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
-    return node;
+  function adapterRecord(ifname) {
+    try {
+      if (typeof getAdapterByIfname === 'function') return getAdapterByIfname(ifname);
+    } catch {
+      // Adapter inventory can still be loading.
+    }
+    return null;
   }
 
-  function serviceState() {
-    const raw = String(el('proServiceStateText')?.textContent || el('pillTxt')?.textContent || 'Checking…').trim();
-    const value = raw.toLowerCase();
-    if (value.includes('error') || value.includes('failed') || value.includes('attention')) {
-      return { name: 'error', label: 'Needs attention' };
-    }
-    if (value.includes('starting') || value.includes('stopping') || value.includes('working') || value.includes('repair')) {
-      return { name: 'working', label: raw || 'Working…' };
-    }
-    if (value.includes('running') && !value.includes('not running')) {
-      return { name: 'running', label: 'Running' };
-    }
-    if (value.includes('stopped') || value.includes('inactive') || value.includes('not running')) {
-      return { name: 'stopped', label: 'Stopped' };
-    }
-    return { name: 'loading', label: raw || 'Checking…' };
+  function adapterKind(adapter, rawLabel) {
+    const bus = String(adapter?.bus || '').trim().toLowerCase();
+    const identity = `${bus} ${adapter?.name || ''} ${rawLabel || ''}`.toLowerCase();
+    if (bus === 'usb' || identity.includes('usb')) return 'usb';
+    if (['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)) return 'internal';
+    return adapter ? 'internal' : 'other';
   }
 
-  function syncHeaderStatus() {
-    const status = el('proHeaderStatus');
-    if (!status) return;
-    const state = serviceState();
-    status.dataset.state = state.name;
-    status.textContent = state.label;
-  }
+  function friendlyAdapterOptions() {
+    if (!isProMode()) return;
+    const select = document.getElementById('ap_adapter');
+    if (!select) return;
 
-  function compactHeader() {
-    const header = document.querySelector('#proGuidedWorkflow .pro-guided-header');
-    const saveState = el('proSaveState');
-    if (!header || !saveState) return false;
-    if (header.dataset.proDensityReady === '1') {
-      syncHeaderStatus();
-      return true;
-    }
-
-    const heading = header.querySelector(':scope > h2');
-    const summary = header.querySelector(':scope > p');
-    if (!heading || !summary) return false;
-
-    const copy = make('div', 'pro-guided-header-copy');
-    copy.append(heading, summary);
-    const meta = make('div', 'pro-guided-header-meta');
-    const status = make('div', 'pro-header-status', 'Checking…');
-    status.id = 'proHeaderStatus';
-    status.setAttribute('aria-live', 'polite');
-    meta.append(status, saveState);
-    header.replaceChildren(copy, meta);
-    header.dataset.proDensityReady = '1';
-
-    const source = el('proServiceStateText') || el('pillTxt');
-    if (source && source.dataset.proDensityObserved !== '1') {
-      source.dataset.proDensityObserved = '1';
-      const statusObserver = new MutationObserver(syncHeaderStatus);
-      statusObserver.observe(source, { childList: true, subtree: true, characterData: true });
-    }
-    syncHeaderStatus();
-    return true;
-  }
-
-  function compactAdapter() {
-    const field = document.querySelector('#proStepAdapter [data-field="ap_adapter"]');
-    const select = el('ap_adapter');
-    const rescan = el('btnReloadAdapters');
-    if (!field || !select || !rescan) return false;
-    if (field.dataset.proDensityReady === '1') return true;
-
-    field.classList.add('pro-adapter-field');
-    const recommended = el('btnUseRecommended');
-    if (recommended) {
-      recommended.hidden = true;
-      recommended.setAttribute('aria-hidden', 'true');
-    }
-
-    const row = make('div', 'pro-adapter-row');
-    const badge = make('span', 'pro-adapter-badge', 'Recommended');
-    badge.id = 'proAdapterRecommendedBadge';
-    const syncBadge = () => {
-      const preferred = String(select.dataset.recommended || '');
-      badge.hidden = !preferred || select.value !== preferred;
-    };
-
-    rescan.textContent = 'Rescan adapters';
-    rescan.classList.add('pro-adapter-rescan');
-    row.append(select, badge, rescan);
-
-    const hint = el('adapterHint');
-    const label = field.querySelector(':scope > label, :scope > .field-label-with-tip');
-    field.replaceChildren();
-    if (label) field.appendChild(label);
-    field.appendChild(row);
-    if (hint) field.appendChild(hint);
-
-    select.addEventListener('change', syncBadge);
-    const adapterObserver = new MutationObserver(syncBadge);
-    adapterObserver.observe(select, { childList: true, subtree: true, attributes: true });
-    field.dataset.proDensityReady = '1';
-    syncBadge();
-    return true;
-  }
-
-  function compactPerformance() {
-    const preset = document.querySelector('#proStepPerformance .pro-performance-picker');
-    const qosField = document.querySelector('[data-field="qos_preset"]');
-    const qos = el('qos_preset');
-    if (!preset || !qosField || !qos) return false;
-
-    qosField.hidden = true;
-    qosField.setAttribute('aria-hidden', 'true');
-    qosField.classList.add('pro-guided-hidden');
-    const hiddenControls = el('proGuidedHiddenControls');
-    if (hiddenControls && qosField.parentElement !== hiddenControls) hiddenControls.appendChild(qosField);
-
-    let description = el('proPerformanceDescription');
-    if (!description) {
-      description = make('p', 'pro-performance-description');
-      description.id = 'proPerformanceDescription';
-      preset.appendChild(description);
-    }
-
-    const buttons = Object.entries(PROFILE_COPY)
-      .map(([id, profile]) => [el(id), profile])
-      .filter(([button]) => !!button);
-
-    const syncSelection = () => {
-      const selected = String(qos.value || 'off');
-      let selectedCopy = 'Choose the performance behavior that best matches this hotspot.';
-      for (const [button, profile] of buttons) {
-        const active = selected === profile.value;
-        button.classList.toggle('is-selected', active);
-        button.setAttribute('aria-pressed', active ? 'true' : 'false');
-        if (active) selectedCopy = profile.description;
+    const counters = { usb: 0, internal: 0, other: 0 };
+    const recommended = String(select.dataset.recommended || '');
+    for (const option of Array.from(select.options)) {
+      const rawLabel = option.dataset.rawAdapterLabel || String(option.textContent || '').trim();
+      if (!option.dataset.rawAdapterLabel) option.dataset.rawAdapterLabel = rawLabel;
+      const adapter = adapterRecord(option.value);
+      const kind = adapterKind(adapter, rawLabel);
+      let label;
+      if (kind === 'usb') {
+        counters.usb += 1;
+        label = `USB Wi-Fi ${counters.usb}`;
+      } else if (kind === 'internal') {
+        label = `Internal Wi-Fi ${counters.internal}`;
+        counters.internal += 1;
+      } else {
+        counters.other += 1;
+        label = `Wi-Fi Adapter ${counters.other}`;
       }
-      description.textContent = selectedCopy;
+      if (option.value === recommended) label += ' (Recommended)';
+      // Idempotent writes: this runs from a childList observer, so an
+      // unconditional rewrite would observe itself and loop forever.
+      if (option.textContent !== label) option.textContent = label;
+      option.removeAttribute('title');
+    }
+  }
+
+  function installLoadAdaptersWrapper() {
+    if (wrapped) return true;
+    const original = typeof loadAdapters === 'function'
+      ? loadAdapters
+      : window.loadAdapters;
+    if (typeof original !== 'function') return false;
+
+    const wrappedLoadAdapters = async function wrappedLoadAdapters(...args) {
+      const result = await original.apply(this, args);
+      friendlyAdapterOptions();
+      return result;
     };
+    wrappedLoadAdapters.__vrhotspotFriendlyAdapters = true;
+    window.loadAdapters = wrappedLoadAdapters;
+    try {
+      loadAdapters = wrappedLoadAdapters;
+    } catch {
+      // window assignment is sufficient in a standard browser global scope.
+    }
+    wrapped = true;
+    return true;
+  }
 
-    if (preset.dataset.proDensityReady !== '1') {
-      preset.dataset.proDensityReady = '1';
-      qos.addEventListener('change', syncSelection);
-      for (const [button] of buttons) {
-        button.addEventListener('click', () => window.setTimeout(syncSelection, 0));
+  function ensureCurrentStyles() {
+    let link = document.querySelector('link[data-pro-adapter-controls]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.dataset.proAdapterControls = '1';
+      document.head.appendChild(link);
+    }
+    if (!link.href.includes('148-owned-cells-1')) link.href = STYLE_HREF;
+  }
+
+  function decorate() {
+    installLoadAdaptersWrapper();
+    ensureCurrentStyles();
+
+    if (!isProMode()) return;
+
+    friendlyAdapterOptions();
+
+    const info = document.getElementById('proAdapterInfo');
+    if (info) {
+      const expanded = info.getAttribute('aria-expanded') === 'true';
+      // Idempotent writes: an unconditional replaceChildren() is observed by
+      // this script's own childList observer and loops the decorators forever.
+      if (info.textContent !== 'Adapter details') {
+        info.replaceChildren(document.createTextNode('Adapter details'));
       }
+      info.classList.remove('tip');
+      info.removeAttribute('data-tip');
+      const action = expanded ? 'Hide adapter details' : 'Show adapter details';
+      if (info.title !== action) info.title = action;
+      if (info.getAttribute('aria-label') !== action) info.setAttribute('aria-label', action);
     }
-    syncSelection();
-    return true;
   }
 
-  function compactPassword() {
-    const field = document.querySelector('#proStepHotspot [data-field="wpa2_passphrase"]');
-    const input = el('wpa2_passphrase');
-    const reveal = el('btnRevealPass');
-    const qr = el('btnShowQr');
-    if (!field || !input || !reveal || !qr) return false;
-    if (field.dataset.proDensityReady === '1') return true;
-
-    const label = field.querySelector('label');
-    const hint = el('passHint');
-    if (label) label.textContent = 'Password';
-
-    reveal.type = 'button';
-    reveal.classList.add('icon-only');
-    reveal.title = 'Show or hide password';
-    reveal.setAttribute('aria-label', 'Show or hide password');
-
-    qr.type = 'button';
-    qr.textContent = 'QR';
-    qr.className = 'btn icon-only';
-    qr.title = 'Show QR code';
-    qr.setAttribute('aria-label', 'Show QR code');
-
-    const row = make('div', 'pro-password-row');
-    row.append(input, reveal, qr);
-    field.replaceChildren();
-    if (label) field.appendChild(label);
-    field.appendChild(row);
-    if (hint) {
-      hint.classList.add('pro-password-hint');
-      field.appendChild(hint);
-    }
-    field.classList.add('pro-password-field');
-    field.dataset.proDensityReady = '1';
-    return true;
+  function reconcile() {
+    reconcileQueued = false;
+    decorate();
   }
 
-  function compactHotspotStep() {
-    const slot = el('proStepHotspot');
-    if (!slot) return false;
-    const content = slot.closest('.pro-guided-content');
-    const title = content?.querySelector('.pro-guided-title');
-    const help = content?.querySelector('.pro-guided-help');
-    if (title) title.textContent = 'Hotspot name and password';
-    if (help) help.textContent = 'Choose the network name, password, and whether connected devices can use this computer’s internet connection.';
-
-    const ssid = slot.querySelector('[data-field="ssid"]');
-    if (ssid) ssid.classList.add('pro-hotspot-name-field');
-    const internet = slot.querySelector('[data-field="enable_internet"] .tog');
-    if (internet) {
-      const checkbox = internet.querySelector('input');
-      if (checkbox) internet.replaceChildren(checkbox, document.createTextNode(' Share internet with connected devices'));
-    }
-    return compactPassword();
-  }
-
-  function removeLegacyEssentials() {
-    document.querySelectorAll('.pro-config-essentials').forEach((node) => node.remove());
-    document.querySelectorAll('[data-field="qos_preset"]').forEach((node) => {
-      node.hidden = true;
-      node.setAttribute('aria-hidden', 'true');
-    });
-  }
-
-  function applyDensityPass() {
-    const workflow = el('proGuidedWorkflow');
-    if (!workflow) return false;
-    removeLegacyEssentials();
-    const ready = [
-      compactHeader(),
-      compactAdapter(),
-      compactPerformance(),
-      compactHotspotStep(),
-    ].every(Boolean);
-    if (ready) workflow.dataset.proDensityReady = '1';
-    return ready;
-  }
-
-  function retry() {
-    if (applyDensityPass()) {
-      if (observer) observer.disconnect();
-      if (retryTimer) window.clearTimeout(retryTimer);
-      return;
-    }
-    attempts += 1;
-    if (attempts >= RETRY_LIMIT) return;
-    retryTimer = window.setTimeout(retry, 75);
+  function schedule() {
+    if (reconcileQueued) return;
+    reconcileQueued = true;
+    window.setTimeout(reconcile, 0);
   }
 
   function start() {
-    if (applyDensityPass()) return;
-    observer = new MutationObserver(() => {
-      if (applyDensityPass() && observer) observer.disconnect();
+    installLoadAdaptersWrapper();
+    ensureCurrentStyles();
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-ui-mode', 'aria-expanded'],
     });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    retry();
+    window.addEventListener('pageshow', schedule);
+    schedule();
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', start, { once: true });
-  } else {
-    start();
-  }
+  start();
 })();

@@ -9,28 +9,40 @@ ROOT = Path(__file__).resolve().parents[1]
 LOADER = ROOT / "assets" / "devhub_upload.js"
 SOURCE = ROOT / "assets" / "pro_guided_workflow.js"
 STYLE = ROOT / "assets" / "pro_guided_workflow.css"
+OVERRIDE_STYLE = ROOT / "assets" / "pro_guided_authoritative.css"
 SESSION = ROOT / "assets" / "browser_session.js"
+DOM_TEST = ROOT / "tests" / "js" / "pro_guided_mode_transition.test.mjs"
+FULL_DOM_TEST = ROOT / "tests" / "js" / "pro_guided_full_portal_integration.test.mjs"
+CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 
-def test_pro_runtime_is_loaded_as_versioned_dedicated_assets() -> None:
+def test_pro_runtime_is_loaded_as_versioned_authoritative_asset() -> None:
     source = LOADER.read_text(encoding="utf-8")
 
     assert "/assets/browser_session.js?v=139-session-hotfix" in source
-    assert "/assets/pro_guided_workflow.js?v=141-pro-guided-recovery" in source
+    assert "/assets/pro_guided_workflow.js?v=148-owned-cells-1" in source
+    assert "pro_guided_readiness.js" not in source
     assert "script.async = false" in source
+    assert "polishProSetupDensity" not in source
 
 
-def test_pro_setup_is_one_guided_five_step_workflow() -> None:
+def test_pro_setup_is_one_authoritative_five_step_workflow() -> None:
     source = SOURCE.read_text(encoding="utf-8")
 
     assert "buildProGuidedWorkflow" in source
-    for step_id in (
-        "proStepAdapter",
-        "proStepPerformance",
-        "proStepHotspot",
-        "proStepAdvanced",
-        "proStepAction",
+    assert "window.VRHOTSPOT_PRO_COMPOSER = 'authoritative-v1'" in source
+    assert "/assets/pro_guided_authoritative.css?v=148-owned-cells-1" in source
+    for number, step_id in enumerate(
+        (
+            "proStepAdapter",
+            "proStepPerformance",
+            "proStepHotspot",
+            "proStepAdvanced",
+            "proStepAction",
+        ),
+        start=1,
     ):
+        assert f"step({number}," in source
         assert step_id in source
     assert "Choose Wi-Fi adapter" in source
     assert "Choose performance mode" in source
@@ -39,23 +51,244 @@ def test_pro_setup_is_one_guided_five_step_workflow() -> None:
     assert "Start hotspot" in source
 
 
-def test_pro_setup_removes_sticky_save_bar_and_autosaves() -> None:
+def test_pro_composer_waits_for_pro_mode_and_restores_basic_presentation() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "document.body?.dataset.uiMode === ADVANCED_MODE" in source
+    assert "if (!isAdvancedMode())" in source
+    assert "restoreBasicPresentation()" in source
+    assert "waiting-for-pro" in source
+    assert "internalHomes" in source
+    assert "restoreInternalNode" in source
+    assert "pro-runtime-wrapper" in source
+    assert "adapterOptionsObserver.disconnect()" in source
+    assert "delete document.body.dataset.proBand" in source
+    assert "RETRY_LIMIT" not in source
+
+
+def test_pro_composer_resolves_detached_steps_inside_its_shell() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "shell?.querySelector(`#${id}`)" in source
+    assert "missing guided slot" in source
+    for step_id in (
+        "proStepAdapter",
+        "proStepPerformance",
+        "proStepHotspot",
+        "proStepAdvanced",
+        "proStepAction",
+    ):
+        assert f"guidedSlot(shell, '{step_id}')" in source
+    assert "el('proStepAdapter').appendChild" not in source
+    assert "el('proStepPerformance').appendChild" not in source
+    assert "el('proStepHotspot').appendChild" not in source
+    assert "el('proStepAdvanced').appendChild" not in source
+
+
+def test_step_three_contains_the_complete_connection_setup() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8") + OVERRIDE_STYLE.read_text(encoding="utf-8")
+
+    for field in (
+        "ssid",
+        "wpa2_passphrase",
+        "band_preference",
+        "ap_security",
+        "country",
+        "enable_internet",
+    ):
+        assert f"'{field}'" in source
+    assert "hotspot name, password, band, security mode, and country" in source
+    # Internet sharing is an advanced recovery option under Troubleshooting >
+    # Connectivity; Step 3 composes only the core connection fields.
+    assert "STEP3_FIELDS = CONNECTION_FIELDS.filter((key) => key !== 'enable_internet')" in source
+    assert "proConnectivityCard" in source
+    assert "Disable this only when you want an isolated local hotspot without internet access." in source
+    assert ".pro-hotspot-fields" in style
+    assert "repeat(6, minmax(0, 1fr))" in style
+    assert "[data-field=\"ssid\"]" in style
+    assert "[data-field=\"wpa2_passphrase\"]" in style
+    assert "#proConnectivityCard" in style
+
+
+def test_step_four_exposes_detailed_wireless_network_and_system_groups() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8") + OVERRIDE_STYLE.read_text(encoding="utf-8")
+
+    assert "pro-guided-advanced-groups" in source
+    assert ".pro-guided-advanced-groups" in style
+    # The organized sections carry no intro copy; every field label instead
+    # gets the shared accessible info tip with concise help text.
+    assert "Channels, width, radio timing" not in source
+    assert "Gateway, DHCP, DNS." not in source
+    assert "Startup behavior and performance tuning" not in source
+    assert "ADVANCED_FIELD_TIPS" in source
+    assert "ensureAdvancedFieldTips" in source
+    assert "Choose the primary 5 GHz Wi-Fi channel." in source
+    assert "Set the hotspot gateway IP address used by connected devices." in source
+    assert "Reduce interrupt frequency to improve efficiency on supported hardware." in source
+    assert ".pro-advanced-group-help" not in style
+    # Step 4 is a clean two-column form whose live values mirror applied
+    # state: no header summary chips, and compatibility/recovery controls
+    # live under Troubleshooting. Step 2 renders no generic filler line.
+    assert "ADVANCED_LAYOUT" in source
+    assert "pro-advanced-toggles" in source
+    assert "proCompatibilityCard" in source
+    assert "proDebuggingCard" in source
+    assert "ensureTroubleshootingControls" in source
+    assert "advancedSummaryText" not in source
+    assert ".pro-advanced-toggles" in style
+    assert "#proCompatibilityCard" in style
+    assert ".pro-config-summary" not in style
+    assert "Choose the performance behavior that best matches this hotspot." not in source
+
+
+def test_step_five_keeps_start_save_restart_and_repair_actions() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8") + OVERRIDE_STYLE.read_text(encoding="utf-8")
+
+    for control in ("btnStart", "btnSaveConfig", "btnSaveRestart", "btnRepair"):
+        assert control in source
+    assert "Save Changes" in source
+    assert "Apply Changes & Restart" in source
+    # Step 5 exposes only the primary Start/Stop control: Pro autosaves, so
+    # both save controls stay live but parked in hidden staging for the apply
+    # flow, and Repair Network lives in the Troubleshooting recovery actions.
+    assert "pro-guided-hidden-staging" in source
+    assert "applyHiddenStagedControl" in source
+    assert "ensureChildOrder(staging, [save, saveRestart])" in source
+    assert "Repair Network" in source
+    assert ".pro-guided-hidden-staging" in style
+    assert ".pro-guided-save-actions" not in style
+    assert ".pro-guided-secondary-actions" not in style
+
+
+def test_adapter_and_password_compaction_are_reversible() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8") + OVERRIDE_STYLE.read_text(encoding="utf-8")
+
+    assert "rememberInternalHome(select)" in source
+    assert "rememberInternalHome(recommended)" in source
+    assert "rememberInternalHome(rescan)" in source
+    assert "rememberInternalHome(input)" in source
+    assert "rememberInternalHome(reveal)" in source
+    assert "rememberInternalHome(qr)" in source
+    # The Recommended button is redundant in both modes and stays hidden.
+    assert "applyRecommendedButtonState" in source
+    assert "recommended.hidden = true" in source
+    assert "Rescan adapters" in source
+    assert "USB Wi-Fi ${counters.usb}" in source
+    assert "Internal Wi-Fi ${counters.internal}" in source
+    assert "adapterTechnicalSummary" in source
+    assert "adapterDetailsIcon" in source
+    assert "proAdapterInfo" in source
+    assert "proAdapterDetails" in source
+    assert "Show adapter details" in source
+    assert "Hide adapter details" in source
+    assert "info.removeAttribute('data-tip')" in source
+    assert "option.removeAttribute('title')" in source
+    assert "adapterOptionsObserver = new MutationObserver" in source
+    assert "adapterOptionsObserver.observe(select" in source
+    assert "ensureChildOrder(row, [cell, reveal, qr])" in source
+    # The input lives in an application-owned grid cell so late third-party
+    # injections (password managers) can never add grid tracks or trigger a
+    # DOM fight over a wrapped input.
+    assert "pro-password-input-cell" in source
+    assert "if (!cell.contains(input)) cell.appendChild(input)" in source
+    assert ".pro-adapter-row" in style
+    assert ".pro-password-row" in style
+    assert ".pro-password-input-cell" in style
+    assert "grid-auto-rows: 0" in style
+    assert "grid-auto-columns: 0" in style
+
+
+def test_adapter_labels_are_normalized_before_load_completes() -> None:
+    loader = LOADER.read_text(encoding="utf-8")
+    style = OVERRIDE_STYLE.read_text(encoding="utf-8")
+
+    assert "stabilizeProAdapterControl" in loader
+    assert "installLoadAdaptersWrapper" in loader
+    assert "wrappedLoadAdapters" in loader
+    assert "const result = await original.apply(this, args)" in loader
+    assert "friendlyAdapterOptions();" in loader
+    assert "pro-adapter-selected-label" not in loader
+    assert "optionsObserver" not in loader
+    assert "Adapter details" in loader
+    # The authoritative composer is the sole Pro/Basic visibility owner for
+    # the Recommended button; the loader must no longer touch it at all.
+    assert "btnUseRecommended" not in loader
+    assert "148-owned-cells-1" in loader
+    assert "#btnUseRecommended" in style
+    assert "display: none !important" in style
+    assert ".pro-adapter-selected-label" in style
+    assert "color: transparent" not in style
+
+
+def test_six_ghz_adapter_notice_is_contextual() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = OVERRIDE_STYLE.read_text(encoding="utf-8")
+
+    assert "syncAdapterBandNotice" in source
+    assert "document.body.dataset.proBand = band" in source
+    assert "if (band !== '6ghz')" in source
+    assert "hint.hidden = true" in source
+    assert "maybeAutoPickAdapterForBand" in source
+    assert ':not([data-pro-band="6ghz"]) #adapterHint' in style
+
+
+def test_step_guidance_lives_on_numbered_badges_not_gray_paragraphs() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     style = STYLE.read_text(encoding="utf-8")
 
-    assert ".pro-configuration > .settings-header" in style
-    assert "display: none !important" in style
-    assert "scheduleSave" in source
-    assert "saveConfiguration" in source
-    assert "btnSaveConfig" in source
-    assert "AUTOSAVE_DELAY_MS" in source
-    assert "Apply Changes & Restart" in source
-    assert "btnSaveRestart" in source
+    # Persistent gray step descriptions are gone; the numbered badge carries
+    # the step-purpose guidance through the shared attachStepHelp component
+    # (with an attribute-identical fallback for composer-only fixtures).
+    assert "function applyStepBadgeHelp" in source
+    assert "attachStepHelp(badge, text)" in source
+    assert "make('p', 'pro-guided-help'" not in source
+    assert "badge.setAttribute('aria-hidden', 'true')" not in source
+    assert ".pro-guided-help {" not in style
+    # Exact step guidance copy for the Pro badges.
+    assert (
+        "Select the Wi-Fi adapter that will create the hotspot. "
+        "The recommended USB adapter normally provides the best VR performance." in source
+    )
+    assert (
+        "Choose the latency, throughput, or stability profile that best matches "
+        "the hotspot\\'s workload." in source
+    )
+    assert "Set the hotspot name, password, band, security mode, and country." in source
+    assert (
+        "Adjust wireless channels, network addressing, and performance behavior. "
+        "The recommended defaults are appropriate for most installations." in source
+    )
+    assert (
+        "Start or stop the hotspot. When autosaved changes require a restart, "
+        "this action becomes Apply Changes & Restart." in source
+    )
+    # Old persistent descriptions may not return in any form.
+    assert "Use Recommended for the best available adapter" not in source
+    assert "Choose the tradeoff that best matches latency" not in source
+    assert "Review detailed Wireless, Network, and System" not in source
+    assert "Review pending changes, start or stop the hotspot" not in source
 
 
-def test_pro_setup_preserves_order_and_dependencies() -> None:
+def test_legacy_density_pass_is_removed_and_defensively_neutralized() -> None:
+    loader = LOADER.read_text(encoding="utf-8")
     source = SOURCE.read_text(encoding="utf-8")
 
+    assert "polishProSetupDensity" not in loader
+    assert "proDensityReady" in source
+    assert "syncStepCopy" in source
+
+
+def test_autosave_dependencies_and_status_feedback_are_preserved() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "AUTOSAVE_DELAY_MS" in source
+    assert "scheduleSave" in source
+    assert "saveConfiguration" in source
+    assert "waitUntilSaved" in source
     assert "channel_auto_select" in source
     assert "channel5.disabled" in source
     assert "channel6.disabled" in source
@@ -64,143 +297,43 @@ def test_pro_setup_preserves_order_and_dependencies() -> None:
     assert "bridge_uplink" in source
 
 
-def test_navigation_cleanup_runs_before_optional_dom_transforms() -> None:
+def test_connection_quality_and_troubleshooting_remain_integrated() -> None:
     source = SOURCE.read_text(encoding="utf-8")
-
-    enforce = source.index("function enforceNavigation()")
-    initialize = source.index("function initialize()")
-    first_call = source.index("enforceNavigation();", initialize)
-    guided_call = source.index("buildGuidedSetup()", initialize)
-
-    assert enforce < initialize
-    assert first_call < guided_call
-    assert "RETRY_LIMIT" in source
-    assert "new MutationObserver((records) =>" in source
-    assert "catch (error)" in source
-
-
-def test_guided_builder_recovers_from_post_login_base_layout() -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-
-    assert "function guidedPrerequisitesReady()" in source
-    assert "proHotspotConfiguration" in source
-    assert "pro-service-card" in source
-    assert "configuration.querySelector('.preset-bar')" in source
-    assert "requiredIds.every" in source
-    assert "oldShell" not in source
-    assert "RETRY_LIMIT = 600" in source
-    assert "resetRetryBudget" in source
-    assert "data-auth-state" in source
-    assert "data-ui-mode" in source
-    assert "pageshow" in source
-    assert "visibilitychange" in source
-
-
-def test_guided_runtime_exposes_stage_and_error_state() -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-
-    assert "dataset.proGuidedStage" in source
-    assert "waiting-for-base" in source
-    assert "guided-ready" in source
-    assert "dataset.proGuidedError" in source
-    assert "/assets/pro_guided_workflow.css?v=141-pro-guided-recovery" in source
-
-
-def test_connection_quality_is_pro_only_and_not_a_sidebar_tab() -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-    style = STYLE.read_text(encoding="utf-8")
 
     assert "Connection Quality" in source
-    assert "buildConnectionQuality" in source
-    assert '.nav-item[data-tab="telemetry"]' in source
-    assert "?.remove()" in source
-    assert "#tab-telemetry" in style
+    assert "ensureConnectionQuality" in source
     assert "View detailed charts and client measurements" in source
-    assert "Measure connection quality" in source
-
-
-def test_diagnostics_logs_and_support_are_one_troubleshooting_page() -> None:
-    source = SOURCE.read_text(encoding="utf-8")
-
-    assert "buildTroubleshooting" in source
-    assert "Troubleshooting" in source
-    assert "tab-troubleshooting" in source
+    assert "ensureTroubleshooting" in source
     assert "System Health & Diagnostic Checks" in source
     assert "Runtime Details, Logs & Support" in source
-    assert "logsNav?.remove()" in source
-    for control in ("btnRepair", "btnRestart", "btnRefreshPreflight"):
-        assert control in source
+    assert "tab-troubleshooting" in source
 
 
-def test_setup_navigation_uses_vector_wifi_icon_not_emoji() -> None:
-    source = SOURCE.read_text(encoding="utf-8")
+def test_real_dom_mode_transition_regressions_are_wired_into_ci() -> None:
+    synthetic_source = DOM_TEST.read_text(encoding="utf-8")
+    full_source = FULL_DOM_TEST.read_text(encoding="utf-8")
+    ci = CI.read_text(encoding="utf-8")
 
-    assert "pro-nav-svg" in source
-    assert "replaceNav(overviewNav, 'wifi', 'Set Up Hotspot')" in source
-    assert "📡" not in source
-
-
-def test_density_pass_compacts_header_and_uses_horizontal_step_space() -> None:
-    loader = LOADER.read_text(encoding="utf-8")
-    style = STYLE.read_text(encoding="utf-8")
-
-    assert "polishProSetupDensity" in loader
-    assert "pro-guided-header-meta" in loader
-    assert "proHeaderStatus" in loader
-    assert "width: min(1280px, 100%)" in style
-    assert "grid-template-columns: minmax(190px, 238px) minmax(0, 1fr)" in style
-    assert "padding: 14px 18px" in style
-
-
-def test_density_pass_removes_legacy_essentials_and_duplicate_qos_ui() -> None:
-    loader = LOADER.read_text(encoding="utf-8")
-    style = STYLE.read_text(encoding="utf-8")
-
-    assert "removeLegacyEssentials" in loader
-    assert "document.querySelectorAll('.pro-config-essentials')" in loader
-    assert "qosField.hidden = true" in loader
-    assert "hiddenControls.appendChild(qosField)" in loader
-    assert '[data-field="qos_preset"]' in style
-    assert ".pro-config-essentials" in style
+    assert "JSDOM" in synthetic_source
+    assert "Basic and Pro transitions" in synthetic_source
+    assert "for (let cycle = 0; cycle < 3" in synthetic_source
+    assert "assertProLayout" in synthetic_source
+    assert "assets/index.html" in full_source
+    assert "assets/ui.js" in full_source
+    assert "assets/field_visibility.js" in full_source
+    assert "assets/basic_guided.js" in full_source
+    assert "assets/pro_guided_readiness.js" not in full_source
+    assert "for (let cycle = 0; cycle < 3" in full_source
+    assert "jsdom@24.1.3" in ci
+    assert "--test-force-exit" in ci
+    assert "tests/js/pro_guided_mode_transition.test.mjs" in ci
+    assert "tests/js/pro_guided_full_portal_integration.test.mjs" in ci
 
 
-def test_performance_mode_is_the_only_visible_profile_control() -> None:
-    loader = LOADER.read_text(encoding="utf-8")
-    style = STYLE.read_text(encoding="utf-8")
-
-    assert "PROFILE_COPY" in loader
-    assert "proPerformanceDescription" in loader
-    assert "aria-pressed" in loader
-    assert "is-selected" in loader
-    assert ".pro-performance-picker .btn-group" in style
-    assert "repeat(4, minmax(0, 1fr))" in style
-
-
-def test_pro_password_row_matches_basic_three_control_pattern() -> None:
-    loader = LOADER.read_text(encoding="utf-8")
-    style = STYLE.read_text(encoding="utf-8")
-
-    assert "function compactPassword()" in loader
-    assert "row.append(input, reveal, qr)" in loader
-    assert "qr.textContent = 'QR'" in loader
-    assert "Show or hide password" in loader
-    assert ".pro-password-row" in style
-    assert "grid-template-columns: minmax(0, 1fr) 50px 50px" in style
-    assert "height: 50px" in style
-
-
-def test_adapter_controls_are_one_compact_row() -> None:
-    loader = LOADER.read_text(encoding="utf-8")
-    style = STYLE.read_text(encoding="utf-8")
-
-    assert "proAdapterRecommendedBadge" in loader
-    assert "Rescan adapters" in loader
-    assert "recommended.hidden = true" in loader
-    assert ".pro-adapter-row" in style
-    assert "grid-template-columns: minmax(0, 1fr) auto auto" in style
-
-
-@pytest.mark.parametrize("asset", [LOADER, SOURCE, SESSION])
+@pytest.mark.parametrize(
+    "asset",
+    [LOADER, SOURCE, SESSION, DOM_TEST, FULL_DOM_TEST],
+)
 def test_portal_extensions_parse_with_node(asset: Path) -> None:
     node = shutil.which("node")
     if node is None:
