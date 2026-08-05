@@ -1,4 +1,6 @@
 /* Developer Hub: VRhotspot-only headset setup */
+/* The wizard is appended to document.body, so these selectors intentionally
+   remain independent of the Developer Hub panel hierarchy. */
 
 body.devhub-modal-open {
   overflow: hidden;
