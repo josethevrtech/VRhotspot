@@ -48,7 +48,7 @@ def test_hotspot_precondition_is_outside_five_step_wizard() -> None:
     source = WIZARD_JS.read_text(encoding="utf-8")
 
     assert "Start VRhotspot first" in source
-    assert "Developer Hub will not enable wireless ADB through another Wi-Fi network." in source
+    assert "Developer Hub will never enable wireless ADB through another Wi-Fi network." in source
     assert "startHotspot(null, 'Developer Hub')" in source
     assert "waitForRunning(30000)" in source
     assert "Open Hotspot Setup" in source
@@ -107,7 +107,7 @@ def test_tools_actions_follow_structured_ownership_state() -> None:
         "Managed ADB needs repair",
     ):
         assert label in source
-    assert "const remove = el('devhubRemoveTools')" in source
+    assert "const remove = bindToolsRemoveButton()" in source
     assert "model.source === 'system'" in source
     assert "remove.dataset.toolsSource = 'system'" in source
     assert "window.confirm" in source
