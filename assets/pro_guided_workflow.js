@@ -144,14 +144,31 @@
     const section = make('section', 'pro-guided-step');
     section.dataset.step = String(number);
     const badge = make('span', 'pro-guided-number', String(number));
-    badge.setAttribute('aria-hidden', 'true');
+    applyStepBadgeHelp(badge, help);
     const content = make('div', 'pro-guided-content');
-    content.append(make('h3', 'pro-guided-title', title), make('p', 'pro-guided-help', help));
+    content.append(make('h3', 'pro-guided-title', title));
     const slot = make('div', 'pro-guided-slot');
     slot.id = id;
     content.appendChild(slot);
     section.append(badge, content);
     return section;
+  }
+
+  function applyStepBadgeHelp(badge, text) {
+    // Step-purpose guidance lives on the numbered badge via the shared
+    // floating-tooltip component. attachStepHelp is the shared writer; the
+    // fallback keeps composer-only fixtures functional with the same
+    // attribute contract. Every write is guarded for reconcile quietness.
+    if (!badge || !text) return;
+    if (typeof attachStepHelp === 'function') {
+      attachStepHelp(badge, text);
+      return;
+    }
+    if (!badge.classList.contains('step-help-badge')) badge.classList.add('step-help-badge');
+    if (badge.getAttribute('data-tip') !== text) badge.setAttribute('data-tip', text);
+    if (badge.getAttribute('aria-label') !== text) badge.setAttribute('aria-label', text);
+    if (badge.getAttribute('tabindex') !== '0') badge.setAttribute('tabindex', '0');
+    if (badge.hasAttribute('aria-hidden')) badge.removeAttribute('aria-hidden');
   }
 
   function guidedSlot(shell, id) {
@@ -432,11 +449,11 @@
 
     const steps = make('div', 'pro-guided-steps');
     steps.append(
-      step(1, 'Choose Wi-Fi adapter', 'Use Recommended for the best available adapter, or rescan after connecting new hardware.', 'proStepAdapter'),
-      step(2, 'Choose performance mode', 'Choose the tradeoff that best matches latency, throughput, balance, or stability.', 'proStepPerformance'),
-      step(3, 'Configure hotspot', 'Set the hotspot name, password, band, security, and country.', 'proStepHotspot'),
-      step(4, 'Fine-tune hotspot', 'Review detailed Wireless, Network, and System & Performance options or keep the recommended defaults.', 'proStepAdvanced'),
-      step(5, 'Start hotspot', 'Review pending changes, start or stop the hotspot, save safely, or repair the network.', 'proStepAction'),
+      step(1, 'Choose Wi-Fi adapter', 'Select the Wi-Fi adapter that will create the hotspot. The recommended USB adapter normally provides the best VR performance.', 'proStepAdapter'),
+      step(2, 'Choose performance mode', 'Choose the latency, throughput, or stability profile that best matches the hotspot\'s workload.', 'proStepPerformance'),
+      step(3, 'Configure hotspot', 'Set the hotspot name, password, band, security mode, and country.', 'proStepHotspot'),
+      step(4, 'Fine-tune hotspot', 'Adjust wireless channels, network addressing, and performance behavior. The recommended defaults are appropriate for most installations.', 'proStepAdvanced'),
+      step(5, 'Start hotspot', 'Start or stop the hotspot. When autosaved changes require a restart, this action becomes Apply Changes & Restart.', 'proStepAction'),
     );
     card.append(header, steps);
 
@@ -456,29 +473,31 @@
     const copy = {
       proStepAdapter: [
         'Choose Wi-Fi adapter',
-        'Use Recommended for the best available adapter, or rescan after connecting new hardware.',
+        'Select the Wi-Fi adapter that will create the hotspot. The recommended USB adapter normally provides the best VR performance.',
       ],
       proStepPerformance: [
         'Choose performance mode',
-        'Choose the tradeoff that best matches latency, throughput, balance, or stability.',
+        'Choose the latency, throughput, or stability profile that best matches the hotspot\'s workload.',
       ],
       proStepHotspot: [
         'Configure hotspot',
-        'Set the hotspot name, password, band, security, and country.',
+        'Set the hotspot name, password, band, security mode, and country.',
       ],
       proStepAdvanced: [
         'Fine-tune hotspot',
-        'Review detailed Wireless, Network, and System & Performance options or keep the recommended defaults.',
+        'Adjust wireless channels, network addressing, and performance behavior. The recommended defaults are appropriate for most installations.',
       ],
       proStepAction: [
         'Start hotspot',
-        'Review pending changes, start or stop the hotspot, save safely, or repair the network.',
+        'Start or stop the hotspot. When autosaved changes require a restart, this action becomes Apply Changes & Restart.',
       ],
     };
     for (const [id, [title, help]] of Object.entries(copy)) {
-      const content = guidedSlot(shell, id).closest('.pro-guided-content');
-      setText(content?.querySelector('.pro-guided-title'), title);
-      setText(content?.querySelector('.pro-guided-help'), help);
+      const section = guidedSlot(shell, id).closest('.pro-guided-step');
+      setText(section?.querySelector('.pro-guided-title'), title);
+      const staleHelp = section?.querySelector('.pro-guided-help');
+      if (staleHelp) staleHelp.remove();
+      applyStepBadgeHelp(section?.querySelector('.pro-guided-number'), help);
     }
   }
 

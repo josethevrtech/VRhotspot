@@ -390,9 +390,10 @@ def test_step_four_field_tips_and_icon_sizing(pro_page):
                     boxSizing: cs.boxSizing, transform: cs.transform, zoom: cs.zoom};
         }).filter(Boolean)"""
     )
-    assert basic_tips, "no visible info icon found in Basic mode"
-    # Every Basic icon must match the Pro Step 3 icon exactly, not merely be
-    # numerically close: same box, glyph metrics, and no scaling.
+    # Basic no longer renders heading info icons (step guidance moved to the
+    # numbered badges), so zero visible icons is acceptable; any icon that is
+    # visible must still match the Pro Step 3 icon exactly - same box, glyph
+    # metrics, and no scaling.
     reference = {"w": 16.0, "h": 16.0, "font": "11px", "lineHeight": "11px",
                  "padding": "0px", "border": "1px", "boxSizing": "border-box"}
     for tip in basic_tips + [{**t, "cy": 0} for t in [step3_metrics]]:
@@ -773,17 +774,8 @@ def test_qr_glyph_and_privacy_shield(pro_page):
 
 
 def test_basic_polish_icons_profiles_password(pro_page):
-    """Basic uses the shared Pro icon component, uppercase profile labels,
-    and discloses no password state."""
-    pro_ref = pro_page.evaluate(
-        """() => {
-            const tip = document.querySelector('[data-field="band_preference"] .tip');
-            const cs = getComputedStyle(tip);
-            return {glyph: tip.textContent, font: cs.fontSize, weight: cs.fontWeight,
-                    lh: cs.lineHeight, w: tip.getBoundingClientRect().width,
-                    h: tip.getBoundingClientRect().height, holder: tip.parentElement.className};
-        }"""
-    )
+    """Basic carries step guidance on the numbered badges, uppercase profile
+    labels, and discloses no password state."""
     pro_page.evaluate(
         """() => {
             const t = document.getElementById('uiModeToggle');
@@ -796,19 +788,20 @@ def test_basic_polish_icons_profiles_password(pro_page):
 
     basic = pro_page.evaluate(
         """() => {
-            const tips = Array.from(document.querySelectorAll(
-                '.basic-guided-step-heading .tip')).map((tip) => {
-                const cs = getComputedStyle(tip);
-                const r = tip.getBoundingClientRect();
-                const label = tip.closest('.basic-guided-step-heading')
-                    .querySelector('h3').getBoundingClientRect();
-                return {glyph: tip.textContent, font: cs.fontSize, weight: cs.fontWeight,
-                        lh: cs.lineHeight, w: r.width, h: r.height,
-                        holder: tip.parentElement.className,
-                        centerDelta: Math.abs((r.top + r.height / 2)
-                            - (label.top + label.height / 2)),
-                        legacyClass: tip.classList.contains('basic-guided-tip')};
-            });
+            const headingTips = document.querySelectorAll(
+                '.basic-guided-step-heading .tip').length;
+            const badges = Array.from(document.querySelectorAll(
+                '.basic-guided-step-number')).map((badge) => ({
+                    number: badge.textContent.trim(),
+                    stepHelp: badge.classList.contains('step-help-badge'),
+                    tip: badge.getAttribute('data-tip') || '',
+                    ariaLabel: badge.getAttribute('aria-label') || '',
+                    tabindex: badge.getAttribute('tabindex'),
+                    ariaHidden: badge.hasAttribute('aria-hidden'),
+                    title: badge.hasAttribute('title'),
+                }));
+            const captions = document.querySelectorAll(
+                '.basic-guided-step-help').length;
             const profiles = Array.from(document.querySelectorAll(
                 'input[name="qos_basic"]')).map((input) => {
                 const span = input.nextElementSibling;
@@ -819,25 +812,43 @@ def test_basic_polish_icons_profiles_password(pro_page):
             });
             const pass = document.getElementById('wpa2_passphrase_basic');
             const hint = document.getElementById('copyHint');
-            const help = document.getElementById('basicGuidedPassSlotHelp');
-            return {tips, profiles,
+            return {headingTips, badges, captions, profiles,
                     passPlaceholder: pass.placeholder,
                     passValue: pass.value,
                     hintText: hint ? hint.textContent : '',
-                    helpText: help ? help.textContent : ''};
+                    bodyText: document.body.textContent};
         }"""
     )
-    assert len(basic["tips"]) == 5, "all five Basic step headings carry a tip"
-    for tip in basic["tips"]:
-        assert tip["glyph"] == pro_ref["glyph"], (
-            f"Basic glyph {tip['glyph']!r} must equal Pro {pro_ref['glyph']!r}"
-        )
-        assert not tip["legacyClass"], "no legacy basic-guided-tip markup may remain"
-        assert "tip-only" in tip["holder"], "Basic tips must use the shared holder markup"
-        assert tip["font"] == pro_ref["font"] and tip["weight"] == pro_ref["weight"]
-        assert tip["lh"] == pro_ref["lh"]
-        assert abs(tip["w"] - pro_ref["w"]) < 0.5 and abs(tip["h"] - pro_ref["h"]) < 0.5
-        assert tip["centerDelta"] < 1, "icon must share the label's vertical center"
+    # Step guidance moved from heading icons and gray captions to the
+    # numbered badges (shared step-help component).
+    assert basic["headingTips"] == 0, "Basic step headings carry no info icons"
+    assert basic["captions"] == 0, "no static gray step captions may remain"
+    assert [b["number"] for b in basic["badges"]] == ["1", "2", "3", "4", "5"]
+    expected_help = [
+        "Select the Wi-Fi adapter that will create the hotspot. "
+        "The recommended USB adapter normally provides the best VR performance.",
+        "Choose how aggressively VRHotspot tunes the network for performance, "
+        "responsiveness, or stability.",
+        "Set the hotspot name and password used by connecting devices.",
+        "Use 8–63 characters. Control characters are not allowed. "
+        "Use the eye to reveal the password or the QR button to connect another device.",
+        "Review the selected adapter, profile, network name, and password, "
+        "then start the hotspot.",
+    ]
+    for badge, help_text in zip(basic["badges"], expected_help):
+        assert badge["stepHelp"], "badge must use the shared step-help component"
+        assert badge["tip"] == help_text
+        assert badge["ariaLabel"] == help_text
+        assert badge["tabindex"] == "0"
+        assert not badge["ariaHidden"], "guidance badges are exposed to AT"
+        assert not badge["title"], "no native title tooltips"
+    for removed in (
+        "The recommended USB adapter gives the best VR performance.",
+        "This is the Wi-Fi network name other devices will see.",
+        "Review your settings, then start the hotspot.",
+        "Speed prioritizes low latency for VR streaming.",
+    ):
+        assert removed not in basic["bodyText"], f"static caption must be gone: {removed}"
 
     values = [p["value"] for p in basic["profiles"]]
     assert values == ["off", "ultra_low_latency", "vr"], "preset values untouched"
@@ -849,7 +860,6 @@ def test_basic_polish_icons_profiles_password(pro_page):
     assert "passphrase saved" not in basic["hintText"].lower()
     assert not any(ch.isdigit() for ch in basic["hintText"])
     assert basic["passValue"] == "", "real password stays out of the DOM until reveal"
-    assert basic["helpText"] == "Use 8–63 characters. Control characters are not allowed."
 
     pro_page.evaluate(
         """() => {
@@ -862,6 +872,362 @@ def test_basic_polish_icons_profiles_password(pro_page):
         "document.body.dataset.proGuidedStage === 'ready'", timeout=15000
     )
     pro_page.wait_for_timeout(500)
+
+
+def _dismiss_basic_error_dialog(page):
+    """The user-space test daemon cannot start a real hotspot ("Need root"),
+    so earlier apply/start flows leave the daemon in an error state and Basic
+    pops its modal error dialog, which intercepts real pointer hit-testing.
+    Dismiss it through its own Close control before hover-driven steps."""
+    page.evaluate(
+        """() => {
+            const overlay = document.getElementById('basicHotspotError');
+            if (overlay && !overlay.hidden) {
+                document.getElementById('basicHotspotErrorClose')?.click();
+            }
+        }"""
+    )
+    page.wait_for_timeout(150)
+
+
+PRO_STEP_HELP = [
+    "Select the Wi-Fi adapter that will create the hotspot. "
+    "The recommended USB adapter normally provides the best VR performance.",
+    "Choose the latency, throughput, or stability profile that best matches "
+    "the hotspot's workload.",
+    "Set the hotspot name, password, band, security mode, and country.",
+    "Adjust wireless channels, network addressing, and performance behavior. "
+    "The recommended defaults are appropriate for most installations.",
+    "Start or stop the hotspot. When autosaved changes require a restart, "
+    "this action becomes Apply Changes & Restart.",
+]
+
+
+def test_pro_step_descriptions_removed_and_badges_carry_guidance(pro_page):
+    """Pro renders no persistent gray step descriptions; the numbered badges
+    carry the step guidance through the shared step-help component."""
+    data = pro_page.evaluate(
+        """() => {
+            const workflow = document.getElementById('proGuidedWorkflow');
+            return {
+                helps: workflow.querySelectorAll('.pro-guided-help').length,
+                badges: Array.from(workflow.querySelectorAll('.pro-guided-number'))
+                    .map((badge) => ({
+                        number: badge.textContent.trim(),
+                        stepHelp: badge.classList.contains('step-help-badge'),
+                        tip: badge.getAttribute('data-tip') || '',
+                        ariaLabel: badge.getAttribute('aria-label') || '',
+                        tabindex: badge.getAttribute('tabindex'),
+                        ariaHidden: badge.hasAttribute('aria-hidden'),
+                        title: badge.hasAttribute('title'),
+                        radius: getComputedStyle(badge).borderRadius,
+                    })),
+                workflowText: workflow.textContent,
+            };
+        }"""
+    )
+    assert data["helps"] == 0, "no persistent gray step description may render"
+    assert [b["number"] for b in data["badges"]] == ["1", "2", "3", "4", "5"]
+    for badge, help_text in zip(data["badges"], PRO_STEP_HELP):
+        assert badge["stepHelp"], "badge must use the shared step-help component"
+        assert badge["tip"] == help_text
+        assert badge["ariaLabel"] == help_text
+        assert badge["tabindex"] == "0"
+        assert not badge["ariaHidden"], "guidance badges are exposed to AT"
+        assert not badge["title"], "no native title tooltips"
+        assert badge["radius"] == "50%", "badge must stay the numbered circle"
+    for removed in (
+        "Use Recommended for the best available adapter",
+        "Choose the tradeoff that best matches latency",
+        "Review detailed Wireless, Network, and System",
+        "Review pending changes, start or stop the hotspot",
+    ):
+        assert removed not in data["workflowText"], f"old description remains: {removed}"
+
+
+def test_step_badge_tooltip_interaction(pro_page):
+    """Badge guidance: hover/focus/click open it, Escape closes it, one
+    tooltip at a time, no layout shift, correct copy per mode and cycle."""
+    _dismiss_basic_error_dialog(pro_page)
+    step_title = _rect(pro_page, '.pro-guided-step[data-step="1"] .pro-guided-title')
+    badge = pro_page.locator('.pro-guided-step[data-step="1"] .pro-guided-number')
+
+    # Hover opens the tooltip without shifting the layout.
+    badge.hover()
+    pro_page.wait_for_timeout(150)
+    layer = pro_page.evaluate(
+        """() => {
+            const layer = document.querySelector('.floating-tip-layer');
+            const r = layer.getBoundingClientRect();
+            return {visible: layer.classList.contains('is-visible'),
+                    text: layer.textContent, count:
+                    document.querySelectorAll('.floating-tip-layer').length,
+                    left: r.left, right: r.right, top: r.top, bottom: r.bottom};
+        }"""
+    )
+    assert layer["visible"], "hover must open the badge guidance"
+    assert layer["text"] == PRO_STEP_HELP[0]
+    assert layer["count"] == 1, "exactly one tooltip surface exists"
+    assert layer["left"] >= 0 and layer["right"] <= 1440, "tooltip stays on screen"
+    after_title = _rect(pro_page, '.pro-guided-step[data-step="1"] .pro-guided-title')
+    assert abs(after_title["top"] - step_title["top"]) < 0.5, "no layout shift"
+
+    # Moving the pointer away closes it.
+    pro_page.mouse.move(1200, 900)
+    pro_page.wait_for_timeout(150)
+    assert not pro_page.evaluate(
+        "document.querySelector('.floating-tip-layer').classList.contains('is-visible')"
+    )
+
+    # Keyboard focus opens it; Escape closes it; blur also closes it.
+    pro_page.evaluate(
+        """() => document.querySelector(
+            '.pro-guided-step[data-step="4"] .pro-guided-number').focus()"""
+    )
+    pro_page.wait_for_timeout(150)
+    focused = pro_page.evaluate(
+        """() => {
+            const layer = document.querySelector('.floating-tip-layer');
+            const badge = document.querySelector(
+                '.pro-guided-step[data-step="4"] .pro-guided-number');
+            return {visible: layer.classList.contains('is-visible'),
+                    text: layer.textContent,
+                    focusOnBadge: document.activeElement === badge,
+                    glow: badge.classList.contains('is-tip-open')};
+        }"""
+    )
+    assert focused["focusOnBadge"], "the badge itself must take keyboard focus"
+    assert focused["visible"], "keyboard focus must open the guidance"
+    assert focused["text"] == PRO_STEP_HELP[3]
+    assert focused["glow"], "open badge carries the is-tip-open state"
+    pro_page.keyboard.press("Escape")
+    pro_page.wait_for_timeout(100)
+    assert not pro_page.evaluate(
+        "document.querySelector('.floating-tip-layer').classList.contains('is-visible')"
+    )
+    pro_page.evaluate(
+        """() => document.querySelector(
+            '.pro-guided-step[data-step="4"] .pro-guided-number').blur()"""
+    )
+
+    # Click pins the guidance open (it survives the pointer leaving); a
+    # second click unpins and closes it.
+    badge5 = pro_page.locator('.pro-guided-step[data-step="5"] .pro-guided-number')
+    badge5.click()
+    pro_page.wait_for_timeout(120)
+    opened = pro_page.evaluate(
+        """() => {
+            const layer = document.querySelector('.floating-tip-layer');
+            return {visible: layer.classList.contains('is-visible'),
+                    text: layer.textContent};
+        }"""
+    )
+    assert opened["visible"] and opened["text"] == PRO_STEP_HELP[4]
+    pro_page.mouse.move(1200, 900)
+    pro_page.wait_for_timeout(150)
+    assert pro_page.evaluate(
+        "document.querySelector('.floating-tip-layer').classList.contains('is-visible')"
+    ), "a clicked-open tooltip stays open when the pointer leaves"
+    badge5.click()
+    pro_page.wait_for_timeout(120)
+    assert not pro_page.evaluate(
+        "document.querySelector('.floating-tip-layer').classList.contains('is-visible')"
+    )
+    pro_page.mouse.move(1200, 900)
+
+    # Opening another badge replaces the tooltip: one at a time.
+    badge.hover()
+    pro_page.wait_for_timeout(120)
+    pro_page.locator('.pro-guided-step[data-step="3"] .pro-guided-number').hover()
+    pro_page.wait_for_timeout(120)
+    swap = pro_page.evaluate(
+        """() => ({
+            count: document.querySelectorAll('.floating-tip-layer').length,
+            text: document.querySelector('.floating-tip-layer').textContent,
+            open: document.querySelectorAll('.is-tip-open').length,
+        })"""
+    )
+    assert swap["count"] == 1 and swap["open"] == 1, "one open tooltip at a time"
+    assert swap["text"] == PRO_STEP_HELP[2]
+    pro_page.mouse.move(1200, 900)
+    pro_page.wait_for_timeout(120)
+
+    # Mode cycles keep exactly one guidance system with mode-correct copy.
+    for _ in range(2):
+        pro_page.evaluate(
+            """() => {
+                const t = document.getElementById('uiModeToggle');
+                t.checked = false;
+                t.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
+        )
+        pro_page.wait_for_function(
+            "document.body.dataset.uiMode === 'basic'", timeout=15000
+        )
+        pro_page.wait_for_timeout(600)
+        _dismiss_basic_error_dialog(pro_page)
+        basic_badge = pro_page.locator(
+            '.basic-guided-step[data-step="1"] .basic-guided-step-number'
+        )
+        basic_badge.hover()
+        pro_page.wait_for_timeout(150)
+        basic_state = pro_page.evaluate(
+            """() => ({
+                text: document.querySelector('.floating-tip-layer').textContent,
+                layers: document.querySelectorAll('.floating-tip-layer').length,
+                basicBadges: document.querySelectorAll(
+                    '.basic-guided-step-number.step-help-badge').length,
+            })"""
+        )
+        assert basic_state["layers"] == 1, "cycles must not duplicate the tooltip layer"
+        assert basic_state["basicBadges"] == 5, "cycles must not duplicate badges"
+        assert basic_state["text"] == (
+            "Select the Wi-Fi adapter that will create the hotspot. "
+            "The recommended USB adapter normally provides the best VR performance."
+        )
+        pro_page.mouse.move(1200, 900)
+        pro_page.evaluate(
+            """() => {
+                const t = document.getElementById('uiModeToggle');
+                t.checked = true;
+                t.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
+        )
+        pro_page.wait_for_function(
+            "document.body.dataset.proGuidedStage === 'ready'", timeout=15000
+        )
+        pro_page.wait_for_timeout(400)
+        pro_badges = pro_page.evaluate(
+            """() => document.querySelectorAll(
+                '#proGuidedWorkflow .pro-guided-number.step-help-badge').length"""
+        )
+        assert pro_badges == 5, "cycles must not duplicate Pro badges"
+
+
+def test_basic_primary_action_uppercase_states(pro_page):
+    """Every Basic primary-action state renders uppercase via typography,
+    with the live button and its handlers untouched."""
+    pro_page.evaluate(
+        """() => {
+            const t = document.getElementById('uiModeToggle');
+            t.checked = false;
+            t.dispatchEvent(new Event('change', {bubbles: true}));
+        }"""
+    )
+    pro_page.wait_for_function("document.body.dataset.uiMode === 'basic'", timeout=15000)
+    pro_page.wait_for_timeout(600)
+
+    original_pill = pro_page.evaluate(
+        "document.getElementById('basicPillTxt').textContent"
+    )
+    cases = [
+        ("Stopped", "Start hotspot", "start"),
+        ("Running | ch 36", "Stop hotspot", "stop"),
+        ("Error: hostapd failed", "View problem", "problem"),
+        ("Starting…", "Working…", "wait"),
+    ]
+    try:
+        for raw, label, action in cases:
+            pro_page.evaluate(
+                "(raw) => { document.getElementById('basicPillTxt').textContent = raw; }",
+                raw,
+            )
+            pro_page.wait_for_function(
+                """(label) => document.getElementById('btnStartBasic')
+                    .textContent === label""",
+                arg=label,
+                timeout=5000,
+            )
+            state = pro_page.evaluate(
+                """() => {
+                    const btn = document.getElementById('btnStartBasic');
+                    const cs = getComputedStyle(btn);
+                    return {text: btn.textContent, action: btn.dataset.guidedAction,
+                            transform: cs.textTransform, spacing: cs.letterSpacing,
+                            weight: cs.fontWeight};
+                }"""
+            )
+            assert state["text"] == label, "state logic must keep plain labels"
+            assert state["action"] == action
+            assert state["transform"] == "uppercase", (
+                f"{label!r} must render uppercase via typography"
+            )
+            assert state["spacing"] not in ("normal", "0px")
+            assert state["weight"] in ("600", "700")
+    finally:
+        pro_page.evaluate(
+            "(raw) => { document.getElementById('basicPillTxt').textContent = raw; }",
+            original_pill,
+        )
+        pro_page.wait_for_timeout(300)
+        _dismiss_basic_error_dialog(pro_page)
+        pro_page.evaluate(
+            """() => {
+                const t = document.getElementById('uiModeToggle');
+                t.checked = true;
+                t.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
+        )
+        pro_page.wait_for_function(
+            "document.body.dataset.proGuidedStage === 'ready'", timeout=15000
+        )
+        pro_page.wait_for_timeout(400)
+
+
+def test_step_badge_tooltip_narrow_width_placement(pro_page):
+    """Near the viewport edge the tooltip clamps on screen instead of
+    overflowing or shifting the page."""
+    page = pro_page.context.browser.new_page(
+        viewport={"width": 420, "height": 800}, bypass_csp=True
+    )
+    try:
+        page.route("**fonts.googleapis.com**", lambda route: route.abort())
+        page.route("**fonts.gstatic.com**", lambda route: route.abort())
+        page.goto(PORTAL_URL, wait_until="domcontentloaded")
+        page.wait_for_timeout(1200)
+        if page.locator("#loginToken").is_visible():
+            page.fill("#loginToken", TOKEN)
+            page.click("#btnLoginSubmit")
+        page.wait_for_selector("#uiModeToggle", state="attached", timeout=15000)
+        page.wait_for_timeout(1200)
+        page.evaluate(
+            """() => {
+                const t = document.getElementById('uiModeToggle');
+                t.checked = false;
+                t.dispatchEvent(new Event('change', {bubbles: true}));
+            }"""
+        )
+        page.wait_for_function("document.body.dataset.uiMode === 'basic'", timeout=15000)
+        page.wait_for_timeout(800)
+        _dismiss_basic_error_dialog(page)
+        badge = page.locator('.basic-guided-step[data-step="1"] .basic-guided-step-number')
+        # Center the badge to keep it clear of any sticky chrome before the
+        # real hover.
+        page.evaluate(
+            """() => document.querySelector(
+                '.basic-guided-step[data-step="1"] .basic-guided-step-number'
+            ).scrollIntoView({block: 'center'})"""
+        )
+        page.wait_for_timeout(300)
+        badge.hover()
+        page.wait_for_timeout(200)
+        data = page.evaluate(
+            """() => {
+                const layer = document.querySelector('.floating-tip-layer');
+                const r = layer.getBoundingClientRect();
+                return {visible: layer.classList.contains('is-visible'),
+                        left: r.left, right: r.right,
+                        top: r.top, bottom: r.bottom,
+                        noOverflow: document.documentElement.scrollWidth
+                            <= document.documentElement.clientWidth};
+            }"""
+        )
+    finally:
+        page.close()
+    assert data["visible"], "the tooltip must open at narrow width"
+    assert data["left"] >= 0 and data["right"] <= 420, "tooltip clamps horizontally"
+    assert data["top"] >= 0 and data["bottom"] <= 800, "tooltip clamps vertically"
+    assert data["noOverflow"], "no horizontal page overflow with a tooltip open"
 
 
 def test_basic_adapter_row_narrow_width(pro_page):

@@ -98,7 +98,7 @@ def test_step_three_contains_the_complete_connection_setup() -> None:
         "enable_internet",
     ):
         assert f"'{field}'" in source
-    assert "hotspot name, password, band, security, and country" in source
+    assert "hotspot name, password, band, security mode, and country" in source
     # Internet sharing is an advanced recovery option under Troubleshooting >
     # Connectivity; Step 3 composes only the core connection fields.
     assert "STEP3_FIELDS = CONNECTION_FIELDS.filter((key) => key !== 'enable_internet')" in source
@@ -234,6 +234,43 @@ def test_six_ghz_adapter_notice_is_contextual() -> None:
     assert "hint.hidden = true" in source
     assert "maybeAutoPickAdapterForBand" in source
     assert ':not([data-pro-band="6ghz"]) #adapterHint' in style
+
+
+def test_step_guidance_lives_on_numbered_badges_not_gray_paragraphs() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    style = STYLE.read_text(encoding="utf-8")
+
+    # Persistent gray step descriptions are gone; the numbered badge carries
+    # the step-purpose guidance through the shared attachStepHelp component
+    # (with an attribute-identical fallback for composer-only fixtures).
+    assert "function applyStepBadgeHelp" in source
+    assert "attachStepHelp(badge, text)" in source
+    assert "make('p', 'pro-guided-help'" not in source
+    assert "badge.setAttribute('aria-hidden', 'true')" not in source
+    assert ".pro-guided-help {" not in style
+    # Exact step guidance copy for the Pro badges.
+    assert (
+        "Select the Wi-Fi adapter that will create the hotspot. "
+        "The recommended USB adapter normally provides the best VR performance." in source
+    )
+    assert (
+        "Choose the latency, throughput, or stability profile that best matches "
+        "the hotspot\\'s workload." in source
+    )
+    assert "Set the hotspot name, password, band, security mode, and country." in source
+    assert (
+        "Adjust wireless channels, network addressing, and performance behavior. "
+        "The recommended defaults are appropriate for most installations." in source
+    )
+    assert (
+        "Start or stop the hotspot. When autosaved changes require a restart, "
+        "this action becomes Apply Changes & Restart." in source
+    )
+    # Old persistent descriptions may not return in any form.
+    assert "Use Recommended for the best available adapter" not in source
+    assert "Choose the tradeoff that best matches latency" not in source
+    assert "Review detailed Wireless, Network, and System" not in source
+    assert "Review pending changes, start or stop the hotspot" not in source
 
 
 def test_legacy_density_pass_is_removed_and_defensively_neutralized() -> None:

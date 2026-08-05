@@ -34,6 +34,114 @@ const STEP3_FIELDS = CONNECTION_FIELDS.filter((key) => key !== 'enable_internet'
 const PASSWORD_RULES = 'Use 8–63 characters. Control characters are not allowed.';
 const NEUTRAL_PLACEHOLDER = 'Enter a new password to change it';
 
+const PRO_STEP_HELP = {
+  proStepAdapter: 'Select the Wi-Fi adapter that will create the hotspot. The recommended USB adapter normally provides the best VR performance.',
+  proStepPerformance: "Choose the latency, throughput, or stability profile that best matches the hotspot's workload.",
+  proStepHotspot: 'Set the hotspot name, password, band, security mode, and country.',
+  proStepAdvanced: 'Adjust wireless channels, network addressing, and performance behavior. The recommended defaults are appropriate for most installations.',
+  proStepAction: 'Start or stop the hotspot. When autosaved changes require a restart, this action becomes Apply Changes & Restart.',
+};
+
+const BASIC_STEP_HELP = {
+  basicGuidedAdapterSlot: 'Select the Wi-Fi adapter that will create the hotspot. The recommended USB adapter normally provides the best VR performance.',
+  basicGuidedProfileSlot: 'Choose how aggressively VRHotspot tunes the network for performance, responsiveness, or stability.',
+  basicGuidedSsidSlot: 'Set the hotspot name and password used by connecting devices.',
+  basicGuidedPassSlot: 'Use 8\u201363 characters. Control characters are not allowed. Use the eye to reveal the password or the QR button to connect another device.',
+  basicGuidedActionSlot: 'Review the selected adapter, profile, network name, and password, then start the hotspot.',
+};
+
+const REMOVED_STATIC_CAPTIONS = [
+  'The recommended USB adapter gives the best VR performance.',
+  'This is the Wi-Fi network name other devices will see.',
+  'Review your settings, then start the hotspot.',
+  'Speed prioritizes low latency for VR streaming.',
+  'Standard uses normal hotspot behavior without extra performance tuning.',
+  'Use Recommended for the best available adapter, or rescan after connecting new hardware.',
+  'Choose the tradeoff that best matches latency, throughput, balance, or stability.',
+  'Review detailed Wireless, Network, and System & Performance options or keep the recommended defaults.',
+  'Review pending changes, start or stop the hotspot, save safely, or repair the network.',
+];
+
+function assertStepBadgeGuidance(document, mode) {
+  const map = mode === 'basic' ? BASIC_STEP_HELP : PRO_STEP_HELP;
+  const stepSelector = mode === 'basic' ? '.basic-guided-step' : '.pro-guided-step';
+  const badgeSelector = mode === 'basic' ? '.basic-guided-step-number' : '.pro-guided-number';
+  for (const [slotId, text] of Object.entries(map)) {
+    const slot = document.getElementById(slotId);
+    assert.ok(slot, `${slotId} must exist in ${mode} mode`);
+    const badge = slot.closest(stepSelector)?.querySelector(badgeSelector);
+    assert.ok(badge, `${slotId} step must have its numbered badge`);
+    assert.equal(document.querySelectorAll(`#${slotId}`).length, 1);
+    assert.ok(
+      badge.classList.contains('step-help-badge'),
+      `${slotId} badge must use the shared step-help component`,
+    );
+    assert.equal(badge.getAttribute('data-tip'), text);
+    assert.equal(badge.getAttribute('aria-label'), text);
+    assert.equal(badge.getAttribute('tabindex'), '0');
+    assert.equal(badge.hasAttribute('aria-hidden'), false, 'guidance badges are exposed to AT');
+    assert.equal(badge.hasAttribute('title'), false, 'no native title tooltips');
+    assert.match(badge.textContent.trim(), /^[1-5]$/, 'badge must stay a recognizable number');
+  }
+  // The static gray captions and old Pro descriptions may not render anywhere.
+  if (mode === 'basic') {
+    assert.equal(document.querySelector('.basic-guided-step-help'), null,
+      'no static Basic caption wrapper may remain');
+  }
+  assert.equal(document.querySelector('#proGuidedWorkflow .pro-guided-help'), null,
+    'no persistent Pro step description may remain');
+  for (const caption of REMOVED_STATIC_CAPTIONS) {
+    assert.ok(
+      !document.body.textContent.includes(caption),
+      `removed static caption must not render: ${caption}`,
+    );
+  }
+}
+
+function assertBadgeTooltipInteraction(window) {
+  const { document } = window;
+  const badge = document
+    .getElementById('proStepAdapter')
+    ?.closest('.pro-guided-step')
+    ?.querySelector('.pro-guided-number');
+  assert.ok(badge, 'Step 1 badge must exist for tooltip interaction');
+  const layer = document.getElementById('floatingTipLayer');
+  assert.ok(layer, 'shared floating tip layer must exist');
+
+  // Keyboard focus opens the step guidance.
+  badge.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  assert.equal(layer.classList.contains('is-visible'), true, 'focus must open the tooltip');
+  assert.equal(layer.textContent, PRO_STEP_HELP.proStepAdapter);
+  assert.equal(layer.getAttribute('aria-hidden'), 'false');
+  assert.equal(badge.classList.contains('is-tip-open'), true);
+
+  // Escape closes it.
+  document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(layer.classList.contains('is-visible'), false, 'Escape must close the tooltip');
+  assert.equal(badge.classList.contains('is-tip-open'), false);
+
+  // Click toggles it open, a second click toggles it closed.
+  badge.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(layer.classList.contains('is-visible'), true, 'click must open the tooltip');
+  badge.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(layer.classList.contains('is-visible'), false, 'second click must close it');
+
+  // Only one tooltip surface exists at a time: opening another badge reuses
+  // the single layer with the new copy.
+  const advancedBadge = document
+    .getElementById('proStepAdvanced')
+    ?.closest('.pro-guided-step')
+    ?.querySelector('.pro-guided-number');
+  badge.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  advancedBadge.dispatchEvent(new window.FocusEvent('focusin', { bubbles: true }));
+  assert.equal(document.querySelectorAll('.floating-tip-layer').length, 1);
+  assert.equal(layer.textContent, PRO_STEP_HELP.proStepAdvanced);
+  assert.equal(badge.classList.contains('is-tip-open'), false, 'previous badge glow must clear');
+  assert.equal(advancedBadge.classList.contains('is-tip-open'), true);
+  document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(layer.classList.contains('is-visible'), false);
+}
+
 function assertInformationArchitecture(document) {
   // Internet sharing is out of Step 3 and lives under Troubleshooting.
   assert.equal(document.querySelector('#proStepHotspot [data-field="enable_internet"]'), null);
@@ -400,6 +508,7 @@ function assertBasicLayout(document) {
     assert.equal(control.hasAttribute('aria-hidden'), false);
     assert.equal(control.tabIndex, 0);
   }
+  assertStepBadgeGuidance(document, 'basic');
 }
 
 function assertRecommendedHidden(document) {
@@ -468,6 +577,7 @@ function assertProLayout(document) {
   assertInformationArchitecture(document);
   assertPasswordPrivacy(document);
   assertAdvancedOrganization(document);
+  assertStepBadgeGuidance(document, 'pro');
   assert.equal(document.querySelectorAll('#proStepAdvanced .pro-config-details').length, 3);
   // Step 5 exposes exactly one actionable control: the primary Start/Stop.
   assert.ok(document.querySelector('#proStepAction #btnStart'));
@@ -656,6 +766,7 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
   assertProLayout(document);
   assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
   assertPasswordIdentity();
+  assertBadgeTooltipInteraction(window);
 
   // The composer must not report ready while password composition is
   // incomplete, and must converge once the missing control returns.

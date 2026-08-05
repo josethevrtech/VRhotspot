@@ -117,19 +117,9 @@ body[data-ui-mode="basic"] .basic-guided-step-slot {
   min-width: 0;
 }
 
-body[data-ui-mode="basic"] .basic-guided-step-help {
-  margin: 9px 0 0;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-body[data-ui-mode="basic"] .basic-guided-step-help:empty {
-  display: none;
-}
-
-/* Basic info icons are the shared renderHintTip component from ui.js; no
-   Basic-specific icon styling exists on purpose. */
+/* Static step captions were removed: step guidance now lives on the numbered
+   badges via the shared step-help tooltip. Dynamic messages (validation,
+   save results, status) keep their own elements and styles. */
 
 body[data-ui-mode="basic"] .basic-guided-step-slot > [data-field],
 body[data-ui-mode="basic"] .basic-guided-pass-field {
@@ -375,6 +365,13 @@ body[data-ui-mode="basic"] .basic-guided-primary-action {
   min-height: 56px;
   justify-content: center;
   font-size: 16px !important;
+  /* Pro button typography: uppercase presentation only, so every state
+     label from syncPrimaryAction (START/STOP/etc.) renders capitalized
+     without duplicating the state logic. !important beats the
+     higher-specificity Basic-section .btn reset in ui.css. */
+  font-weight: 600;
+  letter-spacing: 0.05em !important;
+  text-transform: uppercase !important;
 }
 
 body.basic-hotspot-modal-open {

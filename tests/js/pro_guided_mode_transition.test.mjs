@@ -164,6 +164,29 @@ function assertProLayout(document) {
     Array.from(workflow.querySelectorAll('.pro-guided-step')).map((node) => node.dataset.step),
     ['1', '2', '3', '4', '5'],
   );
+  // Composer-only fixture (no ui.js): the attribute-identical fallback in
+  // applyStepBadgeHelp must still put step guidance on the numbered badges,
+  // and no persistent gray description paragraph may render.
+  assert.equal(workflow.querySelectorAll('.pro-guided-help').length, 0,
+    'persistent gray step descriptions must be gone');
+  for (const section of workflow.querySelectorAll('.pro-guided-step')) {
+    const badge = section.querySelector('.pro-guided-number');
+    assert.ok(badge, 'each step keeps its numbered badge');
+    assert.ok(badge.classList.contains('step-help-badge'));
+    assert.ok((badge.getAttribute('data-tip') || '').length > 0, 'badge carries the step guidance');
+    assert.equal(badge.getAttribute('aria-label'), badge.getAttribute('data-tip'));
+    assert.equal(badge.getAttribute('tabindex'), '0');
+    assert.equal(badge.hasAttribute('aria-hidden'), false);
+    assert.equal(badge.hasAttribute('title'), false);
+  }
+  assert.equal(
+    workflow
+      .querySelector('#proStepHotspot')
+      ?.closest('.pro-guided-step')
+      ?.querySelector('.pro-guided-number')
+      ?.getAttribute('data-tip'),
+    'Set the hotspot name, password, band, security mode, and country.',
+  );
   assert.ok(document.querySelector('#proStepAdapter [data-field="ap_adapter"]'));
   assert.equal(document.querySelector('#proStepAdapter [data-adapter-readiness-card]'), null);
   assert.ok(document.querySelector('#proStepPerformance .preset-bar'));

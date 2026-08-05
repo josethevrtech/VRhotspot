@@ -73,6 +73,10 @@ let bandOptionsCache = null;
 const FLOATING_TIP_LAYER_ID = 'floatingTipLayer';
 let floatingTipLayer = null;
 let activeTipTarget = null;
+// A click pins the tooltip open so it survives pointer-out (and so taps on
+// touch devices, where pointerover and click arrive together, keep it open
+// instead of hover-opening and click-closing in the same gesture).
+let floatingTipPinned = false;
 let floatingTipWired = false;
 let isAuthenticated = false;
 let authFlowLocked = false;
@@ -1304,7 +1308,12 @@ function showFloatingTipFor(target) {
 
   const layer = ensureFloatingTipLayer();
   if (!layer) return;
+  if (activeTipTarget && activeTipTarget !== target) {
+    activeTipTarget.classList.remove('is-tip-open');
+    floatingTipPinned = false;
+  }
   activeTipTarget = target;
+  if (!target.classList.contains('is-tip-open')) target.classList.add('is-tip-open');
   layer.textContent = tipText;
   layer.setAttribute('aria-hidden', 'false');
   layer.classList.add('is-visible');
@@ -1315,10 +1324,26 @@ function hideFloatingTipFor(target) {
   if (target && activeTipTarget && target !== activeTipTarget) return;
   const layer = ensureFloatingTipLayer();
   if (!layer) return;
+  if (activeTipTarget) activeTipTarget.classList.remove('is-tip-open');
   activeTipTarget = null;
+  floatingTipPinned = false;
   layer.classList.remove('is-visible');
   layer.setAttribute('aria-hidden', 'true');
   layer.style.transform = 'translate(-200vw, -200vh)';
+}
+
+const FLOATING_TIP_TRIGGERS = '.tip, .step-help-badge';
+
+function attachStepHelp(badge, text) {
+  // Shared step-number guidance for Basic and Pro badges: same floating
+  // tooltip system as the info icons, keyboard focusable, no native title.
+  // Guarded writes keep per-reconcile reapplication mutation-quiet.
+  if (!badge || !text) return;
+  if (!badge.classList.contains('step-help-badge')) badge.classList.add('step-help-badge');
+  if (badge.getAttribute('data-tip') !== text) badge.setAttribute('data-tip', text);
+  if (badge.getAttribute('aria-label') !== text) badge.setAttribute('aria-label', text);
+  if (badge.getAttribute('tabindex') !== '0') badge.setAttribute('tabindex', '0');
+  if (badge.hasAttribute('aria-hidden')) badge.removeAttribute('aria-hidden');
 }
 
 function wireFloatingTips() {
@@ -1327,29 +1352,51 @@ function wireFloatingTips() {
   ensureFloatingTipLayer();
 
   document.addEventListener('pointerover', (ev) => {
-    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    const target = ev.target instanceof Element ? ev.target.closest(FLOATING_TIP_TRIGGERS) : null;
     if (!target) return;
     showFloatingTipFor(target);
   }, true);
 
   document.addEventListener('pointerout', (ev) => {
-    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    const target = ev.target instanceof Element ? ev.target.closest(FLOATING_TIP_TRIGGERS) : null;
     if (!target) return;
     const related = ev.relatedTarget;
     if (related instanceof Node && target.contains(related)) return;
+    if (floatingTipPinned && target === activeTipTarget) return;
     hideFloatingTipFor(target);
   }, true);
 
   document.addEventListener('focusin', (ev) => {
-    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    const target = ev.target instanceof Element ? ev.target.closest(FLOATING_TIP_TRIGGERS) : null;
     if (!target) return;
     showFloatingTipFor(target);
   }, true);
 
   document.addEventListener('focusout', (ev) => {
-    const target = ev.target instanceof Element ? ev.target.closest('.tip') : null;
+    const target = ev.target instanceof Element ? ev.target.closest(FLOATING_TIP_TRIGGERS) : null;
     if (!target) return;
     hideFloatingTipFor(target);
+  }, true);
+
+  // Click/tap pins the badge guidance open; a second click unpins and closes
+  // it. Escape closes any tooltip. (Hover alone never pins, so pointer-out
+  // still closes a hover-opened tip.)
+  document.addEventListener('click', (ev) => {
+    const target = ev.target instanceof Element ? ev.target.closest('.step-help-badge') : null;
+    if (!target) return;
+    const layer = ensureFloatingTipLayer();
+    const openHere = activeTipTarget === target
+      && !!layer && layer.classList.contains('is-visible');
+    if (openHere && floatingTipPinned) {
+      hideFloatingTipFor(target);
+    } else {
+      showFloatingTipFor(target);
+      floatingTipPinned = true;
+    }
+  }, true);
+
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') hideFloatingTipFor();
   }, true);
 
   window.addEventListener('resize', () => {
