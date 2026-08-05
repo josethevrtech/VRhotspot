@@ -1078,6 +1078,12 @@ textarea::placeholder {
   letter-spacing: 0.05em;
 }
 
+/* display: inline-flex above would otherwise override the user-agent
+   [hidden] { display: none }, leaving script-hidden buttons visible. */
+.btn[hidden] {
+  display: none !important;
+}
+
 body[data-ui-mode="basic"] [data-ui-section="basic"] .btn {
   font-size: 12px;
   font-weight: 600;

@@ -203,6 +203,12 @@
   flex-wrap: wrap;
 }
 
+/* display: flex above would otherwise override the user-agent
+   [hidden] { display: none }, leaving script-hidden rows visible. */
+.devhub-checks[hidden] {
+  display: none !important;
+}
+
 .devhub-checks label {
   display: inline-flex;
   gap: 7px;
