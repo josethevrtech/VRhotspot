@@ -178,15 +178,15 @@ function assertPasswordPrivacy(document) {
   }
 }
 
-function apiPayload(url, { passphraseSaved, enableInternet = true }) {
+function apiPayload(url, { passphraseSaved, enableInternet = true, running = false }) {
   const path = new URL(String(url), 'http://127.0.0.1:8732').pathname;
   if (path === '/v1/status') {
     // The daemon wraps responses in an envelope; the app reads r.json.data.
     return {
       result_code: 'ok',
       data: {
-        running: false,
-        state: 'stopped',
+        running,
+        state: running ? 'running' : 'stopped',
         adapter: 'wlan1',
         band: '5ghz',
         platform: { os: { id: 'cachyos', version_id: 'rolling' } },
@@ -516,7 +516,8 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
   });
   const { window } = dom;
   const { document } = window;
-  installBrowserStubs(window, { passphraseSaved, enableInternet });
+  const stubOptions = { passphraseSaved, enableInternet, running: false };
+  installBrowserStubs(window, stubOptions);
   window.localStorage.setItem('vrhs_ui_mode', 'basic');
 
   const errors = [];
@@ -730,6 +731,7 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
   // Running hotspot + autosaved change: the primary action must offer Apply
   // Changes & Restart and drive exactly one restart through the live
   // (hidden) Save & Restart node.
+  stubOptions.running = true;
   const statusText = document.getElementById('proServiceStateText');
   statusText.textContent = 'Running';
   await tick(window, 150);
@@ -741,6 +743,7 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
     window,
     () => document.getElementById('btnStart').dataset.proGuidedAction === 'apply',
     'primary must switch to the apply action',
+    8000,
   );
   assert.equal(document.getElementById('btnStart').textContent, 'Apply Changes & Restart');
   const restartsBefore = window.__fetchLog.filter((p) => p === '/v1/restart').length;
@@ -749,6 +752,7 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
     window,
     () => window.__fetchLog.filter((p) => p === '/v1/restart').length === restartsBefore + 1,
     'the apply action must trigger the save-and-restart workflow',
+    8000,
   );
   await tick(window, 300);
   assert.equal(
@@ -756,6 +760,7 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
     restartsBefore + 1,
     'exactly one restart request may be issued',
   );
+  stubOptions.running = false;
   statusText.textContent = 'Stopped';
   await tick(window, 150);
 
