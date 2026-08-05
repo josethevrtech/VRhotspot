@@ -1,7 +1,7 @@
 """VRhotspot-only USB-to-wireless ADB bootstrap for Developer Hub.
 
 The public API accepts only a validated USB ADB serial and optional TCP port.
-The daemon owns hotspot configuration and credentials. Wireless ADB is never
+The daemon owns hotspot configuration and credentials.  Wireless ADB is never
 enabled until the headset address and route are verified against the active
 VRhotspot network.
 """
@@ -38,6 +38,7 @@ _INET_RE = re.compile(r"(?:^|\s)inet\s+([0-9.]+)/\d+(?:\s|$)")
 _ROUTE_SRC_RE = re.compile(r"(?:^|\s)src\s+([0-9.]+)(?:\s|$)")
 _ROUTE_VIA_RE = re.compile(r"(?:^|\s)via\s+([0-9.]+)(?:\s|$)")
 _ROUTE_DEV_RE = re.compile(r"(?:^|\s)dev\s+([A-Za-z0-9_.-]+)(?:\s|$)")
+_SSID_RE = re.compile(r"(?:^|[\s,])SSID:\s*(?:\"([^\"]+)\"|([^,\n]+))", re.MULTILINE)
 
 RESULT_HOTSPOT_NOT_RUNNING = "hotspot_not_running"
 RESULT_HOTSPOT_CONFIGURATION_INCOMPLETE = "hotspot_configuration_incomplete"
@@ -69,8 +70,10 @@ class HeadsetNetwork:
     gateway: Optional[ipaddress.IPv4Address]
     interface: Optional[str]
     route_source: Optional[ipaddress.IPv4Address]
+    ssid: Optional[str]
     address_output: str
     route_output: str
+    wifi_status_output: str
 
 
 def _valid_serial(value: Any) -> str:
@@ -287,26 +290,45 @@ def _inspect_headset_network(
         ),
         runner=runner,
     )
+    wifi_rc, wifi_out, _wifi_err = _run(
+        (adb, "-s", serial, "shell", "cmd", "wifi", "status"),
+        runner=runner,
+    )
     address = _first_address(addr_out) if addr_rc == 0 else None
     route_source = _ipv4(_route_value(_ROUTE_SRC_RE, route_out)) if route_rc == 0 else None
     if address is None:
         address = route_source
     gateway = _ipv4(_route_value(_ROUTE_VIA_RE, route_out)) if route_rc == 0 else None
     interface = _route_value(_ROUTE_DEV_RE, route_out) if route_rc == 0 else None
+    ssid: Optional[str] = None
+    if wifi_rc == 0:
+        match = _SSID_RE.search(wifi_out)
+        if match:
+            candidate = (match.group(1) or match.group(2) or "").strip()
+            if candidate and candidate.lower() not in {"<unknown ssid>", "unknown ssid"}:
+                ssid = candidate
     return HeadsetNetwork(
         address=address,
         gateway=gateway,
         interface=interface,
         route_source=route_source,
+        ssid=ssid,
         address_output=addr_out,
         route_output=route_out,
+        wifi_status_output=wifi_out,
     )
 
 
 def _network_failure(
     context: HotspotContext,
     snapshot: HeadsetNetwork,
+    *,
+    allow_unknown_ssid: bool = False,
 ) -> Optional[str]:
+    if snapshot.ssid is None and not allow_unknown_ssid:
+        return RESULT_WIFI_CONTROL_UNAVAILABLE
+    if snapshot.ssid is not None and snapshot.ssid != context.ssid:
+        return RESULT_HEADSET_NOT_ON_VRHOTSPOT
     address = snapshot.address
     if address is None:
         return RESULT_HEADSET_NOT_ON_VRHOTSPOT
@@ -466,6 +488,7 @@ def enable_wireless_adb(
             base_data["model"] = model_out.strip().replace("_", " ")
 
         snapshot = _inspect_headset_network(adb, validated_serial, runner=runner)
+        join_performed = False
         network_failure = _network_failure(context, snapshot)
 
         if network_failure is not None:
@@ -500,18 +523,21 @@ def enable_wireless_adb(
                     context,
                     base_data,
                     message=(
-                        "Automatic Wi-Fi setup is unavailable on this headset. "
+                        f"Automatic Wi-Fi setup is unavailable on this headset. "
                         f"Select {context.ssid} in the headset Wi-Fi settings."
                     ),
                 )
 
-            snapshot = HeadsetNetwork(None, None, None, None, "", "")
+            snapshot = HeadsetNetwork(None, None, None, None, None, "", "", "")
             network_failure = RESULT_HEADSET_NOT_ON_VRHOTSPOT
+            join_performed = True
             for attempt in range(WIRELESS_NETWORK_POLL_ATTEMPTS):
                 if attempt:
                     sleeper(WIRELESS_NETWORK_POLL_INTERVAL_S)
                 snapshot = _inspect_headset_network(adb, validated_serial, runner=runner)
-                network_failure = _network_failure(context, snapshot)
+                network_failure = _network_failure(
+                    context, snapshot, allow_unknown_ssid=join_performed
+                )
                 if network_failure is None:
                     break
 
@@ -531,11 +557,13 @@ def enable_wireless_adb(
                     secret=context.passphrase,
                 )
 
-        # Re-read immediately before mutating ADB transport. This prevents a
+        # Re-read immediately before mutating ADB transport.  This prevents a
         # stale address from passing validation and then being used after a
         # network transition.
         verified = _inspect_headset_network(adb, validated_serial, runner=runner)
-        verified_failure = _network_failure(context, verified)
+        verified_failure = _network_failure(
+            context, verified, allow_unknown_ssid=join_performed
+        )
         if verified_failure is not None:
             return _result(
                 success=False,
