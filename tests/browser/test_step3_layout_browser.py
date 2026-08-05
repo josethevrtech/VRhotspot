@@ -232,52 +232,75 @@ def test_step_two_has_no_generic_helper(pro_page):
     assert present is False
 
 
-def test_step_four_summaries_mirror_controls(pro_page):
+def test_step_four_clean_layout_and_moved_controls(pro_page):
     data = pro_page.evaluate(
         """() => {
             const rows = [];
             document.querySelectorAll('#proStepAdvanced .pro-config-details').forEach((d) => {
                 d.open = true;
                 const summary = d.querySelector(':scope > summary');
-                const chip = summary.querySelector('.pro-config-summary');
-                const chipRect = chip.getBoundingClientRect();
-                const headRect = summary.getBoundingClientRect();
                 rows.push({
-                    title: d.querySelector('.pro-config-title').textContent.trim(),
-                    mirror: chip.textContent.trim(),
-                    chipInsideHeader: chipRect.top >= headRect.top - 1
-                        && chipRect.bottom <= headRect.bottom + 1,
-                    chipSingleLine: chipRect.height < 24,
+                    title: summary.textContent.trim(),
+                    hasChip: !!summary.querySelector('.pro-config-summary'),
                 });
             });
-            const v = (id) => document.getElementById(id)?.value?.trim() || '';
-            const c = (id) => !!document.getElementById(id)?.checked;
+            const r = (id) => {
+                const node = document.getElementById(id);
+                return node ? node.getBoundingClientRect().top : null;
+            };
+            const v = (id) => document.getElementById(id)?.value?.trim();
+            const inStep4 = (id) => !!document.querySelector(`#proStepAdvanced [id="${id}"]`);
+            const inPane = (sel) => !!document.querySelector(`#tab-troubleshooting ${sel}`);
             return {
                 rows,
-                values: {
-                    ch5: v('channel_5g'), width: v('channel_width'),
-                    beacon: v('beacon_interval'), dtim: v('dtim_period'),
-                    gateway: v('lan_gateway_ip'), dns: v('dhcp_dns'),
-                    timeout: v('ap_ready_timeout_s'),
-                    debug: c('debug'), firewall: c('firewalld_enabled'),
+                tops: {
+                    ch5: r('channel_5g'), ch6: r('channel_6g'),
+                    width: r('channel_width'), tx: r('tx_power'),
+                    gateway: r('lan_gateway_ip'), dns: r('dhcp_dns'),
+                    dhcpStart: r('dhcp_start_ip'), dhcpEnd: r('dhcp_end_ip'),
                 },
+                values: {
+                    width: v('channel_width'), gateway: v('lan_gateway_ip'),
+                    dns: v('dhcp_dns'), timeout: v('ap_ready_timeout_s'),
+                },
+                moved: {
+                    debugOut: !inStep4('debug'),
+                    powerOut: !inStep4('wifi_power_save_disable'),
+                    natOut: !inStep4('nat_accel'),
+                    bridgeOut: !inStep4('bridge_mode'),
+                    firewallOut: !inStep4('firewalld_enabled'),
+                    noVirtOut: !inStep4('optimized_no_virt'),
+                    debugIn: inPane('#proDebuggingCard #debug'),
+                    powerIn: inPane('#proCompatibilityCard #wifi_power_save_disable'),
+                    usbIn: inPane('#proCompatibilityCard #usb_autosuspend_disable'),
+                    natIn: inPane('#proCompatibilityCard [data-field="nat_accel"]'),
+                    bridgeIn: inPane('#proCompatibilityCard [data-field="bridge_mode"]'),
+                    firewallIn: inPane('#proCompatibilityCard [data-field="firewalld_enabled"]'),
+                    noVirtIn: inPane('#proCompatibilityCard [data-field="optimized_no_virt"]'),
+                },
+                dupes: ['debug', 'wifi_power_save_disable', 'nat_accel', 'bridge_mode',
+                        'firewalld_enabled', 'optimized_no_virt'].map(
+                    (id) => document.querySelectorAll(`[id="${id}"]`).length),
             };
         }"""
     )
-    mirrors = {row["title"]: row["mirror"] for row in data["rows"]}
-    values = data["values"]
-    assert f"5 GHz {values['ch5'] or 'Auto'}" in mirrors["Wireless"]
-    assert f"Width {values['width'] or '80'} MHz" in mirrors["Wireless"]
-    assert f"Beacon {values['beacon'] or '—'}" in mirrors["Wireless"]
-    assert f"DTIM {values['dtim'] or '—'}" in mirrors["Wireless"]
-    assert f"Gateway {values['gateway'] or '—'}" in mirrors["Network"]
-    assert f"DNS {values['dns'] or '—'}" in mirrors["Network"]
-    assert ("Firewall on" if values["firewall"] else "Firewall off") in mirrors["Network"]
-    assert f"Timeout {values['timeout'] or '—'}s" in mirrors["System & Performance"]
-    assert ("Debug on" if values["debug"] else "Debug off") in mirrors["System & Performance"]
+    # Headers carry only the title: no mirrored summary chips.
     for row in data["rows"]:
-        assert row["chipInsideHeader"], f"{row['title']}: mirror overflows its header"
-        assert row["chipSingleLine"], f"{row['title']}: mirror wraps to a second line"
+        assert row["hasChip"] is False, f"{row['title']}: header still shows a summary chip"
+    # Two-column alignment: paired fields share row tops at desktop width.
+    tops = data["tops"]
+    assert abs(tops["ch5"] - tops["ch6"]) < 2, "5 GHz / 6 GHz must share a row"
+    assert abs(tops["width"] - tops["tx"]) < 2, "Width / TX power must share a row"
+    assert abs(tops["gateway"] - tops["dns"]) < 2, "Gateway / DNS must share a row"
+    assert abs(tops["dhcpStart"] - tops["dhcpEnd"]) < 2, "DHCP start/end must share a row"
+    # The live values are the applied-state mirror.
+    values = data["values"]
+    assert values["width"], "channel width must show the applied value"
+    assert values["gateway"] and values["dns"] and values["timeout"]
+    # Compatibility/recovery controls moved to Troubleshooting, no clones.
+    for key, ok in data["moved"].items():
+        assert ok, f"relocation check failed: {key}"
+    assert data["dupes"] == [1, 1, 1, 1, 1, 1]
 
 
 def _assert_row_geometry(pro_page, context):

@@ -293,7 +293,8 @@ body[data-ui-mode="advanced"] .pro-advanced-group-help {
   line-height: 1.45;
 }
 
-/* Consistent accordion header: title left, applied-state mirror right. */
+/* Step 4 accordions: headers carry only the title and the +/- affordance;
+   the live field values themselves mirror the applied state. */
 body[data-ui-mode="advanced"] .pro-guided-advanced-groups .pro-config-details > summary {
   display: flex;
   align-items: center;
@@ -301,76 +302,74 @@ body[data-ui-mode="advanced"] .pro-guided-advanced-groups .pro-config-details > 
   min-height: 52px;
 }
 
-body[data-ui-mode="advanced"] .pro-config-title {
-  flex: 0 0 auto;
-}
-
-body[data-ui-mode="advanced"] .pro-config-summary {
+body[data-ui-mode="advanced"] .pro-guided-advanced-groups .pro-config-details > summary::after {
   margin-left: auto;
-  min-width: 0;
-  max-width: 60%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
 }
 
-@media (max-width: 760px) {
-  body[data-ui-mode="advanced"] .pro-config-summary {
-    display: none;
+/* Clean two-column form: labels above controls, aligned rows, calm rhythm. */
+body[data-ui-mode="advanced"] .pro-guided-advanced-groups .pro-config-body {
+  gap: 18px 20px;
+}
+
+body[data-ui-mode="advanced"] .pro-config-body > [data-field] > label,
+body[data-ui-mode="advanced"] .pro-config-body .form-row label {
+  display: block;
+  margin: 0 0 6px;
+}
+
+/* Checkbox cells align with the adjacent input's control line. */
+body[data-ui-mode="advanced"] .pro-config-body > [data-field="channel_auto_select"],
+body[data-ui-mode="advanced"] .pro-config-body > [data-field="short_guard_interval"] {
+  align-self: end;
+  padding-bottom: 10px;
+}
+
+body[data-ui-mode="advanced"] .pro-advanced-toggles {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 20px;
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 900px) {
+  body[data-ui-mode="advanced"] .pro-advanced-toggles {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
-/* Step 4 subgroups: one card per topic, fields on a two-column grid. */
-body[data-ui-mode="advanced"] .pro-config-body > .pro-advanced-subgroup {
-  grid-column: 1 / -1;
-  margin: 0;
-  padding: 14px 16px 16px;
+/* Troubleshooting: Compatibility & Recovery and Debugging cards. */
+body[data-ui-mode="advanced"] #proCompatibilityCard,
+body[data-ui-mode="advanced"] #proDebuggingCard {
+  padding: 12px 14px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-subtle);
 }
 
-body[data-ui-mode="advanced"] .pro-advanced-subgroup-title {
-  margin: 0 0 10px;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-}
-
-body[data-ui-mode="advanced"] .pro-advanced-subgroup-body {
+body[data-ui-mode="advanced"] .pro-compat-toggles {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 16px;
-  align-items: start;
+  gap: 10px 20px;
+  margin: 12px 0 0;
 }
 
-body[data-ui-mode="advanced"] .pro-advanced-subgroup-body > .form-row {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-
-body[data-ui-mode="advanced"] .pro-advanced-subgroup-body > .tog-group {
-  grid-column: 1 / -1;
+body[data-ui-mode="advanced"] .pro-compat-blocks {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 16px;
-  margin: 0;
+  gap: 14px;
+  margin: 14px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
 }
 
-body[data-ui-mode="advanced"] .pro-advanced-subgroup-body .form-group {
+body[data-ui-mode="advanced"] .pro-compat-blocks .form-group {
   margin: 0;
 }
 
 @media (max-width: 900px) {
-  body[data-ui-mode="advanced"] .pro-advanced-subgroup-body,
-  body[data-ui-mode="advanced"] .pro-advanced-subgroup-body > .tog-group {
+  body[data-ui-mode="advanced"] .pro-compat-toggles {
     grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -58,15 +58,6 @@ function assertInformationArchitecture(document) {
     'Connectivity must appear before Connection Quality');
 }
 
-function advancedSummaries(document) {
-  const summaries = {};
-  document.querySelectorAll('#proStepAdvanced .pro-config-details').forEach((details) => {
-    const title = details.querySelector('.pro-config-title')?.textContent.trim();
-    summaries[title] = details.querySelector('.pro-config-summary')?.textContent || '';
-  });
-  return summaries;
-}
-
 function assertAdvancedOrganization(document) {
   // Step 2: the redundant generic helper line is gone.
   assert.ok(
@@ -76,38 +67,60 @@ function assertAdvancedOrganization(document) {
     'the generic Step 2 helper line must not render',
   );
 
-  // Step 4 subgroups hold the live fields.
-  const sub = (group, key, selector) => document.querySelector(
-    `#proStepAdvanced .pro-advanced-subgroup[data-subgroup="${key}"] ${selector}`,
-  );
-  assert.ok(sub('Wireless', 'channels', '[data-field="channel_5g"]'));
-  assert.ok(sub('Wireless', 'channels', '[data-field="channel_auto_select"]'));
-  assert.ok(sub('Wireless', 'timing', '#dtim_period'));
-  assert.ok(sub('Network', 'addressing', '#lan_gateway_ip'));
-  assert.ok(sub('Network', 'firewall', '#firewalld_enabled'));
-  assert.ok(sub('System', 'power', '#wifi_power_save_disable'));
-  assert.ok(sub('System', 'power', '#usb_autosuspend_disable'));
-  assert.ok(sub('System', 'tuning', '#cpu_governor_performance'));
-  assert.ok(sub('System', 'debugging', '#debug'));
-  for (const id of ['channel_5g', 'wifi_power_save_disable', 'usb_autosuspend_disable',
-                    'cpu_governor_performance', 'debug', 'firewalld_enabled']) {
+  // Step 4 headers carry only the title: no mirrored summary chips.
+  document.querySelectorAll('#proStepAdvanced .pro-config-details > summary').forEach((node) => {
+    assert.equal(node.querySelector('.pro-config-summary'), null,
+      'accordion headers must not render summary chips');
+  });
+
+  // Fine-tune keeps only the genuine tuning controls.
+  const inStep4 = (selector) => document.querySelector(`#proStepAdvanced ${selector}`);
+  for (const id of ['channel_5g', 'channel_6g', 'fallback_channel_2g', 'channel_auto_select',
+                    'channel_width', 'tx_power', 'beacon_interval', 'dtim_period',
+                    'short_guard_interval', 'lan_gateway_ip', 'dhcp_dns', 'dhcp_start_ip',
+                    'dhcp_end_ip', 'ap_ready_timeout_s', 'cpu_governor_performance',
+                    'sysctl_tuning', 'interrupt_coalescing']) {
+    assert.ok(inStep4(`#${id}`), `${id} must stay in Fine-tune`);
+  }
+  assert.ok(inStep4('.pro-advanced-toggles #cpu_governor_performance'),
+    'tuning toggles must sit in the clean toggle list');
+  for (const id of ['debug', 'wifi_power_save_disable', 'usb_autosuspend_disable',
+                    'nat_accel', 'bridge_mode', 'firewalld_enabled', 'optimized_no_virt']) {
+    assert.equal(inStep4(`#${id}`), null, `${id} must no longer live in Fine-tune`);
     assert.equal(document.querySelectorAll(`[id="${id}"]`).length, 1, `${id} must stay unique`);
   }
 
-  // Header mirrors are derived from the live loaded values.
-  const summaries = advancedSummaries(document);
-  assert.match(summaries.Wireless, /5 GHz Auto/, 'empty channel must mirror as Auto');
-  assert.match(summaries.Wireless, /Width 80 MHz/);
-  assert.match(summaries.Wireless, /Beacon 50/);
-  assert.match(summaries.Wireless, /DTIM 1/);
-  assert.match(summaries.Network, /Gateway 192\.168\.68\.1/);
-  assert.match(summaries.Network, /DHCP \.10–\.250/);
-  assert.match(summaries.Network, /DNS gateway/);
-  assert.match(summaries.Network, /Firewall on/);
-  assert.match(summaries['System & Performance'], /Timeout 6s/);
-  assert.match(summaries['System & Performance'], /Power save on/);
-  assert.match(summaries['System & Performance'], /Debug off/);
-  assert.match(summaries['System & Performance'], /Default interface/);
+  // The relocated controls live in the Troubleshooting sections.
+  const inPane = (selector) => document.querySelector(`#tab-troubleshooting ${selector}`);
+  assert.ok(inPane('#proCompatibilityCard .pro-compat-toggles #wifi_power_save_disable'));
+  assert.ok(inPane('#proCompatibilityCard .pro-compat-toggles #usb_autosuspend_disable'));
+  assert.ok(inPane('#proCompatibilityCard .pro-compat-blocks [data-field="nat_accel"]'));
+  assert.ok(inPane('#proCompatibilityCard .pro-compat-blocks [data-field="bridge_mode"]'));
+  assert.ok(inPane('#proCompatibilityCard .pro-compat-blocks [data-field="firewalld_enabled"]'));
+  assert.ok(inPane('#proCompatibilityCard .pro-compat-blocks [data-field="optimized_no_virt"]'));
+  assert.ok(inPane('#proDebuggingCard [data-field="debug"]'));
+  const shell = document.querySelector('#tab-troubleshooting .troubleshooting-shell');
+  const compat = document.getElementById('proCompatibilityCard');
+  const quality = document.getElementById('proConnectionQuality');
+  // 4 === Node.DOCUMENT_POSITION_FOLLOWING
+  assert.ok(compat.compareDocumentPosition(quality) & 4,
+    'Connection Quality must stay the final section');
+  assert.equal(shell.lastElementChild, quality);
+
+  // The live controls mirror the loaded configuration values.
+  assert.equal(document.getElementById('channel_width').value, '80');
+  assert.equal(document.getElementById('beacon_interval').value, '50');
+  assert.equal(document.getElementById('dtim_period').value, '1');
+  assert.equal(document.getElementById('lan_gateway_ip').value, '192.168.68.1');
+  assert.equal(document.getElementById('dhcp_start_ip').value, '192.168.68.10');
+  assert.equal(document.getElementById('dhcp_end_ip').value, '192.168.68.250');
+  assert.equal(document.getElementById('dhcp_dns').value, 'gateway');
+  assert.equal(document.getElementById('ap_ready_timeout_s').value, '6');
+  assert.equal(document.getElementById('firewalld_enabled').checked, true);
+  assert.equal(document.getElementById('debug').checked, false);
+  assert.equal(document.getElementById('channel_5g').value, '',
+    'Auto channel keeps its true empty value with the Auto placeholder');
+  assert.equal(document.getElementById('channel_5g').placeholder, 'Auto');
 }
 
 function assertPasswordPrivacy(document) {
@@ -640,27 +653,20 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
       display: 'none',
     }, 'recommended button state must be complete when ready is published');
   }
-  // Header mirrors must track explicit user edits (and the save payload must
-  // still collect the relocated controls). This is a genuine edit, so it runs
-  // after the clean-dirty assertions above.
+  // The save payload must still collect every relocated control. This is a
+  // genuine edit, so it runs after the clean-dirty assertions above.
   const debugToggle = document.getElementById('debug');
   debugToggle.checked = true;
   debugToggle.dispatchEvent(new window.Event('change', { bubbles: true }));
   await tick(window, 80);
-  assert.match(advancedSummaries(document)['System & Performance'], /Debug on/);
-  const channel5 = document.getElementById('channel_5g');
-  channel5.value = '36';
-  channel5.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await tick(window, 80);
-  assert.match(advancedSummaries(document).Wireless, /5 GHz 36/);
-  channel5.value = '';
-  channel5.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await tick(window, 80);
-  assert.match(advancedSummaries(document).Wireless, /5 GHz Auto/);
   const form = window.getForm();
   assert.equal(form.debug, true, 'relocated debug toggle must reach the save payload');
   assert.equal(typeof form.wifi_power_save_disable, 'boolean',
     'relocated power toggles must reach the save payload');
+  assert.equal(typeof form.nat_accel, 'boolean',
+    'relocated NAT toggle must reach the save payload');
+  assert.equal(typeof form.cpu_governor_performance, 'boolean',
+    'tuning toggles must reach the save payload');
 
   assert.deepEqual(errors, []);
   assert.deepEqual(unhandled, []);

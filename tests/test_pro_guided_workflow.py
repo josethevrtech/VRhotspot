@@ -118,17 +118,22 @@ def test_step_four_exposes_detailed_wireless_network_and_system_groups() -> None
     assert "pro-guided-advanced-groups" in source
     assert "Channels, width, radio timing" in source
     assert "Gateway, DHCP, DNS" in source
-    assert "Startup behavior, interface strategy" in source
+    assert "Startup behavior and performance tuning" in source
     assert "pro-advanced-group-help" in source
     assert ".pro-guided-advanced-groups" in style
     assert ".pro-advanced-group-help" in style
-    # Step 4 is organized into titled subgroups with applied-state mirrors in
-    # each accordion header; Step 2 no longer renders the generic filler line.
-    assert "pro-advanced-subgroup" in source
-    assert "advancedSummaryText" in source
-    assert "pro-config-summary" in source
-    assert ".pro-advanced-subgroup" in style
-    assert ".pro-config-summary" in style
+    # Step 4 is a clean two-column form whose live values mirror applied
+    # state: no header summary chips, and compatibility/recovery controls
+    # live under Troubleshooting. Step 2 renders no generic filler line.
+    assert "ADVANCED_LAYOUT" in source
+    assert "pro-advanced-toggles" in source
+    assert "proCompatibilityCard" in source
+    assert "proDebuggingCard" in source
+    assert "ensureTroubleshootingControls" in source
+    assert "advancedSummaryText" not in source
+    assert ".pro-advanced-toggles" in style
+    assert "#proCompatibilityCard" in style
+    assert ".pro-config-summary" not in style
     assert "Choose the performance behavior that best matches this hotspot." not in source
 
 
