@@ -266,18 +266,30 @@
     setFeedback('Refreshing Developer Hub state...', 'loading');
 
     try {
-      const [toolsResponse, versionResponse, devicesResponse, candidatesResponse] = await Promise.all([
+      const [toolsResponse, candidatesResponse] = await Promise.all([
         request(PATHS.tools),
-        request(PATHS.version),
-        request(PATHS.devices),
         request(PATHS.networkDevices),
       ]);
 
       const tools = toolsResponse.ok ? operationData(toolsResponse) : {};
-      const versionResult = versionResponse.ok ? operationData(versionResponse) : {};
+      // The tools report is authoritative for ADB availability: when it
+      // confirms no executable is installed, the version/device probes can
+      // only echo tools_unavailable, so skip them and render the empty
+      // inventory instead of raising an operational error every refresh.
+      const adb = tools && tools.adb && typeof tools.adb === 'object' ? tools.adb : null;
+      const adbKnownMissing = toolsResponse.ok && !!adb && !adb.path;
+
+      const [versionResponse, devicesResponse] = adbKnownMissing
+        ? [null, null]
+        : await Promise.all([
+          request(PATHS.version),
+          request(PATHS.devices),
+        ]);
+
+      const versionResult = versionResponse && versionResponse.ok ? operationData(versionResponse) : {};
       setToolsStatus(tools, versionResult);
 
-      const deviceData = devicesResponse.ok ? nestedData(devicesResponse) : {};
+      const deviceData = devicesResponse && devicesResponse.ok ? nestedData(devicesResponse) : {};
       state.devices = Array.isArray(deviceData.devices) ? deviceData.devices : [];
       if (state.selectedSerial && !state.devices.some((device) => device.serial === state.selectedSerial)) {
         state.selectedSerial = '';
@@ -301,7 +313,7 @@
 
       if (!toolsResponse.ok) {
         setFeedback(`Developer tools status failed: ${responseCode(toolsResponse)}`, 'error');
-      } else if (!devicesResponse.ok) {
+      } else if (devicesResponse && !devicesResponse.ok) {
         setFeedback(`ADB device refresh failed: ${responseCode(devicesResponse)}`, 'error');
       } else {
         setFeedback(
