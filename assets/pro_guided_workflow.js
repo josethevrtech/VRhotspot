@@ -528,7 +528,7 @@
       const technical = adapterTechnicalSummary(adapter, option.value, rawLabel);
       if (option.textContent !== label) option.textContent = label;
       option.removeAttribute('title');
-      option.dataset.technicalLabel = technical;
+      if (option.dataset.technicalLabel !== technical) option.dataset.technicalLabel = technical;
       if (option.selected) selected = { label, technical };
     }
     return selected;
@@ -539,9 +539,10 @@
     const technical = selected?.technical || 'Select a Wi-Fi adapter to view its technical identity.';
     const expanded = info.getAttribute('aria-expanded') === 'true';
     const action = expanded ? 'Hide adapter details' : 'Show adapter details';
-    info.hidden = select.options.length === 0;
-    info.title = action;
-    info.setAttribute('aria-label', action);
+    const shouldHide = select.options.length === 0;
+    if (info.hidden !== shouldHide) info.hidden = shouldHide;
+    if (info.title !== action) info.title = action;
+    if (info.getAttribute('aria-label') !== action) info.setAttribute('aria-label', action);
     info.removeAttribute('data-tip');
     setText(details, technical);
   }

@@ -243,3 +243,86 @@ def test_late_third_party_injection_keeps_row_stable(pro_page):
     mutations = pro_page.evaluate("window.__rowStructuralMutations")
     assert mutations == 0, f"password row saw {mutations} structural mutations while idle"
     assert pro_page.evaluate("document.body.dataset.proGuidedStage") == "ready"
+
+
+def _watch_adapter_select(pro_page):
+    pro_page.evaluate(
+        """() => {
+            const sel = document.getElementById('ap_adapter');
+            window.__selChildList = 0;
+            new MutationObserver((records) => {
+                for (const r of records) {
+                    if (r.type === 'childList') window.__selChildList += 1;
+                }
+            }).observe(sel, {childList: true, subtree: true});
+            window.__selNodes = Array.from(sel.options);
+            window.__selValue = sel.value;
+            window.__selRect = sel.getBoundingClientRect().width;
+        }"""
+    )
+
+
+def _assert_adapter_select_stable(pro_page, seconds, drive_reloads):
+    """Sample for `seconds`; the select must never blank, resize, lose its
+    selection, rebuild unchanged options, or drop its friendly label."""
+    elapsed = 0
+    while elapsed < seconds * 1000:
+        if drive_reloads:
+            pro_page.evaluate("window.loadAdapters()")
+        pro_page.wait_for_timeout(1000)
+        elapsed += 1000
+        sample = pro_page.evaluate(
+            """() => {
+                const sel = document.getElementById('ap_adapter');
+                return {
+                    childList: window.__selChildList,
+                    count: sel.options.length,
+                    value: sel.value,
+                    width: sel.getBoundingClientRect().width,
+                    sameNodes: Array.from(sel.options).every(
+                        (o, i) => o === window.__selNodes[i]),
+                    firstLabel: sel.options[0] ? sel.options[0].textContent : null,
+                };
+            }"""
+        )
+        assert sample["childList"] == 0, f"+{elapsed}ms: option nodes rebuilt"
+        assert sample["sameNodes"], f"+{elapsed}ms: option identity lost"
+        assert sample["count"] > 0, f"+{elapsed}ms: selector blanked out"
+        assert sample["value"] == pro_page.evaluate("window.__selValue"), (
+            f"+{elapsed}ms: selection lost"
+        )
+        assert abs(sample["width"] - pro_page.evaluate("window.__selRect")) < 1, (
+            f"+{elapsed}ms: selector width changed"
+        )
+        assert sample["firstLabel"] and "Wi-Fi" in sample["firstLabel"], (
+            f"+{elapsed}ms: friendly label lost ({sample['firstLabel']!r})"
+        )
+
+
+def test_adapter_selector_is_stable_under_polling(pro_page):
+    _watch_adapter_select(pro_page)
+    # Normal polling plus explicit inventory refreshes for 10 seconds.
+    _assert_adapter_select_stable(pro_page, 10, drive_reloads=True)
+
+    # Repeat after Basic -> Pro -> Basic -> Pro.
+    for advanced in (False, True, False, True):
+        pro_page.evaluate(
+            """(advanced) => {
+                const toggle = document.getElementById('uiModeToggle');
+                toggle.checked = advanced;
+                toggle.dispatchEvent(new Event('change', {bubbles: true}));
+            }""",
+            advanced,
+        )
+        if advanced:
+            pro_page.wait_for_function(
+                "document.body.dataset.proGuidedStage === 'ready'", timeout=15000
+            )
+        else:
+            pro_page.wait_for_function(
+                "document.body.dataset.uiMode === 'basic'", timeout=15000
+            )
+        pro_page.wait_for_timeout(500)
+    pro_page.wait_for_timeout(1000)
+    _watch_adapter_select(pro_page)
+    _assert_adapter_select_stable(pro_page, 10, drive_reloads=True)

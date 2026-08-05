@@ -3259,6 +3259,67 @@ function applyConfig(cfg) {
   updateBasicQosBanner();
 }
 
+function adapterDisplayKind(adapter) {
+  const bus = String(adapter?.bus || '').trim().toLowerCase();
+  if (bus === 'usb') return 'usb';
+  if (['pci', 'pcie', 'platform', 'sdio', 'internal'].includes(bus)) return 'internal';
+  return 'other';
+}
+
+function buildAdapterOptionDefinitions(adapters, mode, recommended) {
+  const definitions = [];
+  let basicUsbCount = 0;
+  for (const a of adapters) {
+    // Basic Mode: Only show USB adapters (hide internal/PCI)
+    // Advanced Mode: Show all (internal + USB)
+    if (mode === 'basic' && a.bus !== 'usb') continue;
+
+    let label;
+    if (mode === 'basic') {
+      basicUsbCount++;
+      const recStr = (a.ifname === recommended) ? ' (Recommended)' : '';
+      label = `USB Wi-Fi ${basicUsbCount}${recStr}`;
+    } else {
+      const ap = a.supports_ap ? 'AP' : 'no-AP';
+      const caps = capsLabel(a);
+      const reg = a.regdom && a.regdom.country ? a.regdom.country : '--';
+      const star = (a.ifname === recommended) ? '* ' : '';
+      label = `${star}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
+    }
+    definitions.push({ value: a.ifname, label, disabled: false, kind: adapterDisplayKind(a) });
+  }
+  return definitions;
+}
+
+function adapterOptionsAreCurrent(select, definitions) {
+  if (select.options.length !== definitions.length) return false;
+  for (let i = 0; i < definitions.length; i++) {
+    const option = select.options[i];
+    const def = definitions[i];
+    if (option.value !== def.value) return false;
+    if (option.disabled !== def.disabled) return false;
+    // Pro decorators relabel options in place and keep the label this code
+    // wrote in data-raw-adapter-label; compare against the owned label so a
+    // decorated option with an unchanged inventory still counts as current.
+    const ownedLabel = option.dataset.rawAdapterLabel !== undefined
+      ? option.dataset.rawAdapterLabel
+      : option.textContent;
+    if (ownedLabel !== def.label) return false;
+  }
+  return true;
+}
+
+function replaceAdapterOptions(select, definitions) {
+  select.innerHTML = '';
+  for (const def of definitions) {
+    const opt = document.createElement('option');
+    opt.value = def.value;
+    opt.textContent = def.label;
+    opt.disabled = def.disabled;
+    select.appendChild(opt);
+  }
+}
+
 async function loadAdapters() {
   if (!isAuthenticated) return;
   let r;
@@ -3279,41 +3340,16 @@ async function loadAdapters() {
 
   // Preserve current selection if possible.
   const current = el.value;
-
-  el.innerHTML = '';
   const mode = getUiMode();
-  let basicUsbCount = 0;
 
-  for (const a of list) {
-    // Basic Mode: Only show USB adapters (hide internal/PCI)
-    // Advanced Mode: Show all (internal + USB)
-    if (mode === 'basic') {
-      // If we detected bus info, enforce USB-only.
-      // If bus detection failed (unknown), we might default to hiding it to be safe, 
-      // or showing it. Given the request "only surface USB", we hide unless confirmed USB.
-      if (a.bus !== 'usb') {
-        continue;
-      }
-    }
-
-    const opt = document.createElement('option');
-    opt.value = a.ifname;
-
-    if (mode === 'basic') {
-      basicUsbCount++;
-      const recStr = (a.ifname === rec) ? ' (Recommended)' : '';
-      opt.textContent = `USB Wi-Fi ${basicUsbCount}${recStr}`;
-    } else {
-      const ap = a.supports_ap ? 'AP' : 'no-AP';
-      const caps = capsLabel(a);
-      const reg = a.regdom && a.regdom.country ? a.regdom.country : '--';
-      const star = (a.ifname === rec) ? '* ' : '';
-      opt.textContent = `${star}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
-    }
-
-    el.appendChild(opt);
+  // A background inventory refresh with unchanged adapters must not destroy
+  // and recreate the option nodes: the native select visibly flashes and
+  // in-place Pro decorations are lost. Rebuild only on a semantic change.
+  const definitions = buildAdapterOptionDefinitions(list, mode, rec);
+  if (!adapterOptionsAreCurrent(el, definitions)) {
+    replaceAdapterOptions(el, definitions);
   }
-  el.dataset.recommended = rec;
+  if (el.dataset.recommended !== rec) el.dataset.recommended = rec;
 
   const trySet = (v) => {
     if (!v) return false;
