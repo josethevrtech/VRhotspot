@@ -22,13 +22,13 @@ def test_pacman_system_adb_removal_uses_fixed_shell_false_argv(tmp_path: Path) -
         if "-Qo" in argv:
             return SimpleNamespace(
                 returncode=0,
-                stdout="/usr/sbin/adb is owned by android-tools 35.0.2-1\\n",
+                stdout="/usr/sbin/adb is owned by android-tools 35.0.2-1\n",
                 stderr="",
             )
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     os_release = tmp_path / "os-release"
-    os_release.write_text("ID=cachyos\\n", encoding="utf-8")
+    os_release.write_text("ID=cachyos\n", encoding="utf-8")
     result = remove_system_platform_tools(
         adb_path="/usr/sbin/adb",
         which=_which({"pacman": "/usr/bin/pacman"}),
@@ -55,12 +55,12 @@ def test_system_adb_removal_rejects_unknown_owner_package(tmp_path: Path) -> Non
         calls.append(list(argv))
         return SimpleNamespace(
             returncode=0,
-            stdout="/usr/sbin/adb is owned by unexpected-package 1.0-1\\n",
+            stdout="/usr/sbin/adb is owned by unexpected-package 1.0-1\n",
             stderr="",
         )
 
     os_release = tmp_path / "os-release"
-    os_release.write_text("ID=arch\\n", encoding="utf-8")
+    os_release.write_text("ID=arch\n", encoding="utf-8")
     result = remove_system_platform_tools(
         adb_path="/usr/sbin/adb",
         which=_which({"pacman": "/usr/bin/pacman"}),
@@ -75,7 +75,7 @@ def test_system_adb_removal_rejects_unknown_owner_package(tmp_path: Path) -> Non
 
 def test_system_adb_removal_is_blocked_on_immutable_os(tmp_path: Path) -> None:
     os_release = tmp_path / "os-release"
-    os_release.write_text("ID=steamos\\n", encoding="utf-8")
+    os_release.write_text("ID=steamos\n", encoding="utf-8")
     result = remove_system_platform_tools(
         adb_path="/usr/bin/adb",
         which=_which({"pacman": "/usr/bin/pacman"}),
