@@ -44,7 +44,8 @@ body[data-ui-mode="advanced"] .devhub-wizard-device select {
 }
 
 .devhub-precondition-dialog {
-  width: min(620px, 100%);
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
 }
 
 .devhub-wizard-header {
@@ -240,6 +241,43 @@ label[for="devhubPackageSerial"][hidden] {
 
 #devhubToolsManagement[hidden] {
   display: none !important;
+}
+
+
+body[data-ui-mode="advanced"] .devhub-precondition-dialog {
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+}
+
+body[data-ui-mode="advanced"] .devhub-precondition-dialog .devhub-wizard-body {
+  min-height: 0;
+  padding: 30px 28px;
+}
+
+.devhub-precondition-copy {
+  display: grid;
+  gap: 12px;
+  max-width: 62ch;
+}
+
+.devhub-precondition-dialog .devhub-wizard-body p {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.devhub-precondition-dialog .devhub-wizard-body p + p {
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.devhub-precondition-dialog .devhub-wizard-footer {
+  flex-wrap: wrap;
+}
+
+.devhub-precondition-dialog .devhub-wizard-footer .btn {
+  min-height: 46px;
 }
 
 @media (max-width: 760px) {

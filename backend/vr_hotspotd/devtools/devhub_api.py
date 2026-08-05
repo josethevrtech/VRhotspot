@@ -38,6 +38,7 @@ from vr_hotspotd.devtools.platform_tools_manager import (
     RESULT_UNSUPPORTED_ARCH,
     install_managed_platform_tools,
     remove_managed_platform_tools,
+    remove_system_platform_tools,
 )
 from vr_hotspotd.devtools.wireless_bootstrap import enable_wireless_adb
 
@@ -310,6 +311,8 @@ class DevHubAPIHandler(APIHandler):
             result = install_managed_platform_tools(
                 license_accepted=request.get("license_accepted")
             )
+        elif request.get("source") == "system":
+            result = remove_system_platform_tools(adb_path=request.get("path"))
         else:
             result = remove_managed_platform_tools()
         result_code = str(result.get("result_code") or RESULT_INSTALL_FAILED)

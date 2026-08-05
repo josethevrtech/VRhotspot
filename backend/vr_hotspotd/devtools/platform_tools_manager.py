@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 import platform
 import shutil
 import stat
+import subprocess
 import tempfile
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional, Union
 from urllib.request import Request, urlopen
@@ -661,6 +662,184 @@ def install_managed_platform_tools(
         },
     )
 
+
+
+def _read_os_release_id(path: Path = Path("/etc/os-release")) -> str:
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("ID="):
+                return line.partition("=")[2].strip().strip('"').lower()
+    except OSError:
+        return ""
+    return ""
+
+
+def _run_package_command(
+    argv: list[str],
+    *,
+    runner: Callable[..., Any],
+    timeout: float = 120.0,
+) -> Any:
+    return runner(
+        argv,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        shell=False,
+    )
+
+
+def remove_system_platform_tools(
+    *,
+    adb_path: Any,
+    which: Callable[[str], Optional[str]] = shutil.which,
+    runner: Callable[..., Any] = subprocess.run,
+    os_release_path: Path = Path("/etc/os-release"),
+) -> Dict[str, Any]:
+    operation = "remove"
+    raw_path = str(adb_path or "").strip()
+    candidate = Path(raw_path)
+    if not raw_path or not candidate.is_absolute() or candidate.name != "adb":
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message="System ADB removal requires the detected absolute adb path.",
+        )
+    if raw_path.startswith(str(Path(DEVTOOLS_ROOT)) + os.sep):
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message="The detected executable is VRhotspot-managed, not a system ADB package.",
+        )
+    if _read_os_release_id(os_release_path) in {"steamos", "bazzite"}:
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message="System ADB removal is unavailable on this immutable operating system.",
+        )
+
+    package = ""
+    manager = ""
+    owner_argv: list[str] = []
+    remove_argv: list[str] = []
+    pacman = which("pacman")
+    dpkg_query = which("dpkg-query")
+    rpm = which("rpm")
+    if pacman:
+        manager = "pacman"
+        owner_argv = [pacman, "-Qo", raw_path]
+    elif dpkg_query:
+        manager = "apt"
+        owner_argv = [dpkg_query, "-S", raw_path]
+    elif rpm:
+        manager = "rpm"
+        owner_argv = [rpm, "-qf", "--qf", "%{NAME}\\n", raw_path]
+    else:
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message="No supported package manager can identify the system ADB package.",
+        )
+
+    try:
+        owner = _run_package_command(owner_argv, runner=runner, timeout=20.0)
+    except Exception as exc:
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message=f"Could not identify the system ADB package: {type(exc).__name__}",
+        )
+    if owner.returncode != 0:
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message="The detected ADB executable is not owned by a supported system package.",
+        )
+
+    output = str(owner.stdout or "").strip()
+    if manager == "pacman":
+        marker = " is owned by "
+        if marker in output:
+            package = output.split(marker, 1)[1].split()[0]
+    elif manager == "apt":
+        package = output.split(":", 1)[0].strip().split(":", 1)[0]
+    else:
+        package = output.splitlines()[0].strip() if output else ""
+
+    allowed = {
+        "pacman": {"android-tools"},
+        "apt": {"adb", "android-tools-adb"},
+        "rpm": {"android-tools"},
+    }
+    if package not in allowed[manager]:
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message="Refusing to remove an unrecognized package that provides adb.",
+            data={"package": package or None, "package_manager": manager},
+        )
+
+    if manager == "pacman":
+        remove_argv = [pacman, "--noconfirm", "-Rns", package]
+    elif manager == "apt":
+        apt_get = which("apt-get")
+        if not apt_get:
+            return _result(
+                operation,
+                success=False,
+                result_code=RESULT_REMOVE_FAILED,
+                message="apt-get is unavailable for system ADB removal.",
+            )
+        remove_argv = [apt_get, "-y", "remove", package]
+    else:
+        dnf = which("dnf5") or which("dnf")
+        if not dnf:
+            return _result(
+                operation,
+                success=False,
+                result_code=RESULT_REMOVE_FAILED,
+                message="dnf is unavailable for system ADB removal.",
+            )
+        remove_argv = [dnf, "-y", "remove", package]
+
+    try:
+        removed = _run_package_command(remove_argv, runner=runner)
+    except Exception as exc:
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message=f"System ADB package removal failed: {type(exc).__name__}",
+        )
+    if removed.returncode != 0:
+        return _result(
+            operation,
+            success=False,
+            result_code=RESULT_REMOVE_FAILED,
+            message="The system package manager could not remove ADB.",
+            data={"package": package, "package_manager": manager},
+        )
+    return _result(
+        operation,
+        success=True,
+        result_code=RESULT_OK,
+        message=f"Removed system ADB package {package}.",
+        data={
+            "removed": True,
+            "source": "system",
+            "package": package,
+            "package_manager": manager,
+            "adb_path": raw_path,
+        },
+    )
 
 def remove_managed_platform_tools(
     *,

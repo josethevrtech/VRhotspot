@@ -101,6 +101,7 @@ def test_tools_actions_follow_structured_ownership_state() -> None:
         "Install Managed ADB",
         "Reinstall Managed ADB",
         "Repair Managed ADB",
+        "Uninstall System ADB",
         "System ADB ready",
         "Managed ADB ready",
         "Managed ADB needs repair",
@@ -108,6 +109,8 @@ def test_tools_actions_follow_structured_ownership_state() -> None:
         assert label in source
     assert "const remove = el('devhubRemoveTools')" in source
     assert "model.source === 'system'" in source
+    assert "remove.dataset.toolsSource = 'system'" in source
+    assert "window.confirm" in source
     assert "model.managed.verified === false" in source
 
 
@@ -128,6 +131,9 @@ def test_wizard_css_is_modal_responsive_and_five_stage() -> None:
     assert ".devhub-wizard-step.current" in source
     assert "grid-template-columns: repeat(5" in source
     assert "@media (max-width: 620px)" in source
+    assert 'body[data-ui-mode="advanced"] .devhub-precondition-dialog' in source
+    assert "min-height: 0;" in source
+    assert "font-size: 18px;" in source
     assert "status-dot" not in source
 
 

@@ -164,3 +164,15 @@ vr-hotspot devbridge tools status
 
 They share the daemon's typed models and authentication contract. Developer Hub
 does not replace Quest Link, SteamVR, ALVR, Virtual Desktop, or any VR runtime.
+
+
+### Removing ADB from Development Tools
+
+Development Tools now follows the detected ADB source. VRhotspot-managed ADB can be
+reinstalled or removed. A system ADB installation exposes an **Uninstall System
+ADB** action with an explicit confirmation; the daemon verifies that the detected
+`adb` executable is owned by a known Android-tools package before invoking a fixed,
+non-shell package-manager command. Immutable SteamOS and Bazzite hosts refuse system
+package removal. When no ADB is detected, the UI offers the reviewed managed ADB
+installation.
+

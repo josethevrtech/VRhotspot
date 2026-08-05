@@ -5,6 +5,7 @@ status: '/v1/status',
 devices: '/v1/devbridge/adb/devices',
 wireless: '/v1/devbridge/adb/enable-wireless',
 tools: '/v1/devbridge/tools/status',
+toolsRemove: '/v1/devbridge/tools/remove',
 };
 const state = {
 ready: false,
@@ -377,7 +378,10 @@ role="dialog" aria-modal="true" aria-labelledby="devhubHotspotPreconditionTitle"
 <h2 id="devhubHotspotPreconditionTitle">Start VRhotspot first</h2>
 </div>
 <div class="devhub-wizard-body">
-<p>Wireless headset setup only works over the dedicated VRhotspot network. Start the hotspot before continuing. Developer Hub will not enable wireless ADB through another Wi-Fi network.</p>
+<div class="devhub-precondition-copy">
+<p><strong>Wireless headset setup only works through the dedicated VRhotspot network.</strong></p>
+<p>Start the hotspot before continuing. Developer Hub will never enable wireless ADB through another Wi-Fi network.</p>
+</div>
 <div id="devhubHotspotPreconditionStatus" class="devhub-precondition-status"
 role="status" aria-live="polite"></div>
 </div>
@@ -647,7 +651,52 @@ const adb = status.adb && typeof status.adb === 'object' ? status.adb : {};
 return {
 source: String(adb.source || 'missing'),
 managed: adb.managed && typeof adb.managed === 'object' ? adb.managed : {},
+system: adb.system && typeof adb.system === 'object' ? adb.system : {},
 };
+}
+function bindToolsRemoveButton() {
+const current = el('devhubRemoveTools');
+if (!current || current.dataset.vrhotspotRemoveBound === '1') return current;
+const replacement = current.cloneNode(true);
+replacement.dataset.vrhotspotRemoveBound = '1';
+replacement.addEventListener('click', async () => {
+const source = String(replacement.dataset.toolsSource || 'managed');
+const adbPath = String(replacement.dataset.adbPath || '');
+if (source === 'system') {
+const confirmed = window.confirm(
+`Uninstall the operating-system package that provides ${adbPath || 'adb'}? `
++ 'Other Android development tools on this computer may also use it.',
+);
+if (!confirmed) return;
+}
+replacement.disabled = true;
+feedback(
+source === 'system'
+? 'Uninstalling the system ADB package...'
+: 'Removing VRhotspot-managed Android Platform-Tools...',
+'loading',
+);
+try {
+const response = await call(PATHS.toolsRemove, {
+method: 'POST',
+body: JSON.stringify({ source, path: adbPath }),
+});
+const result = publicResult(response);
+if (!response.ok || result.success !== true) {
+feedback(resultMessage(response, resultCode(response)), 'error');
+return;
+}
+feedback(result.message || 'ADB removal completed.', 'success');
+el('devhubRefresh')?.click();
+await updateTools();
+} catch (error) {
+feedback(String(error.message || error), 'error');
+} finally {
+replacement.disabled = false;
+}
+});
+current.replaceWith(replacement);
+return replacement;
 }
 async function updateTools() {
 const section = el('devhubToolsManagement');
@@ -658,7 +707,7 @@ const response = await call(PATHS.tools);
 if (!response.ok) return;
 const model = toolsModel(response);
 const install = el('devhubInstallTools');
-const remove = el('devhubRemoveTools');
+const remove = bindToolsRemoveButton();
 const license = el('devhubAcceptToolsLicense')?.closest('.devhub-checks');
 const status = document.querySelector('#tab-devhub .devhub-card-status .small');
 const broken = model.managed.present === true && model.managed.verified === false;
@@ -670,24 +719,35 @@ if (broken) {
 install.hidden = false;
 text(install, 'Repair Managed ADB');
 remove.hidden = false;
+remove.dataset.toolsSource = 'managed';
+remove.dataset.adbPath = String(model.managed.path || '');
+text(remove, 'Remove Managed ADB');
 if (license) license.hidden = false;
 text(status, 'Managed ADB needs repair');
 } else if (managed) {
 install.hidden = false;
 text(install, 'Reinstall Managed ADB');
 remove.hidden = false;
+remove.dataset.toolsSource = 'managed';
+remove.dataset.adbPath = String(model.managed.path || '');
+text(remove, 'Remove Managed ADB');
 if (license) license.hidden = false;
 text(status, 'Managed ADB ready');
 } else if (model.source === 'system') {
-section.hidden = true;
+section.hidden = false;
 install.hidden = true;
-remove.hidden = true;
+remove.hidden = false;
+remove.dataset.toolsSource = 'system';
+remove.dataset.adbPath = String(model.system.path || '');
+text(remove, 'Uninstall System ADB');
 if (license) license.hidden = true;
 text(status, 'System ADB ready');
 } else {
 install.hidden = false;
 text(install, 'Install Managed ADB');
 remove.hidden = true;
+remove.dataset.toolsSource = 'managed';
+remove.dataset.adbPath = '';
 if (license) license.hidden = false;
 text(status, 'ADB unavailable');
 }
