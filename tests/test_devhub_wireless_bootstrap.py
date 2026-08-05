@@ -42,8 +42,10 @@ class BootstrapRunner:
         authorized: bool = True,
         initial_address: str = "192.168.68.23",
         initial_gateway: str = "192.168.68.1",
+        initial_ssid: str = "VR-Hotspot",
         joined_address: str = "192.168.68.23",
         joined_gateway: str = "192.168.68.1",
+        joined_ssid: str = "VR-Hotspot",
         wifi_control: bool = True,
         join_ok: bool = True,
         tcpip_ok: bool = True,
@@ -52,8 +54,10 @@ class BootstrapRunner:
         self.authorized = authorized
         self.initial_address = initial_address
         self.initial_gateway = initial_gateway
+        self.initial_ssid = initial_ssid
         self.joined_address = joined_address
         self.joined_gateway = joined_gateway
+        self.joined_ssid = joined_ssid
         self.wifi_control = wifi_control
         self.join_ok = join_ok
         self.tcpip_ok = tcpip_ok
@@ -63,10 +67,10 @@ class BootstrapRunner:
         self.calls: list[tuple[str, ...]] = []
         self.kwargs: list[dict] = []
 
-    def network(self) -> tuple[str, str]:
+    def network(self) -> tuple[str, str, str]:
         if self.joined:
-            return self.joined_address, self.joined_gateway
-        return self.initial_address, self.initial_gateway
+            return self.joined_address, self.joined_gateway, self.joined_ssid
+        return self.initial_address, self.initial_gateway, self.initial_ssid
 
     def __call__(self, argv, **kwargs):
         command = tuple(argv)
@@ -81,8 +85,8 @@ class BootstrapRunner:
         if command[-2:] == ("getprop", "ro.product.model"):
             return subprocess.CompletedProcess(argv, 0, b"Quest_3S\n", b"")
 
-        if command[-6:] == ("ip", "-4", "addr", "show", "wlan0"):
-            address, _gateway = self.network()
+        if command[-5:] == ("ip", "-4", "addr", "show", "wlan0"):
+            address, _gateway, _ssid = self.network()
             value = (
                 f"4: wlan0 inet {address}/24 brd 192.168.68.255 "
                 "scope global wlan0\n"
@@ -90,8 +94,16 @@ class BootstrapRunner:
             return subprocess.CompletedProcess(argv, 0, value.encode(), b"")
 
         if command[-4:] == ("ip", "route", "show", "default"):
-            address, gateway = self.network()
+            address, gateway, _ssid = self.network()
             value = f"default via {gateway} dev wlan0 src {address}\n"
+            return subprocess.CompletedProcess(argv, 0, value.encode(), b"")
+
+        if command[-3:] == ("cmd", "wifi", "status"):
+            _address, _gateway, ssid = self.network()
+            value = (
+                f'Wi-Fi is enabled\nWifiInfo: SSID: "{ssid}", '
+                'BSSID: 00:11:22:33:44:55\n'
+            )
             return subprocess.CompletedProcess(argv, 0, value.encode(), b"")
 
         if command[-3:] == ("cmd", "wifi", "help"):
@@ -173,7 +185,11 @@ def test_already_on_vrhotspot_is_verified_before_tcpip() -> None:
     assert result["data"]["transport"] == "vrhotspot"
     tcp_index = runner.calls.index((ADB, "-s", "USB123", "tcpip", "5555"))
     assert any(
-        call[-6:] == ("ip", "-4", "addr", "show", "wlan0")
+        call[-5:] == ("ip", "-4", "addr", "show", "wlan0")
+        for call in runner.calls[:tcp_index]
+    )
+    assert any(
+        call[-3:] == ("cmd", "wifi", "status")
         for call in runner.calls[:tcp_index]
     )
     assert not any("connect-network" in call for call in runner.calls)
@@ -184,6 +200,7 @@ def test_other_network_is_joined_and_reverified_before_tcpip() -> None:
     runner = BootstrapRunner(
         initial_address="192.168.1.88",
         initial_gateway="192.168.1.1",
+        initial_ssid="HomeNetwork",
     )
 
     result = run(runner)
@@ -201,6 +218,7 @@ def test_unavailable_wifi_control_enters_guided_fallback_without_tcpip() -> None
     runner = BootstrapRunner(
         initial_address="10.0.0.25",
         initial_gateway="10.0.0.1",
+        initial_ssid="OfficeWiFi",
         wifi_control=False,
     )
 
@@ -218,6 +236,7 @@ def test_route_mismatch_never_enables_tcpip() -> None:
     runner = BootstrapRunner(
         initial_address="192.168.68.23",
         initial_gateway="192.168.68.254",
+        initial_ssid="OtherNetwork",
         joined_address="192.168.68.23",
         joined_gateway="192.168.68.254",
     )
