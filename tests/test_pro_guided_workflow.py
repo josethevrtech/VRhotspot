@@ -116,12 +116,18 @@ def test_step_four_exposes_detailed_wireless_network_and_system_groups() -> None
     style = STYLE.read_text(encoding="utf-8") + OVERRIDE_STYLE.read_text(encoding="utf-8")
 
     assert "pro-guided-advanced-groups" in source
-    assert "Channels, width, radio timing" in source
-    assert "Gateway, DHCP, DNS" in source
-    assert "Startup behavior and performance tuning" in source
-    assert "pro-advanced-group-help" in source
     assert ".pro-guided-advanced-groups" in style
-    assert ".pro-advanced-group-help" in style
+    # The organized sections carry no intro copy; every field label instead
+    # gets the shared accessible info tip with concise help text.
+    assert "Channels, width, radio timing" not in source
+    assert "Gateway, DHCP, DNS." not in source
+    assert "Startup behavior and performance tuning" not in source
+    assert "ADVANCED_FIELD_TIPS" in source
+    assert "ensureAdvancedFieldTips" in source
+    assert "Choose the primary 5 GHz Wi-Fi channel." in source
+    assert "Set the hotspot gateway IP address used by connected devices." in source
+    assert "Reduce interrupt frequency to improve efficiency on supported hardware." in source
+    assert ".pro-advanced-group-help" not in style
     # Step 4 is a clean two-column form whose live values mirror applied
     # state: no header summary chips, and compatibility/recovery controls
     # live under Troubleshooting. Step 2 renders no generic filler line.

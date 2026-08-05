@@ -303,6 +303,103 @@ def test_step_four_clean_layout_and_moved_controls(pro_page):
     assert data["dupes"] == [1, 1, 1, 1, 1, 1]
 
 
+STEP4_TIP_IDS = [
+    "channel_5g", "channel_6g", "fallback_channel_2g", "channel_auto_select",
+    "channel_width", "tx_power", "beacon_interval", "dtim_period",
+    "short_guard_interval", "lan_gateway_ip", "dhcp_dns", "dhcp_start_ip",
+    "dhcp_end_ip", "ap_ready_timeout_s", "cpu_governor_performance",
+    "sysctl_tuning", "interrupt_coalescing",
+]
+
+
+def test_step_four_field_tips_and_icon_sizing(pro_page):
+    data = pro_page.evaluate(
+        """(ids) => {
+            document.querySelectorAll('#proStepAdvanced .pro-config-details')
+                .forEach((d) => d.open = true);
+            const tips = ids.map((id) => {
+                const control = document.getElementById(id);
+                const label = document.querySelector(`label[for="${id}"]`)
+                    || control?.closest('label');
+                const tip = label ? label.querySelector('.hint.tip-only .tip') : null;
+                if (!tip) return {id, missing: true};
+                const r = tip.getBoundingClientRect();
+                return {id, w: r.width, h: r.height,
+                        text: tip.getAttribute('data-tip') || ''};
+            });
+            const step3Tip = document.querySelector(
+                '[data-field="band_preference"] .tip').getBoundingClientRect();
+            return {
+                tips,
+                introGone: !document.querySelector('#proStepAdvanced .pro-advanced-group-help'),
+                step3: {w: step3Tip.width, h: step3Tip.height},
+            };
+        }""",
+        STEP4_TIP_IDS,
+    )
+    assert data["introGone"], "gray intro copy must be gone from Step 4 bodies"
+    for tip in data["tips"]:
+        assert not tip.get("missing"), f"{tip['id']}: label has no info tip"
+        assert tip["text"], f"{tip['id']}: tip has no help text"
+        assert abs(tip["w"] - 16) < 1 and abs(tip["h"] - 16) < 1, (
+            f"{tip['id']}: icon is {tip['w']:.1f}x{tip['h']:.1f}, expected 16x16"
+        )
+    assert abs(data["step3"]["w"] - 16) < 1 and abs(data["step3"]["h"] - 16) < 1
+
+    # Opening a tooltip must not shift the layout.
+    shift = pro_page.evaluate(
+        """() => {
+            const tip = document.querySelector('label[for="channel_5g"] .tip');
+            const label = tip.closest('label');
+            const before = label.getBoundingClientRect().top;
+            tip.focus();
+            const layer = document.querySelector('.floating-tip-layer');
+            return {
+                delta: label.getBoundingClientRect().top - before,
+                layerVisible: !!layer && layer.getAttribute('aria-hidden') !== 'true',
+            };
+        }"""
+    )
+    assert abs(shift["delta"]) < 0.5, "opening a tooltip must not shift the layout"
+    assert shift["layerVisible"], "focusing a tip must open the floating tooltip"
+
+    # Basic-mode icons share the same canonical bounding box.
+    pro_page.evaluate(
+        """() => {
+            const t = document.getElementById('uiModeToggle');
+            t.checked = false;
+            t.dispatchEvent(new Event('change', {bubbles: true}));
+        }"""
+    )
+    pro_page.wait_for_function("document.body.dataset.uiMode === 'basic'", timeout=15000)
+    pro_page.wait_for_timeout(600)
+    basic_tip = pro_page.evaluate(
+        """() => {
+            const tip = Array.from(document.querySelectorAll('.tip')).find(
+                (node) => node.getBoundingClientRect().width > 0);
+            if (!tip) return null;
+            const r = tip.getBoundingClientRect();
+            return {w: r.width, h: r.height};
+        }"""
+    )
+    assert basic_tip, "no visible info icon found in Basic mode"
+    assert abs(basic_tip["w"] - 16) < 1 and abs(basic_tip["h"] - 16) < 1, (
+        f"Basic icon is {basic_tip['w']:.1f}x{basic_tip['h']:.1f}, expected 16x16"
+    )
+
+    pro_page.evaluate(
+        """() => {
+            const t = document.getElementById('uiModeToggle');
+            t.checked = true;
+            t.dispatchEvent(new Event('change', {bubbles: true}));
+        }"""
+    )
+    pro_page.wait_for_function(
+        "document.body.dataset.proGuidedStage === 'ready'", timeout=15000
+    )
+    pro_page.wait_for_timeout(500)
+
+
 def _assert_row_geometry(pro_page, context):
     input_rect = _rect(pro_page, "#wpa2_passphrase")
     reveal_rect = _rect(pro_page, "#btnRevealPass")

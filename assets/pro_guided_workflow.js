@@ -843,18 +843,11 @@
     return passwordReady;
   }
 
-  function addAdvancedGroupHelp(details, text) {
-    const body = details.querySelector(':scope > .pro-config-body');
-    if (!body || body.querySelector(':scope > .pro-advanced-group-help')) return;
-    body.prepend(make('p', 'pro-advanced-group-help', text));
-  }
-
   // Fine-tune keeps only genuine hotspot-tuning controls, arranged on a
   // clean two-column grid. Compatibility/recovery controls live under
   // Troubleshooting (see ensureTroubleshootingControls).
   const ADVANCED_LAYOUT = {
     Wireless: {
-      help: 'Channels, width, radio timing, and transmit power.',
       fields: [
         'channel_5g', 'channel_6g',
         'fallback_channel_2g', 'channel_auto_select',
@@ -864,18 +857,57 @@
       ],
     },
     Network: {
-      help: 'Gateway, DHCP, DNS.',
       fields: [
         'lan_gateway_ip', 'dhcp_dns',
         'dhcp_start_ip', 'dhcp_end_ip',
       ],
     },
     'System & Performance': {
-      help: 'Startup behavior and performance tuning.',
       fields: ['ap_ready_timeout_s'],
       toggles: ['cpu_governor_performance', 'sysctl_tuning', 'interrupt_coalescing'],
     },
   };
+
+  // Every Fine-tune label carries the same accessible info tip used across
+  // the app; the sections need no introductory copy beyond these.
+  const ADVANCED_FIELD_TIPS = {
+    channel_5g: 'Choose the primary 5 GHz Wi-Fi channel. Auto lets VRHotspot select it automatically.',
+    channel_6g: 'Choose the primary 6 GHz Wi-Fi channel when 6 GHz is available. Auto selects it automatically.',
+    fallback_channel_2g: 'Choose the fallback 2.4 GHz channel used when fallback operation is needed.',
+    channel_auto_select: 'Scan available channels at startup and choose the best one automatically.',
+    channel_width: 'Choose how wide the wireless channel is. Wider channels can improve throughput but may be less reliable in crowded environments.',
+    tx_power: 'Set transmit power for the hotspot radio. Auto lets the system choose.',
+    beacon_interval: 'Set how often the hotspot broadcasts beacon frames. Lower values announce the network more frequently.',
+    dtim_period: 'Set how often buffered broadcast and multicast traffic is announced to connected devices.',
+    short_guard_interval: 'Enable a shorter guard interval to improve throughput when the wireless environment supports it.',
+    lan_gateway_ip: 'Set the hotspot gateway IP address used by connected devices.',
+    dhcp_dns: 'Set which DNS server connected devices should use.',
+    dhcp_start_ip: 'Set the first IP address in the DHCP range handed out to clients.',
+    dhcp_end_ip: 'Set the last IP address in the DHCP range handed out to clients.',
+    ap_ready_timeout_s: 'Set how long VRHotspot waits during startup before timing out.',
+    cpu_governor_performance: 'Prioritize CPU performance for hotspot operation at the cost of higher power usage.',
+    sysctl_tuning: 'Apply recommended kernel tuning values for hotspot and networking performance.',
+    interrupt_coalescing: 'Reduce interrupt frequency to improve efficiency on supported hardware.',
+  };
+
+  function ensureAdvancedFieldTips() {
+    if (typeof renderHintTip !== 'function') return;
+    for (const [id, text] of Object.entries(ADVANCED_FIELD_TIPS)) {
+      const control = el(id);
+      if (!control) continue;
+      const labelEl = document.querySelector(`label[for="${id}"]`) || control.closest('label');
+      if (!labelEl || labelEl.querySelector(':scope .hint.tip-only')) continue;
+      const holder = make('span', 'hint tip-only');
+      labelEl.appendChild(holder);
+      renderHintTip(holder, text);
+      // The icon lives inside the label: keep pointer use on the tip from
+      // activating the labeled control (focus steal / checkbox toggle).
+      holder.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+    }
+  }
 
   function advancedTopContainer(body, node) {
     let current = node;
@@ -891,8 +923,9 @@
     const body = details.querySelector(':scope > .pro-config-body');
     if (!body) return;
     const ordered = [];
-    const help = body.querySelector(':scope > .pro-advanced-group-help');
-    if (help) ordered.push(help);
+    // The sections are self-explanatory now: any leftover intro copy from an
+    // earlier composition is dropped rather than reordered.
+    body.querySelector(':scope > .pro-advanced-group-help')?.remove();
     const banner = body.querySelector(':scope > .info-banner');
     if (banner) ordered.push(banner);
     for (const key of spec.fields || []) {
@@ -943,12 +976,10 @@
       const titleEl = summaryNode?.querySelector(':scope > .pro-config-title');
       const title = String((titleEl || summaryNode)?.textContent || '').trim();
       const spec = ADVANCED_LAYOUT[title];
-      if (spec) {
-        addAdvancedGroupHelp(details, spec.help);
-        layoutAdvancedGroup(details, spec);
-      }
+      if (spec) layoutAdvancedGroup(details, spec);
       appendIfNeeded(groups, details);
     });
+    ensureAdvancedFieldTips();
     return groups.children.length >= 3;
   }
 

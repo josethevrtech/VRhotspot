@@ -67,11 +67,48 @@ function assertAdvancedOrganization(document) {
     'the generic Step 2 helper line must not render',
   );
 
-  // Step 4 headers carry only the title: no mirrored summary chips.
+  // Step 4 headers carry only the title: no mirrored summary chips, and the
+  // bodies render no gray intro copy.
   document.querySelectorAll('#proStepAdvanced .pro-config-details > summary').forEach((node) => {
     assert.equal(node.querySelector('.pro-config-summary'), null,
       'accordion headers must not render summary chips');
   });
+  assert.equal(document.querySelector('#proStepAdvanced .pro-advanced-group-help'), null,
+    'Step 4 bodies must not render intro copy');
+  for (const copy of ['Channels, width, radio timing, and transmit power.',
+                      'Gateway, DHCP, DNS.',
+                      'Startup behavior and performance tuning.']) {
+    assert.ok(!document.body.textContent.includes(copy),
+      `intro copy must be gone: ${copy}`);
+  }
+
+  // Every Fine-tune field label carries the shared accessible info tip.
+  const TIP_IDS = ['channel_5g', 'channel_6g', 'fallback_channel_2g', 'channel_auto_select',
+                   'channel_width', 'tx_power', 'beacon_interval', 'dtim_period',
+                   'short_guard_interval', 'lan_gateway_ip', 'dhcp_dns', 'dhcp_start_ip',
+                   'dhcp_end_ip', 'ap_ready_timeout_s', 'cpu_governor_performance',
+                   'sysctl_tuning', 'interrupt_coalescing'];
+  for (const id of TIP_IDS) {
+    const control = document.getElementById(id);
+    const label = document.querySelector(`label[for="${id}"]`) || control.closest('label');
+    const tip = label?.querySelector('.hint.tip-only .tip');
+    assert.ok(tip, `${id} label must carry an info tip`);
+    assert.ok(tip.getAttribute('data-tip'), `${id} tip must have help text`);
+    assert.equal(tip.getAttribute('aria-label'), tip.getAttribute('data-tip'));
+    assert.equal(tip.getAttribute('tabindex'), '0');
+    assert.ok(!tip.hasAttribute('title'), `${id} tip must not use a native title tooltip`);
+  }
+  assert.match(
+    document.querySelector('label[for="channel_5g"] .tip').getAttribute('data-tip'),
+    /primary 5 GHz Wi-Fi channel/,
+  );
+  assert.match(
+    document.querySelector('label[for="lan_gateway_ip"] .tip').getAttribute('data-tip'),
+    /gateway IP address used by connected devices/,
+  );
+  const sgiTip = document.getElementById('short_guard_interval')
+    .closest('label').querySelector('.tip');
+  assert.match(sgiTip.getAttribute('data-tip'), /shorter guard interval/);
 
   // Fine-tune keeps only the genuine tuning controls.
   const inStep4 = (selector) => document.querySelector(`#proStepAdvanced ${selector}`);

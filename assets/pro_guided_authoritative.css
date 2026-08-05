@@ -285,12 +285,17 @@ body[data-ui-mode="advanced"] .pro-guided-advanced-groups > details {
   background: var(--bg-panel);
 }
 
-body[data-ui-mode="advanced"] .pro-advanced-group-help {
-  grid-column: 1 / -1;
+/* Every Fine-tune label pairs its text with the shared 16px info tip. */
+body[data-ui-mode="advanced"] .pro-config-body label .hint.tip-only {
+  display: inline-flex;
+  align-items: center;
   margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.45;
+}
+
+body[data-ui-mode="advanced"] .pro-config-body label .hint.tip-only .tip {
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 
 /* Step 4 accordions: headers carry only the title and the +/- affordance;
@@ -313,7 +318,9 @@ body[data-ui-mode="advanced"] .pro-guided-advanced-groups .pro-config-body {
 
 body[data-ui-mode="advanced"] .pro-config-body > [data-field] > label,
 body[data-ui-mode="advanced"] .pro-config-body .form-row label {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0 0 6px;
 }
 
