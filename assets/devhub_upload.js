@@ -278,7 +278,7 @@
 
   const assets = [
     '/assets/browser_session.js?v=139-session-hotfix',
-    '/assets/pro_guided_workflow.js?v=148-adapter-source-labels-4',
+    '/assets/pro_guided_workflow.js?v=148-owned-cells-1',
   ];
   for (const src of assets) {
     const script = document.createElement('script');
@@ -291,7 +291,7 @@
 (function stabilizeProAdapterControl() {
   'use strict';
 
-  const STYLE_HREF = '/assets/pro_guided_authoritative.css?v=148-adapter-source-labels-4';
+  const STYLE_HREF = '/assets/pro_guided_authoritative.css?v=148-owned-cells-1';
   let wrapped = false;
   let reconcileQueued = false;
 
@@ -340,7 +340,9 @@
         label = `Wi-Fi Adapter ${counters.other}`;
       }
       if (option.value === recommended) label += ' (Recommended)';
-      option.textContent = label;
+      // Idempotent writes: this runs from a childList observer, so an
+      // unconditional rewrite would observe itself and loop forever.
+      if (option.textContent !== label) option.textContent = label;
       option.removeAttribute('title');
     }
   }
@@ -376,7 +378,7 @@
       link.dataset.proAdapterControls = '1';
       document.head.appendChild(link);
     }
-    if (!link.href.includes('148-adapter-source-labels-4')) link.href = STYLE_HREF;
+    if (!link.href.includes('148-owned-cells-1')) link.href = STYLE_HREF;
   }
 
   function decorate() {
@@ -390,11 +392,16 @@
     const info = document.getElementById('proAdapterInfo');
     if (info) {
       const expanded = info.getAttribute('aria-expanded') === 'true';
-      info.replaceChildren(document.createTextNode('Adapter details'));
+      // Idempotent writes: an unconditional replaceChildren() is observed by
+      // this script's own childList observer and loops the decorators forever.
+      if (info.textContent !== 'Adapter details') {
+        info.replaceChildren(document.createTextNode('Adapter details'));
+      }
       info.classList.remove('tip');
       info.removeAttribute('data-tip');
-      info.title = expanded ? 'Hide adapter details' : 'Show adapter details';
-      info.setAttribute('aria-label', info.title);
+      const action = expanded ? 'Hide adapter details' : 'Show adapter details';
+      if (info.title !== action) info.title = action;
+      if (info.getAttribute('aria-label') !== action) info.setAttribute('aria-label', action);
     }
   }
 

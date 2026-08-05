@@ -91,7 +91,7 @@
   function ensureStyles() {
     const styles = [
       ['/assets/pro_guided_workflow.css?v=148-authoritative-composer', 'base'],
-      ['/assets/pro_guided_authoritative.css?v=148-adapter-details-2', 'authoritative'],
+      ['/assets/pro_guided_authoritative.css?v=148-owned-cells-1', 'authoritative'],
     ];
     for (const [href, kind] of styles) {
       if (document.querySelector(`link[data-pro-guided-styles="${kind}"]`)) continue;
@@ -617,8 +617,8 @@
     }
 
     applyRecommendedButtonState(recommended, true);
-    recommended.textContent = 'Recommended';
-    rescan.textContent = 'Rescan adapters';
+    setText(recommended, 'Recommended');
+    setText(rescan, 'Rescan adapters');
     ensureChildOrder(row, [select, info, recommended, rescan]);
 
     if (row.dataset.proAdapterWired !== '1') {
@@ -722,13 +722,21 @@
   }
 
   function passwordRowComplete(field, input, reveal, qr, hint) {
+    // Verify only the application-owned nodes. Password managers and other
+    // extensions may inject siblings, wrappers, or shadow hosts at any time;
+    // those must never demote readiness or trigger a DOM fight.
     const row = field.querySelector(':scope > .pro-password-row');
     if (!row) return false;
+    const cell = row.querySelector(':scope > .pro-password-input-cell');
+    if (!cell || !cell.contains(input)) return false;
+    if (reveal.parentElement !== row || qr.parentElement !== row) return false;
     const children = Array.from(row.children);
-    if (children.length !== 3) return false;
-    if (children[0] !== input || children[1] !== reveal || children[2] !== qr) return false;
+    const cellIndex = children.indexOf(cell);
+    const revealIndex = children.indexOf(reveal);
+    const qrIndex = children.indexOf(qr);
+    if (!(cellIndex > -1 && cellIndex < revealIndex && revealIndex < qrIndex)) return false;
     if (hint) {
-      if (hint.parentElement !== field) return false;
+      if (!field.contains(hint) || row.contains(hint)) return false;
       if (!(row.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
     }
     return true;
@@ -756,16 +764,34 @@
       else field.prepend(row);
     }
 
-    reveal.type = 'button';
-    reveal.classList.add('icon-only');
-    reveal.title = 'Show or hide password';
-    reveal.setAttribute('aria-label', 'Show or hide password');
-    qr.type = 'button';
-    qr.textContent = 'QR';
-    qr.className = 'btn icon-only';
-    qr.title = 'Show QR code';
-    qr.setAttribute('aria-label', 'Show QR code');
-    ensureChildOrder(row, [input, reveal, qr]);
+    let cell = row.querySelector(':scope > .pro-password-input-cell');
+    if (!cell) {
+      cell = make('div', 'pro-password-input-cell pro-runtime-wrapper');
+      row.prepend(cell);
+    }
+    // The input stays wherever it lives inside the application-owned cell:
+    // if a password manager wraps it there, moving it back would start a
+    // mutation fight. Only reclaim it when it left the cell entirely.
+    if (!cell.contains(input)) cell.appendChild(input);
+
+    // Idempotent writes only: this runs from a childList observer on every
+    // reconcile, so a same-value rewrite would observe itself and loop.
+    if (reveal.type !== 'button') reveal.type = 'button';
+    // classList.add serializes the attribute even for present tokens, which
+    // still queues a mutation record — guard to stay observer-quiet.
+    if (!reveal.classList.contains('icon-only')) reveal.classList.add('icon-only');
+    if (reveal.title !== 'Show or hide password') reveal.title = 'Show or hide password';
+    if (reveal.getAttribute('aria-label') !== 'Show or hide password') {
+      reveal.setAttribute('aria-label', 'Show or hide password');
+    }
+    if (qr.type !== 'button') qr.type = 'button';
+    setText(qr, 'QR');
+    if (qr.className !== 'btn icon-only') qr.className = 'btn icon-only';
+    if (qr.title !== 'Show QR code') qr.title = 'Show QR code';
+    if (qr.getAttribute('aria-label') !== 'Show QR code') {
+      qr.setAttribute('aria-label', 'Show QR code');
+    }
+    ensureChildOrder(row, [cell, reveal, qr]);
 
     if (hint) {
       hint.classList.add('pro-password-hint');

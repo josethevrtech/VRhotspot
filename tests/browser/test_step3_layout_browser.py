@@ -94,14 +94,25 @@ def test_password_row_is_composed_before_ready(pro_page):
     state = pro_page.evaluate(
         """() => {
             const row = document.querySelector('.pro-password-row');
+            const cell = row ? row.querySelector(':scope > .pro-password-input-cell') : null;
+            const kids = row ? Array.from(row.children) : [];
+            const reveal = document.getElementById('btnRevealPass');
+            const qr = document.getElementById('btnShowQr');
             return {
                 rows: document.querySelectorAll('.pro-password-row').length,
-                kids: row ? Array.from(row.children).map((el) => el.id) : null,
+                cellExists: !!cell,
+                inputInCell: !!cell && cell.contains(document.getElementById('wpa2_passphrase')),
+                revealInRow: !!reveal && reveal.parentElement === row,
+                qrInRow: !!qr && qr.parentElement === row,
+                ordered: !!cell && kids.indexOf(cell) < kids.indexOf(reveal)
+                    && kids.indexOf(reveal) < kids.indexOf(qr),
             };
         }"""
     )
     assert state["rows"] == 1
-    assert state["kids"] == ["wpa2_passphrase", "btnRevealPass", "btnShowQr"]
+    assert state["cellExists"] and state["inputInCell"]
+    assert state["revealInRow"] and state["qrInRow"]
+    assert state["ordered"]
 
 
 def test_password_row_rendered_geometry(pro_page):
@@ -133,3 +144,102 @@ def test_password_row_rendered_geometry(pro_page):
     max_gap = 24
     assert reveal_rect["left"] - input_rect["right"] <= max_gap
     assert qr_rect["left"] - reveal_rect["right"] <= max_gap
+
+
+def _assert_row_geometry(pro_page, context):
+    input_rect = _rect(pro_page, "#wpa2_passphrase")
+    reveal_rect = _rect(pro_page, "#btnRevealPass")
+    qr_rect = _rect(pro_page, "#btnShowQr")
+    assert input_rect and reveal_rect and qr_rect, context
+    assert abs(input_rect["top"] - reveal_rect["top"]) < 1, f"{context}: tops"
+    assert abs(input_rect["top"] - qr_rect["top"]) < 1, f"{context}: tops"
+    assert abs(input_rect["h"] - reveal_rect["h"]) < 1, f"{context}: heights"
+    assert abs(input_rect["h"] - qr_rect["h"]) < 1, f"{context}: heights"
+    assert abs(reveal_rect["w"] - reveal_rect["h"]) < 1, f"{context}: eye square"
+    assert abs(qr_rect["w"] - qr_rect["h"]) < 1, f"{context}: QR square"
+    assert input_rect["right"] <= reveal_rect["left"] + 1, f"{context}: wrap"
+    assert reveal_rect["right"] <= qr_rect["left"] + 1, f"{context}: wrap"
+    assert reveal_rect["left"] - input_rect["right"] <= 24, f"{context}: detached eye"
+    assert qr_rect["left"] - reveal_rect["right"] <= 24, f"{context}: detached eye"
+    dupes = pro_page.evaluate(
+        """() => ['wpa2_passphrase', 'btnRevealPass', 'btnShowQr'].map(
+            (id) => document.querySelectorAll(`[id="${id}"]`).length)"""
+    )
+    assert dupes == [1, 1, 1], f"{context}: duplicated controls {dupes}"
+    assert pro_page.evaluate(
+        "document.body.dataset.proGuidedStage"
+    ) == "ready", f"{context}: stage demoted"
+
+
+INJECTIONS = [
+    ("sibling", """(row, cell, input) => {
+        const icon = document.createElement('div');
+        icon.className = 'thirdparty-icon';
+        icon.style.cssText = 'width:24px;height:24px;background:red;';
+        row.appendChild(icon);
+    }"""),
+    ("abs-control", """(row, cell, input) => {
+        const btn = document.createElement('button');
+        btn.style.cssText = 'position:absolute;right:4px;top:4px;width:20px;height:20px;';
+        (cell || row).appendChild(btn);
+    }"""),
+    ("wrapper", """(row, cell, input) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'thirdparty-wrap';
+        input.parentNode.insertBefore(wrap, input);
+        wrap.appendChild(input);
+    }"""),
+    ("shadow-host", """(row, cell, input) => {
+        const host = document.createElement('div');
+        const shadow = host.attachShadow({mode: 'open'});
+        const inner = document.createElement('span');
+        inner.textContent = 'pm';
+        shadow.appendChild(inner);
+        row.appendChild(host);
+    }"""),
+]
+
+
+def test_late_third_party_injection_keeps_row_stable(pro_page):
+    """Password-manager style DOM injection 1-3s after ready must not break
+    the rendered row for at least five seconds, demote readiness, duplicate
+    controls, or spin the composer in a reconcile loop."""
+    for name, inject_js in INJECTIONS:
+        pro_page.wait_for_timeout(1500)  # inject 1-3 seconds after steady state
+        pro_page.evaluate(
+            f"""() => {{
+                const row = document.querySelector('.pro-password-row');
+                const cell = document.querySelector('.pro-password-input-cell');
+                const input = document.getElementById('wpa2_passphrase');
+                ({inject_js})(row, cell, input);
+            }}"""
+        )
+        deadline = 5000
+        elapsed = 0
+        while elapsed < deadline:
+            pro_page.wait_for_timeout(500)
+            elapsed += 500
+            _assert_row_geometry(pro_page, f"{name} +{elapsed}ms")
+    # No mutation/reconcile loop: at idle the decorators must leave the
+    # password row completely mutation-quiet (a DOM fight would show here).
+    pro_page.evaluate(
+        """() => {
+            window.__rowStructuralMutations = 0;
+            const input = document.getElementById('wpa2_passphrase');
+            new MutationObserver((records) => {
+                for (const record of records) {
+                    // The base app's config poller refreshes input attributes
+                    // as data flow; anything else is a decorator DOM fight.
+                    if (record.type === 'childList' || record.target !== input) {
+                        window.__rowStructuralMutations += 1;
+                    }
+                }
+            }).observe(document.querySelector('.pro-password-row'), {
+                childList: true, subtree: true, attributes: true,
+            });
+        }"""
+    )
+    pro_page.wait_for_timeout(1500)
+    mutations = pro_page.evaluate("window.__rowStructuralMutations")
+    assert mutations == 0, f"password row saw {mutations} structural mutations while idle"
+    assert pro_page.evaluate("document.body.dataset.proGuidedStage") == "ready"

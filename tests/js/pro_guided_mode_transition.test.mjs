@@ -190,10 +190,19 @@ function assertPasswordRowComposed(document) {
   const rows = document.querySelectorAll('.pro-password-row');
   assert.equal(rows.length, 1, 'exactly one composed password row must exist');
   const row = rows[0];
-  assert.deepEqual(
-    Array.from(row.children).map((node) => node.id),
-    ['wpa2_passphrase', 'btnRevealPass', 'btnShowQr'],
-    'input, reveal, and QR must be direct row children in order',
+  const cell = row.querySelector(':scope > .pro-password-input-cell');
+  assert.ok(cell, 'application-owned input cell must be a direct row child');
+  const input = document.getElementById('wpa2_passphrase');
+  const reveal = document.getElementById('btnRevealPass');
+  const qr = document.getElementById('btnShowQr');
+  assert.ok(cell.contains(input), 'input must live inside the application-owned cell');
+  assert.equal(reveal.parentElement, row);
+  assert.equal(qr.parentElement, row);
+  const children = Array.from(row.children);
+  assert.ok(
+    children.indexOf(cell) < children.indexOf(reveal)
+      && children.indexOf(reveal) < children.indexOf(qr),
+    'application cells must stay ordered cell -> reveal -> QR',
   );
   const field = document.querySelector('[data-field="wpa2_passphrase"]');
   assert.equal(row.parentElement, field);
@@ -206,8 +215,7 @@ function assertPasswordRowComposed(document) {
   }
   const hint = document.getElementById('passHint');
   assert.ok(hint);
-  assert.equal(hint.parentElement, field);
-  assert.ok(!row.contains(hint));
+  assert.ok(field.contains(hint) && !row.contains(hint));
   // 4 === Node.DOCUMENT_POSITION_FOLLOWING
   assert.ok(row.compareDocumentPosition(hint) & 4);
 }
@@ -338,6 +346,20 @@ test('authoritative Pro composer survives repeated Basic and Pro transitions', a
   assert.equal(document.body.dataset.proGuidedStage, 'ready');
   assertPasswordRowComposed(document);
   assertPasswordIdentity();
+
+  // Late third-party injections: readiness and composition must hold, and
+  // the composer must not fight a wrapper placed around the input.
+  const rowEl = document.querySelector('.pro-password-row');
+  const injectedSibling = document.createElement('div');
+  rowEl.appendChild(injectedSibling);
+  const wrapEl = document.createElement('div');
+  passwordInputNode.parentNode.insertBefore(wrapEl, passwordInputNode);
+  wrapEl.appendChild(passwordInputNode);
+  await tick(window, 400);
+  assert.equal(document.body.dataset.proGuidedStage, 'ready');
+  assertPasswordRowComposed(document);
+  assertPasswordIdentity();
+  assert.ok(wrapEl.contains(passwordInputNode), 'composer must not unwrap the injected wrapper');
 
   assertReadyPublicationsComplete(readyCaptures, 4);
   assert.deepEqual(errors, []);

@@ -235,7 +235,7 @@ function assertProLayout(document) {
 
   const currentStyles = document.querySelector('link[data-pro-adapter-controls]');
   assert.ok(currentStyles, 'current adapter stylesheet must be loaded after composer styles');
-  assert.match(currentStyles.href, /148-adapter-source-labels-4/);
+  assert.match(currentStyles.href, /148-owned-cells-1/);
 
   adapterInfo.click();
   assert.equal(adapterInfo.getAttribute('aria-expanded'), 'true');
@@ -271,10 +271,19 @@ function assertPasswordRowComposed(document) {
   const rows = document.querySelectorAll('.pro-password-row');
   assert.equal(rows.length, 1, 'exactly one composed password row must exist');
   const row = rows[0];
-  assert.deepEqual(
-    Array.from(row.children).map((node) => node.id),
-    ['wpa2_passphrase', 'btnRevealPass', 'btnShowQr'],
-    'input, reveal, and QR must be direct row children in order',
+  const cell = row.querySelector(':scope > .pro-password-input-cell');
+  assert.ok(cell, 'application-owned input cell must be a direct row child');
+  const input = document.getElementById('wpa2_passphrase');
+  const reveal = document.getElementById('btnRevealPass');
+  const qr = document.getElementById('btnShowQr');
+  assert.ok(cell.contains(input), 'input must live inside the application-owned cell');
+  assert.equal(reveal.parentElement, row, 'reveal must own the second cell');
+  assert.equal(qr.parentElement, row, 'QR must own the third cell');
+  const children = Array.from(row.children);
+  assert.ok(
+    children.indexOf(cell) < children.indexOf(reveal)
+      && children.indexOf(reveal) < children.indexOf(qr),
+    'application cells must stay ordered cell -> reveal -> QR',
   );
   const field = document.querySelector('[data-field="wpa2_passphrase"]');
   assert.equal(row.parentElement, field);
@@ -287,8 +296,7 @@ function assertPasswordRowComposed(document) {
   }
   const hint = document.getElementById('passHint');
   assert.ok(hint, 'passHint must exist');
-  assert.equal(hint.parentElement, field, 'passHint must sit outside the row');
-  assert.ok(!row.contains(hint));
+  assert.ok(field.contains(hint) && !row.contains(hint), 'passHint must sit outside the row');
   // 4 === Node.DOCUMENT_POSITION_FOLLOWING
   assert.ok(row.compareDocumentPosition(hint) & 4, 'passHint must follow the row');
 }
@@ -343,6 +351,16 @@ async function runFullPortalScenario({ passphraseSaved }) {
   await waitFor(window, () => document.querySelector('.basic-guided-setup-card'), 'guided Basic setup');
   await tick(window, 150);
   assertBasicLayout(document);
+
+  // Password-manager opt-out attributes must survive on the real inputs.
+  for (const id of ['ssid', 'wpa2_passphrase']) {
+    const optOut = document.getElementById(id);
+    assert.equal(optOut.getAttribute('autocomplete'), 'off', `${id} autocomplete`);
+    assert.equal(optOut.getAttribute('data-lpignore'), 'true', `${id} lpignore`);
+    assert.ok(optOut.hasAttribute('data-1p-ignore'), `${id} 1p-ignore`);
+    assert.ok(optOut.hasAttribute('data-bwignore'), `${id} bwignore`);
+  }
+
   const recommendedNode = document.getElementById('btnUseRecommended');
   const passwordNodes = {
     input: document.getElementById('wpa2_passphrase'),
@@ -362,6 +380,7 @@ async function runFullPortalScenario({ passphraseSaved }) {
     toggleMode(window, true);
     await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', `Pro ready cycle ${cycle + 1}`);
     await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', `friendly adapter cycle ${cycle + 1}`);
+    await waitFor(window, () => document.getElementById('proAdapterInfo')?.textContent === 'Adapter details', `adapter details control cycle ${cycle + 1}`);
     assertProLayout(document);
     assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
     assert.equal(document.querySelectorAll('[id="btnUseRecommended"]').length, 1);
@@ -389,6 +408,7 @@ async function runFullPortalScenario({ passphraseSaved }) {
   toggleMode(window, true);
   await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', 'final Pro composition');
   await waitFor(window, () => document.querySelector('#ap_adapter option')?.textContent === 'USB Wi-Fi 1 (Recommended)', 'final friendly adapter label');
+  await waitFor(window, () => document.getElementById('proAdapterInfo')?.textContent === 'Adapter details', 'final adapter details control');
   assertProLayout(document);
   assert.equal(document.getElementById('btnUseRecommended'), recommendedNode);
   assertPasswordIdentity();
@@ -417,6 +437,55 @@ async function runFullPortalScenario({ passphraseSaved }) {
   );
   assertPasswordRowComposed(document);
   assertPasswordIdentity();
+
+  // Late third-party injections (password-manager style) must not demote
+  // readiness, break composition, start a DOM fight, or loop the composer.
+  const rowEl = document.querySelector('.pro-password-row');
+  const cellEl = rowEl.querySelector(':scope > .pro-password-input-cell');
+  const sibling = document.createElement('div');
+  sibling.className = 'thirdparty-icon';
+  rowEl.appendChild(sibling);
+  const absControl = document.createElement('button');
+  absControl.style.position = 'absolute';
+  cellEl.appendChild(absControl);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'thirdparty-wrap';
+  const inputEl = document.getElementById('wpa2_passphrase');
+  inputEl.parentNode.insertBefore(wrapper, inputEl);
+  wrapper.appendChild(inputEl);
+  const shadowHost = document.createElement('div');
+  shadowHost.attachShadow({ mode: 'open' });
+  rowEl.appendChild(shadowHost);
+  await tick(window, 500);
+  assert.equal(
+    document.body.dataset.proGuidedStage,
+    'ready',
+    'injected third-party nodes must not demote readiness',
+  );
+  assertPasswordRowComposed(document);
+  assertPasswordIdentity();
+  assert.ok(
+    cellEl.contains(wrapper) && wrapper.contains(inputEl),
+    'the composer must not fight a third-party wrapper inside its cell',
+  );
+  // No mutation/reconcile loop: once settled, the decorators must leave the
+  // password row structurally quiet. The base app's config poller refreshes
+  // input attributes (type/placeholder) as data flow; that is exempt, but no
+  // node may be added, removed, or re-decorated (a DOM fight shows up here).
+  const rowRecords = [];
+  new window.MutationObserver((records) => rowRecords.push(...records))
+    .observe(rowEl, { childList: true, subtree: true, attributes: true });
+  await tick(window, 700);
+  const structural = rowRecords.filter(
+    (record) => record.type === 'childList' || record.target !== inputEl,
+  );
+  assert.equal(
+    structural.length,
+    0,
+    `password row must be structurally quiet at idle, saw ${structural.length} mutations`
+      + ` (${structural.map((r) => `${r.type}:${r.attributeName || ''}@${r.target.id || r.target.className}`).join(', ')})`,
+  );
+  assert.equal(document.body.dataset.proGuidedStage, 'ready');
 
   assert.ok(
     readyCaptures.length >= 4,

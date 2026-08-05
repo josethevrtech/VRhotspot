@@ -20,7 +20,7 @@ def test_pro_runtime_is_loaded_as_versioned_authoritative_asset() -> None:
     source = LOADER.read_text(encoding="utf-8")
 
     assert "/assets/browser_session.js?v=139-session-hotfix" in source
-    assert "/assets/pro_guided_workflow.js?v=148-adapter-source-labels-4" in source
+    assert "/assets/pro_guided_workflow.js?v=148-owned-cells-1" in source
     assert "pro_guided_readiness.js" not in source
     assert "script.async = false" in source
     assert "polishProSetupDensity" not in source
@@ -31,7 +31,7 @@ def test_pro_setup_is_one_authoritative_five_step_workflow() -> None:
 
     assert "buildProGuidedWorkflow" in source
     assert "window.VRHOTSPOT_PRO_COMPOSER = 'authoritative-v1'" in source
-    assert "/assets/pro_guided_authoritative.css?v=148-adapter-details-2" in source
+    assert "/assets/pro_guided_authoritative.css?v=148-owned-cells-1" in source
     for number, step_id in enumerate(
         (
             "proStepAdapter",
@@ -159,9 +159,17 @@ def test_adapter_and_password_compaction_are_reversible() -> None:
     assert "option.removeAttribute('title')" in source
     assert "adapterOptionsObserver = new MutationObserver" in source
     assert "adapterOptionsObserver.observe(select" in source
-    assert "ensureChildOrder(row, [input, reveal, qr])" in source
+    assert "ensureChildOrder(row, [cell, reveal, qr])" in source
+    # The input lives in an application-owned grid cell so late third-party
+    # injections (password managers) can never add grid tracks or trigger a
+    # DOM fight over a wrapped input.
+    assert "pro-password-input-cell" in source
+    assert "if (!cell.contains(input)) cell.appendChild(input)" in source
     assert ".pro-adapter-row" in style
     assert ".pro-password-row" in style
+    assert ".pro-password-input-cell" in style
+    assert "grid-auto-rows: 0" in style
+    assert "grid-auto-columns: 0" in style
 
 
 def test_adapter_labels_are_normalized_before_load_completes() -> None:
@@ -179,7 +187,7 @@ def test_adapter_labels_are_normalized_before_load_completes() -> None:
     # The authoritative composer is the sole Pro/Basic visibility owner for
     # the Recommended button; the loader must no longer touch it at all.
     assert "btnUseRecommended" not in loader
-    assert "148-adapter-source-labels-4" in loader
+    assert "148-owned-cells-1" in loader
     assert "#btnUseRecommended" in style
     assert "display: none !important" in style
     assert ".pro-adapter-selected-label" in style
