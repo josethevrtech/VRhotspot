@@ -50,7 +50,7 @@ def test_hotspot_precondition_is_outside_five_step_wizard() -> None:
     assert "Start VRhotspot first" in source
     assert "Developer Hub will not enable wireless ADB through another Wi-Fi network." in source
     assert "startHotspot(null, 'Developer Hub')" in source
-    assert "waitForHotspot(30000)" in source
+    assert "waitForRunning(30000)" in source
     assert "Open Hotspot Setup" in source
     assert "Connect USB" in source
     assert "Approve debugging" in source
@@ -62,8 +62,9 @@ def test_hotspot_precondition_is_outside_five_step_wizard() -> None:
 def test_wireless_request_contains_only_usb_serial_and_port() -> None:
     source = WIZARD_JS.read_text(encoding="utf-8")
 
-    request_start = source.index("body: JSON.stringify({")
-    request = source[request_start:request_start + 180]
+    request = source[source.index("body: JSON.stringify({"):source.index(
+        "body: JSON.stringify({"
+    ) + 180]
     assert "serial:" in request
     assert "port: 5555" in request
     assert "passphrase" not in request
@@ -73,9 +74,9 @@ def test_wireless_request_contains_only_usb_serial_and_port() -> None:
 def test_manual_pairing_and_ip_forms_are_removed_from_workspace() -> None:
     source = WIZARD_JS.read_text(encoding="utf-8")
 
-    assert "removeManualConnection" in source
-    assert "pairingCard.remove()" in source
-    assert "connectCard.remove()" in source
+    assert "const pairing = card(connectionPanel, 'Wireless Pairing')" in source
+    assert "pairing.remove()" in source
+    assert "connect.remove()" in source
     assert "connectionPanel.remove()" in source
     assert "Advanced ADB" not in source
     assert "Manual pairing and IP connection" not in source
@@ -85,9 +86,9 @@ def test_manual_pairing_and_ip_forms_are_removed_from_workspace() -> None:
 def test_apps_ui_removes_daemon_path_and_editable_serial() -> None:
     source = WIZARD_JS.read_text(encoding="utf-8")
 
-    assert "cleanAppsInterface" in source
+    assert "function cleanApps()" in source
     assert "pathInput.required = false" in source
-    assert "details.remove()" in source
+    assert "container?.remove()" in source
     assert "serial.hidden = true" in source
     assert "APK file upload is temporarily unavailable in the desktop companion" in source
     assert "Open the browser Web Portal to deploy an APK" in source
@@ -100,12 +101,12 @@ def test_tools_actions_follow_structured_ownership_state() -> None:
         "Install Managed ADB",
         "Reinstall Managed ADB",
         "Repair Managed ADB",
-        "Remove Managed ADB",
         "System ADB ready",
         "Managed ADB ready",
         "Managed ADB needs repair",
     ):
         assert label in source
+    assert "const remove = el('devhubRemoveTools')" in source
     assert "model.source === 'system'" in source
     assert "model.managed.verified === false" in source
 
@@ -114,7 +115,7 @@ def test_raw_healthy_adb_state_is_hidden() -> None:
     source = WIZARD_JS.read_text(encoding="utf-8")
 
     assert "if (raw === 'device')" in source
-    assert "stateNode.hidden = true" in source
+    assert "node.hidden = true" in source
     assert "Approve USB debugging" in source
     assert "Recovery mode" in source
 
