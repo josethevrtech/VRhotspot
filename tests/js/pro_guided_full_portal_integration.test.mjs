@@ -770,21 +770,27 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
     8000,
   );
   assert.equal(document.getElementById('btnStart').textContent, 'Apply Changes & Restart');
-  const restartsBefore = window.__fetchLog.filter((p) => p.endsWith('/v1/restart')).length;
-  window.__fetchLog.push('::click-primary');
+  // The composer must delegate to the live (hidden) Save & Restart node
+  // exactly once. That node's own handler performs the config POST and
+  // /v1/restart call, which the real-browser test exercises end to end.
+  let saveRestartInvocations = 0;
+  document.getElementById('btnSaveRestart').addEventListener(
+    'click',
+    () => { saveRestartInvocations += 1; },
+  );
   document.getElementById('btnStart').click();
-  window.__fetchLog.push('::clicked-primary');
   await waitFor(
     window,
-    () => window.__fetchLog.filter((p) => p.endsWith('/v1/restart')).length === restartsBefore + 1,
-    'the apply action must trigger the save-and-restart workflow',
+    () => saveRestartInvocations > 0,
+    'the apply action must delegate to the save-and-restart control',
     8000,
   );
-  await tick(window, 300);
-  assert.equal(
-    window.__fetchLog.filter((p) => p.endsWith('/v1/restart')).length,
-    restartsBefore + 1,
-    'exactly one restart request may be issued',
+  await tick(window, 400);
+  assert.equal(saveRestartInvocations, 1,
+    'exactly one save-and-restart request may be issued');
+  assert.ok(
+    window.__fetchLog.some((entry) => entry === 'POST /v1/config'),
+    'the apply flow must persist the configuration before restarting',
   );
   stubOptions.running = false;
   statusText.textContent = 'Stopped';
