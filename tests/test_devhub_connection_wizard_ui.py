@@ -42,47 +42,90 @@ def test_connection_wizard_assets_and_endpoint_are_served() -> None:
     )
     assert 'WIRELESS_BOOTSTRAP_PATH = "/v1/devbridge/adb/enable-wireless"' in source
     assert "enable_wireless_adb" in source
-    assert "is_wireless_bootstrap" in source
 
 
-def test_normal_connection_tab_is_replaced_by_guided_workflow() -> None:
+def test_hotspot_precondition_is_outside_five_step_wizard() -> None:
     source = WIZARD_JS.read_text(encoding="utf-8")
 
-    assert "Set up wireless headset" in source
-    assert "Connect the headset by USB" in source
-    assert "Approve USB debugging inside the headset" in source
-    assert "Enable Wireless ADB" in source
-    assert "connectionTab.remove()" in source
+    assert "Start VRhotspot first" in source
+    assert "Developer Hub will not enable wireless ADB through another Wi-Fi network." in source
+    assert "startHotspot(null, 'Developer Hub')" in source
+    assert "waitForHotspot(30000)" in source
+    assert "Open Hotspot Setup" in source
+    assert "Connect USB" in source
+    assert "Approve debugging" in source
+    assert "Join VRhotspot" in source
+    assert "Enable wireless" in source
+    assert "Complete" in source
+
+
+def test_wireless_request_contains_only_usb_serial_and_port() -> None:
+    source = WIZARD_JS.read_text(encoding="utf-8")
+
+    request_start = source.index("body: JSON.stringify({")
+    request = source[request_start:request_start + 180]
+    assert "serial:" in request
+    assert "port: 5555" in request
+    assert "passphrase" not in request
+    assert "ssid" not in request
+
+
+def test_manual_pairing_and_ip_forms_are_removed_from_workspace() -> None:
+    source = WIZARD_JS.read_text(encoding="utf-8")
+
+    assert "removeManualConnection" in source
+    assert "pairingCard.remove()" in source
+    assert "connectCard.remove()" in source
     assert "connectionPanel.remove()" in source
-    assert "mergeDiscoveryIntoDevices" in source
-    assert "moveManualConnectionToTools" in source
-    assert "Advanced ADB" in source
-    assert "Manual pairing and IP connection" in source
+    assert "Advanced ADB" not in source
+    assert "Manual pairing and IP connection" not in source
+    assert "Connect by IP" not in source
 
 
-def test_wizard_preserves_privacy_and_internal_serial_state() -> None:
+def test_apps_ui_removes_daemon_path_and_editable_serial() -> None:
     source = WIZARD_JS.read_text(encoding="utf-8")
 
-    assert "devhub-sensitive-identifier" in source
-    assert "dataset.devhubSerial" in source
-    assert "serial: String(device.serial || '')" in source
-    assert "target" in source
+    assert "cleanAppsInterface" in source
+    assert "pathInput.required = false" in source
+    assert "details.remove()" in source
+    assert "serial.hidden = true" in source
+    assert "APK file upload is temporarily unavailable in the desktop companion" in source
+    assert "Open the browser Web Portal to deploy an APK" in source
 
 
-def test_empty_state_observer_is_idempotent_and_direct_child_only() -> None:
+def test_tools_actions_follow_structured_ownership_state() -> None:
     source = WIZARD_JS.read_text(encoding="utf-8")
 
-    assert "empty && empty.textContent !== message" in source
-    assert "observer.observe(deviceList, { childList: true });" in source
-    assert "observer.observe(deviceList, { childList: true, subtree: true });" not in source
+    for label in (
+        "Install Managed ADB",
+        "Reinstall Managed ADB",
+        "Repair Managed ADB",
+        "Remove Managed ADB",
+        "System ADB ready",
+        "Managed ADB ready",
+        "Managed ADB needs repair",
+    ):
+        assert label in source
+    assert "model.source === 'system'" in source
+    assert "model.managed.verified === false" in source
 
 
-def test_wizard_css_is_modal_responsive_and_has_no_status_lights() -> None:
+def test_raw_healthy_adb_state_is_hidden() -> None:
+    source = WIZARD_JS.read_text(encoding="utf-8")
+
+    assert "if (raw === 'device')" in source
+    assert "stateNode.hidden = true" in source
+    assert "Approve USB debugging" in source
+    assert "Recovery mode" in source
+
+
+def test_wizard_css_is_modal_responsive_and_five_stage() -> None:
     source = WIZARD_CSS.read_text(encoding="utf-8")
 
     assert ".devhub-wizard-overlay" in source
     assert ".devhub-wizard-dialog" in source
     assert ".devhub-wizard-step.current" in source
+    assert "grid-template-columns: repeat(5" in source
     assert "@media (max-width: 620px)" in source
     assert "status-dot" not in source
 
