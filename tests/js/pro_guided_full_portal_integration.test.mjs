@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import process from 'node:process';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
+
+// jsdom event-listener promise rejections surface at the process level, not
+// inside the window; collect them so timeout diagnostics can show the cause.
+const processRejections = [];
+process.on('unhandledRejection', (reason) => {
+  processRejections.push(String((reason && reason.stack) || reason).slice(0, 500));
+});
 
 const ROOT = new URL('../../', import.meta.url);
 const readAsset = (path) => readFile(new URL(path, ROOT), 'utf8');
@@ -326,6 +334,7 @@ async function waitFor(window, predicate, label, timeoutMs = 2500) {
     saveRestartExists: !!doc.getElementById('btnSaveRestart'),
     saveRestartParent: doc.getElementById('btnSaveRestart')?.parentElement?.className || '',
     fetchTail: (window.__fetchLog || []).slice(-14),
+    rejections: processRejections.slice(-3),
   };
   throw new Error(`Timed out waiting for ${label} :: ${JSON.stringify(diag)}`);
 }
