@@ -107,3 +107,9 @@ def test_pro_service_card_consumes_canonical_state() -> None:
     assert "VRhotspot is shutting down the hotspot safely." in field_visibility
 
     assert "dataset.hotspotState" in pro_guided
+
+
+def test_lifecycle_dom_suite_is_registered_in_ci() -> None:
+    ci = CI.read_text(encoding="utf-8")
+
+    assert "tests/js/hotspot_lifecycle_status.test.mjs" in ci
