@@ -2,6 +2,87 @@
 
 All notable VR Hotspot release planning and release notes are tracked here.
 
+## Unreleased - v1.1.0
+
+`v1.1.0-rc4` is the final public validation release before stable v1.1.0. No
+additional features are planned for this release line. Remaining changes should
+be limited to release-blocking fixes found during clean-install and distro
+validation.
+
+## v1.1.0-rc4 - Developer Hub
+
+This is the release where VRhotspot stops being just a dedicated hotspot and
+becomes a complete Linux VR development workflow.
+
+### Automatic Quest wireless development
+
+- Add automatic Quest Wi-Fi enrollment over authorized USB ADB.
+- Invoke Horizon OS `cmd wifi connect-network` directly instead of trusting its
+  incomplete help output or scan results.
+- Treat `Connection initiated` only as acknowledgment and wait for real
+  association, DHCP, SSID, subnet, gateway, interface, and route verification.
+- Retry automatic enrollment once before falling back to manual setup.
+- Enable `adb tcpip` and connect to the headset only after the dedicated
+  VRhotspot network has been fully verified.
+- Keep the existing manual Horizon OS flow as a fallback with privacy-aware
+  credential assistance and automatic background rechecks.
+- Abort safely if USB disconnects before verification.
+
+### Developer Hub
+
+- Replace permanent manual ADB forms with a guided five-stage workflow:
+  Connect USB, Approve debugging, Join VRhotspot, Enable wireless, Complete.
+- Add device discovery, device overview, APK upload, install, launch, stop,
+  clear-data, and uninstall operations.
+- Add managed Android Platform-Tools installation, repair, reinstall, and
+  removal using the reviewed r37.0.0 pin.
+- Detect system ADB ownership and allow guarded removal only on supported
+  mutable hosts.
+- Hide raw healthy ADB states and present useful user-facing status instead.
+- Keep the browser out of hotspot secret handling during automatic enrollment.
+
+### Desktop and portal experience
+
+- Add the optional Flatpak desktop companion with the Web Portal built in.
+- Add browser-session authentication shared by the window and tray surfaces.
+- Add tray controls, automatic pairing, token handoff, app icon fixes, and
+  install/uninstall cleanup.
+- Rebuild Basic and Pro hotspot lifecycle presentation around one canonical
+  state model: Starting, Running, Stopping, Stopped, Restarting, Repairing, and
+  Needs attention.
+- Add a local Wi-Fi state icon with reduced-motion support.
+
+### Diagnostics and platform readiness
+
+- Add Adapter Intelligence v2 readiness summaries and recommendations.
+- Add canonical preflight diagnostics and platform-aware next steps.
+- Add sanitized support-bundle generation and authenticated download.
+- Add Wi-Fi 6E readiness reporting and safe fallback guidance.
+- Add vendor provenance, checksum validation, deterministic SBOM generation,
+  and support-bundle provenance data.
+
+### Security and installer reliability
+
+- Harden API authentication, browser sessions, input validation, secret
+  redaction, subprocess argument construction, and wireless-ADB network policy.
+- Keep wireless ADB fail-closed outside the active VRhotspot network.
+- Exclude `node_modules`, virtual environments, caches, bytecode, and coverage
+  output from backend deployment.
+- Replace recursive application copying with a filtered tar sync.
+- Restore previously active services when installation fails after shutdown.
+- Add installer copy-safety, lifecycle DOM, wireless enrollment, secret
+  confinement, and rollback regressions to CI.
+
+### Validation
+
+- Validated the full GUI workflow on a real Quest 3S connected to a CachyOS
+  host: automatic Wi-Fi enrollment, DHCP, strict network verification,
+  wireless ADB handoff, and continued operation after USB removal.
+- Validated the portal remotely from SteamOS through an SSH tunnel.
+- GitHub Actions covers Python 3.11, 3.12, and 3.13, full Pytest, Ruff,
+  compileall, ShellCheck, vendor/SBOM validation, Platform-Tools pin validation,
+  DOM integration, lifecycle regressions, and the installer matrix.
+
 ## v1.0.5 - SteamOS 3.8.12 Hotfix
 
 - Update public SteamOS instructions to recommend guided interactive install by
@@ -13,100 +94,3 @@ All notable VR Hotspot release planning and release notes are tracked here.
 - Record the validated SteamOS result: bundled hostapd/dnsmasq/lnxrouter stack,
   AP interface `x0wlan1`, 5 GHz channel 36, 80 MHz width, confirmed client
   association and WPA handshake, and working internet plus streaming.
-
-## Unreleased - v1.1.0
-
-Planning status: proposed major update. The current stable release remains
-`v1.0.4`; do not mark the software as `v1.1.0` until the release checklist is
-complete.
-
-Theme: "It Just Works" update for SteamOS, Bazzite, CachyOS, Arch, Ubuntu,
-Fedora, and Pop!_OS users.
-
-### Completed v1.1.0 work in this branch
-
-- Add the read-only ADB Dev Bridge foundation for standalone VR headset
-  development: authenticated `GET /v1/devbridge/status`, `/devices`, `/adb`,
-  and `/readiness` endpoints, `vr-hotspot devbridge
-  status|scan|adb-command|logcat-command` CLI commands, an optional TCP
-  reachability probe of ADB port 5555, copyable-only `adb connect`, Wireless
-  Debugging pairing, and logcat helper commands (never executed by the
-  daemon), Unity Build & Run readiness checks with copyable next steps, and a
-  safe `vr-hotspot/devbridge.json` support-bundle section.
-
-- Add authenticated `GET /v1/adapters/readiness` endpoint for Adapter
-  Intelligence v2 summaries, reason codes, Basic Mode recommendation data, and
-  no-adapter responses.
-- Add Adapter Readiness panels to Basic and Pro web UI surfaces.
-- Add authenticated `GET /v1/diagnostics/support_bundle` endpoint that returns
-  a sanitized `.zip` support bundle with version, status, adapter inventory, and
-  readiness data.
-- Add Pro web UI support-bundle download action.
-- Add support bundle redaction, manifest, archive assembly, API, and UI
-  contract tests.
-
-### Installer reliability
-
-- Plan installer hardening for distro detection, dependency checks, service
-  setup, firewall integration, and recovery from partial installs.
-- Improve install and uninstall output so beginners can see exactly what was
-  configured and how to open the web UI.
-- Define validation steps for SteamOS, Bazzite, CachyOS, Arch, Ubuntu, Fedora,
-  and Pop!_OS install paths.
-
-### Adapter Intelligence v2
-
-- Plan a second-generation adapter scoring model that explains which adapter is
-  recommended and why.
-- Expand detection for AP mode support, band support, driver constraints,
-  virtual adapters, and known weak built-in adapters.
-- Preserve Basic Mode defaults that guide users toward the most reliable USB
-  adapter without hiding useful advanced diagnostics.
-
-### Wi-Fi 6E readiness diagnostics
-
-- Plan diagnostics that report whether the system, adapter, regulatory domain,
-  driver, and selected channel are ready for 6 GHz operation.
-- Add clear readiness states for supported, blocked, degraded, and unknown
-  environments.
-- Document fallback expectations when 6 GHz is unavailable and 5 GHz or 2.4 GHz
-  should be used instead.
-
-### First-run setup wizard
-
-- Plan a web UI wizard for first launch that walks users through token entry,
-  adapter selection, SSID/passphrase setup, band choice, and first hotspot
-  start.
-- Keep the wizard focused on successful setup while leaving advanced controls
-  available after onboarding.
-- Include failure paths for missing adapters, blocked permissions, firewall
-  issues, and unsupported 6 GHz operation.
-
-### Support bundle export
-
-- Plan a one-click support bundle that collects relevant configuration,
-  platform facts, service status, recent logs, adapter inventory, diagnostics,
-  and sanitized environment metadata.
-- Ensure exported bundles avoid secrets, API tokens, passphrases, and private
-  keys.
-- Define CLI and web UI entry points so support data can be collected even when
-  one surface is unavailable.
-
-### Documentation refresh
-
-- Refresh user-facing setup docs around supported distributions, recommended
-  adapters, first-run expectations, recovery workflows, and diagnostics.
-- Keep versioning guidance explicit: `v1.0.4` remains stable until the release
-  is intentionally bumped.
-- Update troubleshooting docs with clearer install, firewall, adapter, and
-  Wi-Fi 6E readiness decision trees.
-
-### Test coverage
-
-- Plan coverage for installer preflight behavior, adapter scoring, Wi-Fi 6E
-  readiness states, wizard payloads, support bundle sanitization, and release
-  metadata drift prevention.
-- Keep existing `PYTHONPATH=backend pytest` as the required full-suite check
-  before release.
-- Add distro-focused verification notes for SteamOS, Bazzite, CachyOS, Arch,
-  Ubuntu, Fedora, and Pop!_OS.

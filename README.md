@@ -2,14 +2,30 @@
 
 VR Hotspot turns your Linux PC into a dedicated Wi-Fi access point for your VR
 headset using a USB Wi-Fi adapter. You get a direct, low-latency PC ↔ headset
-connection optimized for VR streaming and remote access — no router required.
+connection optimized for VR streaming, remote access, and headset development —
+no router required.
 
 It's ideal if you travel with a MiniPC or "headless" computer puck and want to
 connect a VR headset and stream to it, even without a monitor.
 
-> **Release candidate:** VR Hotspot is currently at **v1.1.0-rc3**. Release
-> candidates are close to final but may still receive fixes before the stable
-> v1.1.0 release. Please report any issues you hit.
+> **Release candidate:** VR Hotspot is currently at **v1.1.0-rc4 — Developer
+> Hub**. This is the final public validation release before stable v1.1.0.
+> Please report anything that does not work as expected.
+
+## Developer Hub
+
+This is the release where VRhotspot stops being just a dedicated hotspot and
+becomes a complete Linux VR development workflow.
+
+For the normal Quest setup, connect the headset by USB, approve debugging, and
+select **Set up wireless headset**. Developer Hub automatically moves the Quest
+to the dedicated VRhotspot network, verifies its SSID, address, gateway, and
+route, enables wireless ADB, and lets you remove the USB cable. No typing IP
+addresses, pairing codes, passwords, or ADB commands during the normal flow.
+
+If Horizon OS blocks automatic enrollment, Developer Hub falls back to clear
+in-headset instructions and privacy-aware credential assistance while keeping
+the same strict network verification.
 
 ---
 
@@ -54,7 +70,8 @@ Then:
    [Retrieve your API token](#retrieve-your-api-token) if you lost it)
 2. Select your Wi-Fi adapter (wlan1 recommended over wlan0)
 3. Click **Start** to create your hotspot
-4. Connect your VR headset to the new network
+4. Connect your VR headset to the new network, or use Developer Hub to enroll a
+   Quest automatically for wireless development
 
 ---
 
