@@ -33,7 +33,7 @@ function apiPayload(url, inventory) {
     return {
       result_code: 'ok',
       data: {
-        running: false, state: 'stopped', adapter: 'wlan1', band: '5ghz',
+        running: false, phase: 'stopped', state: 'stopped', adapter: 'wlan1', band: '5ghz',
         platform: { os: { id: 'cachyos', version_id: 'rolling' } },
         telemetry: { clients: [] },
       },

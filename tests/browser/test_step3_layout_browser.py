@@ -1118,19 +1118,27 @@ def test_basic_primary_action_uppercase_states(pro_page):
     pro_page.wait_for_timeout(600)
 
     original_pill = pro_page.evaluate(
-        "document.getElementById('basicPillTxt').textContent"
+        """() => ({
+            text: document.getElementById('basicPillTxt').textContent,
+            state: document.getElementById('basicPill').dataset.hotspotState || '',
+        })"""
     )
+    # Simulate setPill: it publishes the canonical lifecycle through
+    # data-hotspot-state alongside the pill text.
     cases = [
-        ("Stopped", "Start hotspot", "start"),
-        ("Running | ch 36", "Stop hotspot", "stop"),
-        ("Error: hostapd failed", "View problem", "problem"),
-        ("Starting…", "Working…", "wait"),
+        ("stopped", "Stopped", "Start hotspot", "start"),
+        ("running", "Running | ch 36", "Stop hotspot", "stop"),
+        ("error", "Error: hostapd failed", "View problem", "problem"),
+        ("starting", "Starting…", "Starting…", "wait"),
     ]
     try:
-        for raw, label, action in cases:
+        for lifecycle, raw, label, action in cases:
             pro_page.evaluate(
-                "(raw) => { document.getElementById('basicPillTxt').textContent = raw; }",
-                raw,
+                """(args) => {
+                    document.getElementById('basicPill').dataset.hotspotState = args[0];
+                    document.getElementById('basicPillTxt').textContent = args[1];
+                }""",
+                [lifecycle, raw],
             )
             pro_page.wait_for_function(
                 """(label) => document.getElementById('btnStartBasic')
@@ -1156,7 +1164,12 @@ def test_basic_primary_action_uppercase_states(pro_page):
             assert state["weight"] in ("600", "700")
     finally:
         pro_page.evaluate(
-            "(raw) => { document.getElementById('basicPillTxt').textContent = raw; }",
+            """(orig) => {
+                const pill = document.getElementById('basicPill');
+                if (orig.state) pill.dataset.hotspotState = orig.state;
+                else delete pill.dataset.hotspotState;
+                document.getElementById('basicPillTxt').textContent = orig.text;
+            }""",
             original_pill,
         )
         pro_page.wait_for_timeout(300)

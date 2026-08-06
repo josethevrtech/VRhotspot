@@ -261,7 +261,20 @@
   }
 
   function serviceState() {
+    // The canonical lifecycle published by ui.js setPill (data-hotspot-state
+    // on the pill / service card) is authoritative; text parsing remains a
+    // fallback for fixtures that only provide the status text.
+    const canonical = document.querySelector('.pro-service-card')?.dataset.hotspotState
+      || el('pill')?.dataset.hotspotState
+      || '';
     const raw = String(el('proServiceStateText')?.textContent || el('pillTxt')?.textContent || 'Checking…').trim();
+    if (canonical === 'error') return { name: 'error', label: 'Needs attention' };
+    if (canonical === 'starting' || canonical === 'stopping' || canonical === 'restarting' || canonical === 'repairing') {
+      return { name: 'working', label: raw || 'Working…' };
+    }
+    if (canonical === 'running') return { name: 'running', label: 'Running' };
+    if (canonical === 'stopped') return { name: 'stopped', label: 'Stopped' };
+
     const value = raw.toLowerCase();
     if (value.includes('error') || value.includes('failed') || value.includes('attention')) {
       return { name: 'error', label: 'Needs attention' };

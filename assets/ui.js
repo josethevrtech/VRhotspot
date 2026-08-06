@@ -2574,6 +2574,7 @@ async function startHotspot(overrides, label) {
   await withActionLock(async () => {
     const prefix = label ? `Starting (${label})...` : 'Starting...';
     setMsg(prefix);
+    setOptimisticHotspotPhase('starting');
     const payload = {};
     if (overrides) payload.overrides = overrides;
 
@@ -2637,6 +2638,7 @@ async function stopHotspot() {
   if (!isAuthenticated) return;
   await withActionLock(async () => {
     setMsg('Stopping...');
+    setOptimisticHotspotPhase('stopping');
     const r = await api('/v1/stop', { method: 'POST' });
     setMsg(r.json ? ('Stop: ' + r.json.result_code) : ('Stop failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
     await refresh();
@@ -2647,6 +2649,7 @@ async function repairHotspot() {
   if (!isAuthenticated) return;
   await withActionLock(async () => {
     setMsg('Repairing...');
+    setOptimisticHotspotPhase('repairing');
     const r = await api('/v1/repair', { method: 'POST' });
     setMsg(r.json ? ('Repair: ' + r.json.result_code) : ('Repair failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
     await refresh();
@@ -2657,6 +2660,7 @@ async function restartHotspot() {
   if (!isAuthenticated) return;
   await withActionLock(async () => {
     setMsg('Restarting...');
+    setOptimisticHotspotPhase('restarting');
     const r = await api('/v1/restart', { method: 'POST' });
     setMsg(r.json ? ('Restart: ' + r.json.result_code) : ('Restart failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
     await refresh();
@@ -2702,28 +2706,83 @@ async function copyFieldValue(fieldId, label, fallbackIds = []) {
   }
 }
 
+// Canonical hotspot lifecycle presentation. The backend phase is the
+// primary signal; state.running only corroborates or fills in when the
+// phase is missing or unrecognized. Every status surface (Pro service
+// card, Basic guided card, raw pills) reads this one resolution via the
+// data-hotspot-state attribute instead of re-parsing presentation text.
+const HOTSPOT_LIFECYCLE_LABELS = {
+  starting: 'Starting…',
+  running: 'Running',
+  stopping: 'Stopping…',
+  stopped: 'Stopped',
+  restarting: 'Restarting…',
+  repairing: 'Repairing…',
+  error: 'Needs attention',
+  unknown: 'Checking status…',
+};
+
+function resolveHotspotLifecycle(state) {
+  const phase = String((state && state.phase) || '').toLowerCase().trim();
+  const running = !!(state && state.running);
+  if (phase === 'starting') return 'starting';
+  if (phase === 'stopping') return 'stopping';
+  if (phase === 'restarting' || phase === 'restart') return 'restarting';
+  if (phase === 'repairing' || phase === 'repair') return 'repairing';
+  if (phase === 'error' || phase === 'failed') return 'error';
+  if (phase === 'running') return 'running';
+  if (phase === 'stopped' || phase === 'inactive') return running ? 'running' : 'stopped';
+  if (running) return 'running';
+  return 'unknown';
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// Decorative Wi-Fi glyph shared by every hotspot status surface. Inline
+// SVG only: no emoji, icon font, or remote image. The lifecycle text next
+// to it stays the accessible signal, so the icon is aria-hidden.
+function createHotspotWifiIcon(className) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('class', `hotspot-wifi-icon${className ? ` ${className}` : ''}`);
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  for (const d of ['M5 12.55a11 11 0 0 1 14.08 0', 'M8.53 16.11a6 6 0 0 1 6.95 0']) {
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(path);
+  }
+  const dot = document.createElementNS(SVG_NS, 'circle');
+  dot.setAttribute('cx', '12');
+  dot.setAttribute('cy', '19.6');
+  dot.setAttribute('r', '1.6');
+  dot.setAttribute('fill', 'currentColor');
+  svg.appendChild(dot);
+  return svg;
+}
+
+function ensurePillWifiIcon(pill) {
+  if (!pill || pill.querySelector('.hotspot-wifi-icon')) return;
+  const legacyDot = pill.querySelector('.dot');
+  const icon = createHotspotWifiIcon('');
+  if (legacyDot) legacyDot.replaceWith(icon);
+  else pill.insertBefore(icon, pill.firstChild);
+}
+
 function setPill(state) {
   const cmdInfo = parseEngineCmd(state && state.engine ? state.engine.cmd : null);
-  const running = !!state.running;
-  const phase = state.phase || '--';
+  const lifecycle = resolveHotspotLifecycle(state);
   const adapter = state.adapter || cmdInfo.apIfname || '--';
   const band = state.band || cmdInfo.band || '--';
   const mode = state.mode || '--';
 
-  // Create clean, readable status text
-  const statusParts = [];
-
-  if (running) {
-    statusParts.push('Running');
-  } else if (phase === 'error') {
-    statusParts.push('Error');
-  } else {
-    statusParts.push('Stopped');
-  }
-
-  if (phase && phase !== '--' && phase !== 'stopped' && phase !== 'error' && phase !== 'running' && !(phase === 'stopped' && !running)) {
-    statusParts.push(phase.charAt(0).toUpperCase() + phase.slice(1));
-  }
+  // The primary segment is always the canonical lifecycle label; only
+  // non-lifecycle details (adapter, band, mode) may follow it.
+  const statusParts = [HOTSPOT_LIFECYCLE_LABELS[lifecycle]];
 
   if (adapter && adapter !== '--') {
     statusParts.push(adapter);
@@ -2737,18 +2796,32 @@ function setPill(state) {
     statusParts.push(mode);
   }
 
-  const statusText = (statusParts.length === 0) ? 'Loading...' : statusParts.join(' | ');
+  const statusText = statusParts.join(' | ');
 
   const apply = (pill, txt) => {
     if (!pill || !txt) return;
-    pill.classList.remove('ok', 'err');
-    if (running) pill.classList.add('ok');
-    else if (phase === 'error') pill.classList.add('err');
+    pill.classList.remove('ok', 'err', 'busy');
+    if (lifecycle === 'running') pill.classList.add('ok');
+    else if (lifecycle === 'error') pill.classList.add('err');
+    else if (lifecycle !== 'stopped' && lifecycle !== 'unknown') pill.classList.add('busy');
+    pill.dataset.hotspotState = lifecycle;
+    ensurePillWifiIcon(pill);
     pill.style.display = 'inline-flex';
     txt.textContent = statusText;
   };
   apply(document.getElementById('pill'), document.getElementById('pillTxt'));
   apply(document.getElementById('basicPill'), document.getElementById('basicPillTxt'));
+}
+
+// Optimistic transient state: rendered synchronously when the user
+// triggers a lifecycle action, before the API request is awaited. It runs
+// through the same canonical resolver, and the next authoritative
+// /v1/status refresh replaces it (refreshRequestSeq is bumped so an
+// already in-flight stale refresh cannot overwrite the transient state).
+function setOptimisticHotspotPhase(phase) {
+  refreshRequestSeq += 1;
+  const base = (lastStatus && typeof lastStatus === 'object') ? lastStatus : {};
+  setPill(Object.assign({}, base, { phase }));
 }
 
 function truncateText(text, maxLen) {

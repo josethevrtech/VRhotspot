@@ -324,12 +324,10 @@ body[data-ui-mode="basic"] .basic-guided-status-state {
   gap: 12px;
 }
 
-body[data-ui-mode="basic"] .basic-guided-status-dot {
-  width: 11px;
-  height: 11px;
-  flex: 0 0 11px;
-  border-radius: 50%;
-  background: var(--text-muted);
+body[data-ui-mode="basic"] .basic-guided-status-icon {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
 }
 
 body[data-ui-mode="basic"] .basic-guided-status-state h4 {
@@ -340,24 +338,10 @@ body[data-ui-mode="basic"] .basic-guided-status-state h4 {
 }
 
 body[data-ui-mode="basic"] .basic-guided-hotspot-copy > p {
-  margin: 8px 0 0 23px;
+  margin: 8px 0 0 36px;
   color: var(--text-muted);
   font-size: 14px;
   line-height: 1.5;
-}
-
-body[data-ui-mode="basic"] .basic-guided-setup-card[data-hotspot-state="running"] .basic-guided-status-dot {
-  background: var(--success);
-  box-shadow: 0 0 8px rgba(0, 255, 157, .45);
-}
-
-body[data-ui-mode="basic"] .basic-guided-setup-card[data-hotspot-state="working"] .basic-guided-status-dot {
-  background: var(--accent-primary);
-}
-
-body[data-ui-mode="basic"] .basic-guided-setup-card[data-hotspot-state="error"] .basic-guided-status-dot {
-  background: var(--danger);
-  box-shadow: 0 0 8px rgba(255, 0, 85, .4);
 }
 
 body[data-ui-mode="basic"] .basic-guided-primary-action {
