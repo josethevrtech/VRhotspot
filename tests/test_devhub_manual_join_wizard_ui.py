@@ -86,10 +86,27 @@ def test_usb_disconnect_and_cancel_stop_manual_join_polling():
 
 
 def test_manual_join_request_never_carries_hotspot_secrets():
+    """The wizard displays the hotspot password on request, but the secret
+    must stay out of the enable-wireless request, storage, logs, and any
+    non-dedicated endpoint."""
     source = WIZARD_JS.read_text(encoding="utf-8")
 
-    assert "passphrase" not in source
-    assert "password" not in source
+    # The enable-wireless request body carries only the USB serial and port.
+    assert "serial: String(device.serial || '')," in source
+    assert "port: 5555," in source
+    # The secret comes only from the dedicated authenticated endpoint.
+    assert "'/v1/config/hotspot-credentials'" in source
+    assert "include_secrets" not in source
+    assert "reveal_passphrase" not in source
+    # The secret is never persisted or logged: the only storage writes are
+    # the privacy flag and the workspace view.
+    assert source.count("localStorage.setItem") == 1
+    assert "localStorage.setItem('vr_hotspot_privacy'" in source
+    assert source.count("sessionStorage.setItem") == 1
+    assert "sessionStorage.setItem('vrhs_devhub_workspace_view'" in source
+    assert "console." not in source
+    # Lifecycle: the secret is purged on open, close, and manual-join exit.
+    assert source.count("purgeCredentialSecret()") >= 5
 
 
 def test_manual_join_css_has_animated_waiting_indicator():

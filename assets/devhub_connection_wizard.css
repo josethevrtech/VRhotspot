@@ -212,6 +212,103 @@ body[data-ui-mode="advanced"] .devhub-wizard-device select {
   font-size: 13px !important;
 }
 
+.devhub-manual-cred {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.devhub-manual-cred-title {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 13px;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.devhub-manual-cred-row {
+  display: grid;
+  gap: 4px;
+}
+
+.devhub-manual-cred-row[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-cred-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.devhub-manual-cred-value {
+  display: block;
+  min-height: 1.4em;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.devhub-manual-cred-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.devhub-manual-cred-actions[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-cred-privacy {
+  display: grid;
+  gap: 10px;
+}
+
+.devhub-manual-cred-privacy[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-cred-privacy-title {
+  margin: 0 !important;
+  color: var(--text-main);
+  font-size: 14px !important;
+}
+
+.devhub-manual-cred-privacy-copy {
+  margin: 0 !important;
+  color: var(--text-muted);
+  font-size: 13px !important;
+}
+
+.devhub-manual-cred-confirm {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 217, 255, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 217, 255, 0.07);
+}
+
+.devhub-manual-cred-confirm[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-cred-confirm p {
+  margin: 0 !important;
+  color: var(--text-main);
+  font-size: 13px !important;
+}
+
+.devhub-manual-cred-notice {
+  min-height: 18px;
+  margin: 0 !important;
+  color: var(--text-muted);
+  font-size: 13px !important;
+}
+
 .devhub-wizard-device {
   display: grid;
   gap: 8px;

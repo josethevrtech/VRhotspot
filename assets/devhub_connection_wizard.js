@@ -4,6 +4,7 @@ const PATHS = {
 status: '/v1/status',
 devices: '/v1/devbridge/adb/devices',
 wireless: '/v1/devbridge/adb/enable-wireless',
+credentials: '/v1/config/hotspot-credentials',
 tools: '/v1/devbridge/tools/status',
 toolsRemove: '/v1/devbridge/tools/remove',
 };
@@ -168,6 +169,162 @@ if (panel) panel.hidden = !show;
 function manualJoinStatus(message) {
 text(el('devhubManualJoinStatus'), message);
 }
+// Hotspot Wi-Fi credential assistance for the manual Horizon OS join step.
+// The passphrase lives only in this closure while the wizard needs it and is
+// purged on close, completion, privacy changes, and saved-password edits.
+const CRED_MASK = '••••••••••';
+const cred = {
+ssid: '',
+value: null,
+revealed: false,
+fetching: false,
+error: '',
+sessionReveal: false,
+confirming: false,
+dismissed: false,
+auto: true,
+notice: '',
+noticeStamp: 0,
+};
+function privacyEnabled() {
+const box = el('privacyMode') || el('privacyModeBasic');
+if (box) return !!box.checked;
+try {
+return (window.localStorage.getItem('vr_hotspot_privacy') || '1') === '1';
+} catch {
+return true;
+}
+}
+function setGlobalPrivacy(enabled) {
+try {
+window.localStorage.setItem('vr_hotspot_privacy', enabled ? '1' : '0');
+} catch { }
+const advanced = el('privacyMode');
+const basic = el('privacyModeBasic');
+if (advanced) advanced.checked = enabled;
+if (basic) basic.checked = enabled;
+const source = advanced || basic;
+if (source) source.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+function credNotice(message) {
+cred.notice = message || '';
+cred.noticeStamp += 1;
+text(el('devhubManualCredNotice'), cred.error || cred.notice);
+}
+function purgeCredentialSecret(options = {}) {
+cred.ssid = '';
+cred.value = null;
+cred.revealed = false;
+cred.fetching = false;
+cred.error = '';
+cred.sessionReveal = false;
+cred.confirming = false;
+cred.dismissed = false;
+cred.auto = options.auto !== false;
+cred.notice = '';
+cred.noticeStamp += 1;
+const secret = el('devhubManualCredSecret');
+if (secret) secret.textContent = '';
+text(el('devhubManualCredNotice'), '');
+}
+async function fetchHotspotCredentials() {
+if (cred.fetching) return;
+if (privacyEnabled() && !cred.sessionReveal) return;
+cred.fetching = true;
+cred.error = '';
+credNotice('Loading the hotspot Wi-Fi password…');
+try {
+const response = await call(PATHS.credentials);
+const data = publicResult(response);
+if (response.ok && typeof data.wpa2_passphrase === 'string' && data.wpa2_passphrase) {
+cred.ssid = String(data.ssid || '');
+cred.value = data.wpa2_passphrase;
+cred.revealed = true;
+credNotice('');
+} else if (resultCode(response) === 'passphrase_not_set') {
+cred.error = 'No hotspot Wi-Fi password is saved.';
+} else {
+cred.error = 'Unable to load the hotspot Wi-Fi password.';
+}
+} catch {
+cred.error = 'Unable to load the hotspot Wi-Fi password.';
+} finally {
+cred.fetching = false;
+renderCredentials();
+}
+}
+async function copyCredentialSecret() {
+if (!cred.value) return;
+try {
+await window.navigator.clipboard.writeText(cred.value);
+credNotice('Password copied to the clipboard.');
+} catch {
+credNotice('Copy is unavailable. Reveal the password and enter it in the headset.');
+}
+const stamp = cred.noticeStamp;
+window.setTimeout(() => {
+if (cred.noticeStamp === stamp) credNotice('');
+}, 4000);
+}
+function toggleCredentialReveal() {
+if (cred.revealed) {
+cred.revealed = false;
+if (privacyEnabled()) {
+purgeCredentialSecret();
+}
+renderCredentials();
+return;
+}
+if (cred.value) {
+cred.revealed = true;
+renderCredentials();
+return;
+}
+void fetchHotspotCredentials();
+renderCredentials();
+}
+function onPrivacyModeChanged() {
+if (privacyEnabled()) purgeCredentialSecret();
+renderCredentials();
+}
+function onSavedPassphraseEdited() {
+if (cred.value === null && !cred.error && !cred.fetching) return;
+purgeCredentialSecret({ auto: false });
+renderCredentials();
+}
+function renderCredentials() {
+const panel = el('devhubManualCredentials');
+if (!panel) return;
+const secretAllowed = !privacyEnabled() || cred.sessionReveal;
+text(el('devhubManualCredSsid'), cred.ssid || state.manualSsid || 'VRhotspot');
+el('devhubManualCredPrivacy').hidden = secretAllowed;
+el('devhubManualCredSecretRow').hidden = !secretAllowed;
+el('devhubManualCredControls').hidden = !secretAllowed;
+if (!secretAllowed) {
+text(el('devhubManualCredSecret'), '');
+el('devhubManualCredPrivacyActions').hidden = cred.dismissed;
+el('devhubManualCredConfirm').hidden = !cred.confirming;
+text(el('devhubManualCredNotice'), '');
+return;
+}
+const wizard = el('devhubWirelessWizard');
+const wizardOpen = !!wizard && !wizard.hidden;
+if (wizardOpen && state.manualJoin && !cred.value && !cred.fetching && !cred.error && cred.auto) {
+void fetchHotspotCredentials();
+}
+const toggle = el('devhubManualCredToggle');
+const copy = el('devhubManualCredCopy');
+if (cred.value && cred.revealed) {
+text(el('devhubManualCredSecret'), cred.value);
+text(toggle, 'Hide');
+} else {
+text(el('devhubManualCredSecret'), CRED_MASK);
+text(toggle, 'Reveal');
+}
+toggle.disabled = cred.fetching;
+copy.disabled = cred.fetching || !cred.value;
+text(el('devhubManualCredNotice'), cred.error || cred.notice);
+}
 function renderManualJoin(device) {
 const ssid = state.manualSsid || 'VRhotspot';
 setStep(3);
@@ -183,6 +340,7 @@ manualJoinStatus(
 state.manualNote || `Waiting for ${modelOf(device)} to join ${ssid}…`,
 );
 }
+renderCredentials();
 manualJoinPanel(true);
 }
 function renderWizard() {
@@ -337,6 +495,7 @@ if (response.ok && result.success) {
 state.manualJoin = false;
 state.finishing = true;
 stopTimer('joinTimer');
+purgeCredentialSecret();
 manualJoinPanel(false);
 setStep(4);
 wizardCopy(
@@ -394,6 +553,7 @@ return;
 }
 state.manualJoin = false;
 stopTimer('joinTimer');
+purgeCredentialSecret();
 setStep(3);
 wizardCopy('Wireless setup needs attention', resultMessage(response, code));
 feedback(resultMessage(response, code), 'error');
@@ -404,6 +564,7 @@ return;
 }
 state.manualJoin = false;
 stopTimer('joinTimer');
+purgeCredentialSecret();
 setStep(3);
 wizardCopy('Wireless setup needs attention', String(error.message || error));
 feedback(String(error.message || error), 'error');
@@ -440,6 +601,38 @@ ${['Connect USB', 'Approve debugging', 'Join VRhotspot', 'Enable wireless', 'Com
 <li>Select <strong id="devhubManualJoinSsid" class="devhub-manual-join-ssid"></strong> and join it.</li>
 <li>Keep the USB cable connected the whole time.</li>
 </ol>
+<div id="devhubManualCredentials" class="devhub-manual-cred">
+<h4 class="devhub-manual-cred-title">Hotspot Wi-Fi credentials</h4>
+<div class="devhub-manual-cred-row">
+<span class="devhub-manual-cred-label">Network</span>
+<code id="devhubManualCredSsid" class="devhub-manual-cred-value"></code>
+</div>
+<div id="devhubManualCredSecretRow" class="devhub-manual-cred-row" hidden>
+<span class="devhub-manual-cred-label">Hotspot Wi-Fi password</span>
+<code id="devhubManualCredSecret" class="devhub-manual-cred-value devhub-manual-cred-secret"></code>
+</div>
+<div id="devhubManualCredControls" class="devhub-manual-cred-actions" hidden>
+<button id="devhubManualCredToggle" class="btn sm secondary" type="button">Reveal</button>
+<button id="devhubManualCredCopy" class="btn sm secondary" type="button">Copy password</button>
+</div>
+<div id="devhubManualCredPrivacy" class="devhub-manual-cred-privacy" hidden>
+<p class="devhub-manual-cred-privacy-title"><strong>Password hidden by Privacy Mode.</strong></p>
+<p class="devhub-manual-cred-privacy-copy">Privacy Mode hides passwords and sensitive information so they are not exposed while screen sharing, streaming, or recording.</p>
+<div id="devhubManualCredPrivacyActions" class="devhub-manual-cred-actions">
+<button id="devhubManualCredShowOnce" class="btn sm secondary" type="button">Show password once</button>
+<button id="devhubManualCredPrivacyOff" class="btn sm secondary" type="button">Turn off Privacy Mode</button>
+<button id="devhubManualCredKeepHidden" class="btn sm secondary" type="button">Keep hidden</button>
+</div>
+<div id="devhubManualCredConfirm" class="devhub-manual-cred-confirm" hidden>
+<p>Reveal the hotspot Wi-Fi password on this screen? It stays visible only for this setup session, and Privacy Mode stays on.</p>
+<div class="devhub-manual-cred-actions">
+<button id="devhubManualCredConfirmShow" class="btn sm primary" type="button">Reveal password</button>
+<button id="devhubManualCredConfirmCancel" class="btn sm secondary" type="button">Cancel</button>
+</div>
+</div>
+</div>
+<p id="devhubManualCredNotice" class="devhub-manual-cred-notice" role="status" aria-live="polite"></p>
+</div>
 <p class="devhub-manual-join-note">Horizon OS does not permit automatic Wi-Fi enrollment. Developer Hub keeps checking automatically and continues as soon as the headset is on VRhotspot.</p>
 </div>
 <p class="devhub-wizard-policy">Developer Hub will not expose wireless ADB through another Wi-Fi network.</p>
@@ -456,6 +649,43 @@ el('devhubWizardCancel').addEventListener('click', closeWizard);
 el('devhubWizardAction').addEventListener('click', () => void bootstrapWireless(false));
 el('devhubWirelessWizard').addEventListener('click', (event) => {
 if (event.target === el('devhubWirelessWizard')) closeWizard();
+});
+el('devhubManualCredToggle').addEventListener('click', toggleCredentialReveal);
+el('devhubManualCredCopy').addEventListener('click', () => void copyCredentialSecret());
+el('devhubManualCredShowOnce').addEventListener('click', () => {
+cred.confirming = true;
+cred.dismissed = false;
+renderCredentials();
+});
+el('devhubManualCredConfirmShow').addEventListener('click', () => {
+cred.confirming = false;
+cred.sessionReveal = true;
+void fetchHotspotCredentials();
+renderCredentials();
+});
+el('devhubManualCredConfirmCancel').addEventListener('click', () => {
+cred.confirming = false;
+renderCredentials();
+});
+el('devhubManualCredPrivacyOff').addEventListener('click', () => {
+cred.confirming = false;
+cred.dismissed = false;
+cred.auto = true;
+setGlobalPrivacy(false);
+renderCredentials();
+});
+el('devhubManualCredKeepHidden').addEventListener('click', () => {
+cred.confirming = false;
+cred.dismissed = true;
+renderCredentials();
+});
+document.addEventListener('change', (event) => {
+const id = event.target ? String(event.target.id || '') : '';
+if (id === 'privacyMode' || id === 'privacyModeBasic') onPrivacyModeChanged();
+});
+document.addEventListener('input', (event) => {
+const id = event.target ? String(event.target.id || '') : '';
+if (id === 'wpa2_passphrase' || id === 'wpa2_passphrase_basic') onSavedPassphraseEdited();
 });
 }
 if (!el('devhubHotspotPrecondition')) {
@@ -501,6 +731,7 @@ state.busy = false;
 state.usbDevices = [];
 state.usbSerial = '';
 stopAdvance();
+purgeCredentialSecret();
 manualJoinPanel(false);
 el('devhubWirelessWizard').hidden = false;
 document.body.classList.add('devhub-modal-open');
@@ -514,6 +745,7 @@ document.body.classList.remove('devhub-modal-open');
 stopTimer('usbTimer');
 stopTimer('joinTimer');
 stopAdvance();
+purgeCredentialSecret();
 state.finishing = false;
 el('devhubWirelessSetup')?.focus();
 }
