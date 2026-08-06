@@ -1,9 +1,15 @@
 """VRhotspot-only USB-to-wireless ADB bootstrap for Developer Hub.
 
 The public API accepts only a validated USB ADB serial and optional TCP port.
-The daemon owns hotspot configuration and credentials.  Wireless ADB is never
-enabled until the headset address and route are verified against the active
-VRhotspot network.
+The daemon owns hotspot configuration and credentials.  The primary path is
+automatic Wi-Fi enrollment: the daemon invokes `cmd wifi connect-network`
+directly over USB ADB (Horizon OS executes it even though `cmd wifi help`
+does not advertise it) and then verifies the resulting network state.  A
+successful exit or "Connection initiated" is only an acknowledgment — never
+proof of enrollment.  Wireless ADB is never enabled until the headset SSID,
+address, and route are verified against the active VRhotspot network.  The
+manual Horizon OS join flow is offered only after both automatic attempts
+fail verification.
 """
 
 from __future__ import annotations
@@ -31,7 +37,8 @@ from vr_hotspotd.state import load_state
 WIRELESS_DEFAULT_PORT = 5555
 WIRELESS_COMMAND_TIMEOUT_S = 15.0
 WIRELESS_CONNECT_ATTEMPTS = 4
-WIRELESS_NETWORK_POLL_ATTEMPTS = 12
+WIRELESS_JOIN_ATTEMPTS = 2
+WIRELESS_NETWORK_POLL_ATTEMPTS = 27
 WIRELESS_NETWORK_POLL_INTERVAL_S = 1.0
 SERIAL_RE = re.compile(r"^[A-Za-z0-9._-]{1,255}$")
 _INET_RE = re.compile(r"(?:^|\s)inet\s+([0-9.]+)/\d+(?:\s|$)")
@@ -48,6 +55,11 @@ RESULT_HEADSET_ADDRESS_OUTSIDE_SUBNET = "headset_address_outside_hotspot_subnet"
 RESULT_HEADSET_ROUTE_MISMATCH = "headset_route_mismatch"
 RESULT_WIRELESS_ADB_ENABLE_FAILED = "wireless_adb_enable_failed"
 RESULT_WIRELESS_ADB_CONNECT_FAILED = "wireless_adb_connect_failed"
+RESULT_USB_DISCONNECTED = "usb_disconnected"
+
+FALLBACK_CONNECT_COMMAND_REJECTED = "connect_command_rejected"
+FALLBACK_VERIFICATION_TIMEOUT = "verification_timeout"
+FALLBACK_MANUAL_JOIN_PENDING = "manual_join_pending"
 
 
 class WirelessBootstrapError(ValueError):
@@ -322,10 +334,8 @@ def _inspect_headset_network(
 def _network_failure(
     context: HotspotContext,
     snapshot: HeadsetNetwork,
-    *,
-    allow_unknown_ssid: bool = False,
 ) -> Optional[str]:
-    if snapshot.ssid is None and not allow_unknown_ssid:
+    if snapshot.ssid is None:
         return RESULT_WIFI_CONTROL_UNAVAILABLE
     if snapshot.ssid is not None and snapshot.ssid != context.ssid:
         return RESULT_HEADSET_NOT_ON_VRHOTSPOT
@@ -363,20 +373,6 @@ def _public_context(context: HotspotContext) -> Dict[str, Any]:
     }
 
 
-def _wifi_control_available(
-    adb: str,
-    serial: str,
-    *,
-    runner: Callable[..., subprocess.CompletedProcess[bytes]],
-) -> bool:
-    rc, stdout, stderr = _run(
-        (adb, "-s", serial, "shell", "cmd", "wifi", "help"),
-        runner=runner,
-    )
-    help_text = f"{stdout}\n{stderr}".lower()
-    return rc == 0 and "connect-network" in help_text
-
-
 def _join_security(context: HotspotContext) -> str:
     return "wpa3" if context.security == "wpa3_sae" else "wpa2"
 
@@ -386,10 +382,14 @@ def _manual_join_result(
     base_data: Mapping[str, Any],
     *,
     message: str,
+    fallback_reason: str,
 ) -> Dict[str, Any]:
     data = dict(base_data)
     data.update(_public_context(context))
-    data.update({"requires_manual_join": True})
+    data.update({
+        "requires_manual_join": True,
+        "fallback_reason": fallback_reason,
+    })
     return _result(
         success=False,
         result_code=RESULT_WIFI_CONTROL_UNAVAILABLE,
@@ -405,13 +405,22 @@ def enable_wireless_adb(
     serial: Any,
     port: Any = WIRELESS_DEFAULT_PORT,
     *,
+    auto_join: Any = True,
     tools_status: Optional[Mapping[str, Any]] = None,
     config: Optional[Mapping[str, Any]] = None,
     state: Optional[Mapping[str, Any]] = None,
     runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> Dict[str, Any]:
-    """Join the active VRhotspot network, then enable wireless ADB."""
+    """Enroll the headset on the active VRhotspot network, then enable
+    wireless ADB.
+
+    ``auto_join=False`` skips the enrollment attempts and only verifies the
+    current network — used by the manual-join fallback polling so background
+    rechecks stay fast and do not re-run ``connect-network``.
+    """
+
+    attempt_join = auto_join is not False
 
     try:
         validated_serial = _valid_serial(serial)
@@ -488,82 +497,111 @@ def enable_wireless_adb(
             base_data["model"] = model_out.strip().replace("_", " ")
 
         snapshot = _inspect_headset_network(adb, validated_serial, runner=runner)
-        join_performed = False
         network_failure = _network_failure(context, snapshot)
+        base_data["automatic_join_attempted"] = False
+        base_data["automatic_join_attempts"] = 0
+        base_data["automatic_join_succeeded"] = False
+
+        if network_failure is not None and not attempt_join:
+            return _manual_join_result(
+                context,
+                base_data,
+                fallback_reason=FALLBACK_MANUAL_JOIN_PENDING,
+                message=(
+                    f"The headset has not joined {context.ssid} yet. "
+                    f"Select {context.ssid} in the headset Wi-Fi settings; "
+                    "Developer Hub keeps checking automatically."
+                ),
+            )
 
         if network_failure is not None:
-            if not _wifi_control_available(adb, validated_serial, runner=runner):
-                return _manual_join_result(
-                    context,
-                    base_data,
-                    message=(
-                        f"Select {context.ssid} in the headset Wi-Fi settings. "
-                        "Developer Hub will continue automatically after the headset "
-                        "joins the dedicated VRhotspot network."
+            # Capability is determined by attempting the command and observing
+            # the outcome — Horizon OS omits connect-network from `cmd wifi
+            # help` yet executes it.
+            base_data["automatic_join_attempted"] = True
+            acknowledged_any = False
+            for attempt in range(1, WIRELESS_JOIN_ATTEMPTS + 1):
+                base_data["automatic_join_attempts"] = attempt
+                join_rc, join_out, join_err = _run(
+                    (
+                        adb,
+                        "-s",
+                        validated_serial,
+                        "shell",
+                        "cmd",
+                        "wifi",
+                        "connect-network",
+                        context.ssid,
+                        _join_security(context),
+                        context.passphrase,
+                        "-r",
+                        "none",
                     ),
+                    runner=runner,
                 )
-
-            join_rc, _join_out, _join_err = _run(
-                (
-                    adb,
-                    "-s",
-                    validated_serial,
-                    "shell",
-                    "cmd",
-                    "wifi",
-                    "connect-network",
-                    context.ssid,
-                    _join_security(context),
-                    context.passphrase,
-                ),
-                runner=runner,
-            )
-            if join_rc != 0:
-                return _manual_join_result(
-                    context,
-                    base_data,
-                    message=(
-                        f"Automatic Wi-Fi setup is unavailable on this headset. "
-                        f"Select {context.ssid} in the headset Wi-Fi settings."
-                    ),
+                acknowledged = join_rc == 0 or (
+                    "connection initiated" in f"{join_out}\n{join_err}".lower()
                 )
-
-            snapshot = HeadsetNetwork(None, None, None, None, None, "", "", "")
-            network_failure = RESULT_HEADSET_NOT_ON_VRHOTSPOT
-            join_performed = True
-            for attempt in range(WIRELESS_NETWORK_POLL_ATTEMPTS):
-                if attempt:
-                    sleeper(WIRELESS_NETWORK_POLL_INTERVAL_S)
-                snapshot = _inspect_headset_network(adb, validated_serial, runner=runner)
-                network_failure = _network_failure(
-                    context, snapshot, allow_unknown_ssid=join_performed
-                )
+                acknowledged_any = acknowledged_any or acknowledged
+                # Exit 0 / "Connection initiated" is only an acknowledgment;
+                # enrollment is proven exclusively by the verified network
+                # state below.  A rejected command still gets one snapshot in
+                # case the join landed despite the reported error.
+                polls = WIRELESS_NETWORK_POLL_ATTEMPTS if acknowledged else 1
+                for poll in range(polls):
+                    if poll:
+                        sleeper(WIRELESS_NETWORK_POLL_INTERVAL_S)
+                    usb_rc, usb_out, _usb_err = _run(
+                        (adb, "-s", validated_serial, "get-state"),
+                        runner=runner,
+                    )
+                    if usb_rc != 0 or usb_out.strip() != "device":
+                        return _result(
+                            success=False,
+                            result_code=RESULT_USB_DISCONNECTED,
+                            stage="join_vrhotspot",
+                            message=(
+                                "USB disconnected during automatic Wi-Fi "
+                                "setup. Reconnect the USB cable; wireless ADB "
+                                "stays disabled until the headset is verified "
+                                "on VRhotspot."
+                            ),
+                            data=base_data,
+                            returncode=1,
+                            secret=context.passphrase,
+                        )
+                    snapshot = _inspect_headset_network(
+                        adb, validated_serial, runner=runner
+                    )
+                    network_failure = _network_failure(context, snapshot)
+                    if network_failure is None:
+                        break
                 if network_failure is None:
+                    base_data["automatic_join_succeeded"] = True
                     break
 
             if network_failure is not None:
-                data = dict(base_data)
-                data.update({"requires_manual_join": True})
-                return _result(
-                    success=False,
-                    result_code=network_failure,
-                    stage="verify_vrhotspot",
-                    message=(
-                        f"The headset has not joined {context.ssid} yet. "
-                        "Keep it awake, select the VRhotspot network, and try again."
+                return _manual_join_result(
+                    context,
+                    base_data,
+                    fallback_reason=(
+                        FALLBACK_VERIFICATION_TIMEOUT
+                        if acknowledged_any
+                        else FALLBACK_CONNECT_COMMAND_REJECTED
                     ),
-                    data=data,
-                    returncode=1,
-                    secret=context.passphrase,
+                    message=(
+                        f"Automatic Wi-Fi setup could not verify the headset "
+                        f"on {context.ssid}. Select {context.ssid} in the "
+                        "headset Wi-Fi settings; Developer Hub keeps checking "
+                        "automatically."
+                    ),
                 )
 
         # Re-read immediately before mutating ADB transport.  This prevents a
         # stale address from passing validation and then being used after a
         # network transition.
         verified = _inspect_headset_network(adb, validated_serial, runner=runner)
-        verified_failure = _network_failure(
-            context, verified, allow_unknown_ssid=join_performed
-        )
+        verified_failure = _network_failure(context, verified)
         if verified_failure is not None:
             return _result(
                 success=False,

@@ -1,9 +1,11 @@
-"""Manual VRhotspot join regression: Horizon OS without Wi-Fi shell control.
+"""Developer Hub wireless wizard regression: automatic-first enrollment.
 
-On real Quest 3S hardware `adb shell cmd wifi help` exposes no
-`connect-network`, so the daemon answers `wifi_control_unavailable` with
-`requires_manual_join=true`. The wizard must then show an explicit,
-non-frozen Step 3 waiting state (heading, SSID, Settings → Wi-Fi
+Automatic Quest Wi-Fi enrollment is the primary path: while the daemon runs
+`cmd wifi connect-network` and verifies the network, Step 3 shows a live
+"Connecting … automatically" state with an animated indicator and no manual
+credential instructions. Only after both automatic attempts fail
+(`requires_manual_join=true`) does the wizard fall back to the explicit,
+non-frozen manual Step 3 waiting state (heading, SSID, Settings → Wi-Fi
 instructions, spinner), keep polling without overlapping requests or
 repeated global banners, pause on USB disconnect, and stop every timer on
 cancel.
@@ -40,7 +42,7 @@ def test_manual_join_state_shows_instructions_and_waiting_indicator():
     source = WIZARD_JS.read_text(encoding="utf-8")
 
     assert "Put on your headset and join ${ssid}" in source
-    assert "Horizon OS does not permit automatic Wi-Fi enrollment" in source
+    assert "Automatic Wi-Fi enrollment did not complete" in source
     assert "Settings → Wi-Fi" in source
     assert "Keep the USB cable connected" in source
     assert "devhubManualJoinSsid" in source
@@ -48,6 +50,25 @@ def test_manual_join_state_shows_instructions_and_waiting_indicator():
     assert "devhub-manual-join-spinner" in source
     assert "Waiting for ${modelOf(device)} to join ${ssid}…" in source
     assert "I’ve joined — check again" in source
+
+
+def test_automatic_enrollment_state_is_visible_and_credential_free():
+    source = WIZARD_JS.read_text(encoding="utf-8")
+
+    # Step 3 shows a live automatic-connection state with an animated
+    # indicator while the daemon enrolls the headset.
+    assert "state.autoJoining = true;" in source
+    assert "Connecting ${modelOf(device)} to ${ssid} automatically…" in source
+    assert "Keep the headset awake and the USB cable connected." in source
+    assert "devhubAutoJoin" in source
+    assert "devhub-auto-join-spinner" in source
+    # The browser never sends the hotspot password; it only opts background
+    # manual-join polls out of re-running automatic enrollment.
+    assert "auto_join: !state.manualJoin," in source
+    # A USB drop aborts enrollment cleanly and asks for the cable back.
+    assert "usb_disconnected" in source
+    assert "state.usbLost = true;" in source
+    assert "Reconnect the USB cable to the headset. Automatic Wi-Fi setup stopped " in source
 
 
 def test_manual_join_polling_is_single_flight_and_quiet():
@@ -117,6 +138,9 @@ def test_manual_join_css_has_animated_waiting_indicator():
     assert "@keyframes devhub-manual-join-spin" in source
     assert "prefers-reduced-motion" in source
     assert ".devhub-manual-join[hidden]" in source
+    assert ".devhub-auto-join" in source
+    assert ".devhub-auto-join-spinner" in source
+    assert ".devhub-auto-join[hidden]" in source
 
 
 def test_manual_join_dom_regression_covers_required_scenarios():
@@ -140,6 +164,17 @@ def test_manual_join_dom_regression_covers_required_scenarios():
     assert "advances visibly to Step 4 and then Step 5" in source
     assert "USB disconnect during manual join stops polling" in source
     assert "cancelling the wizard stops every polling timer" in source
+    assert (
+        "automatic enrollment shows the Step 3 connecting state before any "
+        "manual instructions" in source
+    )
+    assert "wireless request bodies carry only serial, port, and auto_join" in source
+    assert (
+        "usb_disconnected during automatic enrollment stops cleanly and asks "
+        "to reconnect" in source
+    )
+    assert "automatic_join_attempted: true" in source
+    assert "fallback_reason: 'verification_timeout'" in source
     assert "passphrase" not in source
 
 

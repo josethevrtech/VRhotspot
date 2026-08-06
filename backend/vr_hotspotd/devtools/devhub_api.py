@@ -286,6 +286,7 @@ class DevHubAPIHandler(APIHandler):
         result = enable_wireless_adb(
             request.get("serial"),
             request.get("port", 5555),
+            auto_join=request.get("auto_join", True),
         )
         result_code = str(result.get("result_code") or RESULT_FAILED)
         status = _RESULT_HTTP_STATUS.get(result_code, 500)

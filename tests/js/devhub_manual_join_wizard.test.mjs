@@ -66,9 +66,9 @@ const networkOk = () => ({
   raw: '',
 });
 
-// The exact response observed on real Quest 3S hardware: Horizon OS exposes
-// no `cmd wifi connect-network`, so the daemon refuses to enable wireless
-// ADB and asks for a manual VRhotspot join. The Wi-Fi secret never appears.
+// Manual fallback: automatic enrollment (connect-network + verification
+// polling) exhausted both attempts, so the daemon asks for a manual
+// VRhotspot join. The Wi-Fi secret never appears in this response.
 const manualJoinRequired = () => ({
   ok: false,
   status: 500,
@@ -82,9 +82,9 @@ const manualJoinRequired = () => ({
       result_code: 'wifi_control_unavailable',
       stage: 'join_vrhotspot',
       message:
-        `Select ${SSID} in the headset Wi-Fi settings. Developer Hub will `
-        + 'continue automatically after the headset joins the dedicated '
-        + 'VRhotspot network.',
+        `Automatic Wi-Fi setup could not verify the headset on ${SSID}. `
+        + `Select ${SSID} in the headset Wi-Fi settings; Developer Hub `
+        + 'keeps checking automatically.',
       returncode: 1,
       stdout: '',
       stderr: '',
@@ -97,7 +97,49 @@ const manualJoinRequired = () => ({
         gateway: '192.168.68.1',
         subnet: '192.168.68.0/24',
         model: 'Quest 3S',
+        automatic_join_attempted: true,
+        automatic_join_attempts: 2,
+        automatic_join_succeeded: false,
+        fallback_reason: 'verification_timeout',
         requires_manual_join: true,
+      },
+    },
+  },
+  raw: '',
+});
+
+// The daemon aborted automatic enrollment because the USB link vanished
+// mid-poll; wireless ADB stays disabled.
+const usbDisconnected = () => ({
+  ok: false,
+  status: 500,
+  json: {
+    correlation_id: 'test-cid',
+    result_code: 'usb_disconnected',
+    data: {
+      schema_version: 2,
+      operation: 'enable_wireless',
+      success: false,
+      result_code: 'usb_disconnected',
+      stage: 'join_vrhotspot',
+      message:
+        'USB disconnected during automatic Wi-Fi setup. Reconnect the USB '
+        + 'cable; wireless ADB stays disabled until the headset is verified '
+        + 'on VRhotspot.',
+      returncode: 1,
+      stdout: '',
+      stderr: '',
+      data: {
+        usb_serial: USB_SERIAL,
+        port: 5555,
+        ssid: SSID,
+        security: 'wpa2',
+        ap_interface: 'wlan0',
+        gateway: '192.168.68.1',
+        subnet: '192.168.68.0/24',
+        automatic_join_attempted: true,
+        automatic_join_attempts: 1,
+        automatic_join_succeeded: false,
       },
     },
   },
@@ -160,9 +202,17 @@ async function makeWizardConsole(routes) {
   });
   const { window } = dom;
   const calls = [];
-  window.api = async (path) => {
+  const requests = [];
+  window.api = async (path, options = {}) => {
     const route = String(path).split('?')[0];
     calls.push(route);
+    let body = null;
+    try {
+      body = options && options.body ? JSON.parse(options.body) : null;
+    } catch {
+      body = null;
+    }
+    requests.push({ route, body });
     const handler = routes[route];
     if (!handler) throw new Error(`Unexpected Developer Hub request: ${route}`);
     return handler();
@@ -179,7 +229,7 @@ async function makeWizardConsole(routes) {
     '1',
     'VRhotspot-only wizard layer injected',
   );
-  return { window, document: window.document, calls };
+  return { window, document: window.document, calls, requests };
 }
 
 function baseRoutes() {
@@ -223,7 +273,7 @@ test('wifi_control_unavailable renders the Step 3 manual-join waiting state', as
     `Put on your headset and join ${SSID}`,
   );
   const detail = document.getElementById('devhubWizardDetail').textContent;
-  assert.ok(detail.includes('Horizon OS does not permit automatic Wi-Fi enrollment'), detail);
+  assert.ok(detail.includes('Automatic Wi-Fi enrollment did not complete'), detail);
   assert.ok(detail.includes(`Settings → Wi-Fi and select ${SSID}`), detail);
   assert.ok(detail.includes('Keep the USB cable connected'), detail);
 
@@ -347,6 +397,112 @@ test('USB disconnect during manual join stops polling and asks to reconnect', as
   );
   await tick(window, 2600);
   assert.ok(wirelessCalls(calls) > paused, 'polling resumed after USB reconnect');
+});
+
+test('automatic enrollment shows the Step 3 connecting state before any manual instructions', async () => {
+  const routes = baseRoutes();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  routes[WIRELESS] = async () => { await gate; return manualJoinRequired(); };
+  const { window, document } = await makeWizardConsole(routes);
+  document.getElementById('devhubWirelessSetup').click();
+  await settle(window, 6);
+  document.getElementById('devhubWizardAction').click();
+  await settle(window, 2);
+
+  assert.equal(currentStep(document), 3, 'automatic enrollment runs on Step 3');
+  const title = document.getElementById('devhubWizardTitle').textContent;
+  assert.ok(title.includes('Connecting Quest 3S to'), title);
+  assert.ok(title.includes('automatically…'), title);
+  assert.ok(
+    document.getElementById('devhubWizardDetail').textContent
+      .includes('Keep the headset awake and the USB cable connected.'),
+  );
+  const auto = document.getElementById('devhubAutoJoin');
+  assert.equal(auto.hidden, false, 'animated automatic progress panel visible');
+  assert.ok(auto.querySelector('.devhub-auto-join-spinner'), 'spinner rendered');
+  assert.equal(
+    document.getElementById('devhubManualJoin').hidden,
+    true,
+    'no manual credential instructions while automatic enrollment is pending',
+  );
+  assert.equal(document.getElementById('devhubWizardAction').disabled, true);
+
+  release();
+  await settle(window, 6);
+  assert.equal(document.getElementById('devhubAutoJoin').hidden, true);
+  assert.equal(
+    document.getElementById('devhubManualJoin').hidden,
+    false,
+    'exhausted automatic attempts fall back to the manual join panel',
+  );
+});
+
+test('wireless request bodies carry only serial, port, and auto_join', async () => {
+  const { window, requests } = await openManualJoinWizard(baseRoutes());
+
+  const wireless = requests.filter((request) => request.route === WIRELESS);
+  assert.ok(wireless.length >= 1, 'at least the first automatic request fired');
+  assert.deepEqual(
+    Object.keys(wireless[0].body).sort(),
+    ['auto_join', 'port', 'serial'],
+    'no hotspot secret or SSID in the request body',
+  );
+  assert.equal(wireless[0].body.auto_join, true, 'first attempt is automatic');
+  assert.equal(wireless[0].body.serial, USB_SERIAL);
+  assert.equal(wireless[0].body.port, 5555);
+
+  await tick(window, 5200);
+  await settle(window, 4);
+  const later = requests.filter((request) => request.route === WIRELESS).slice(1);
+  assert.ok(later.length >= 1, 'background polling continued');
+  for (const request of later) {
+    assert.deepEqual(
+      Object.keys(request.body).sort(),
+      ['auto_join', 'port', 'serial'],
+    );
+    assert.equal(
+      request.body.auto_join,
+      false,
+      'manual-join polling never re-runs automatic enrollment',
+    );
+  }
+});
+
+test('usb_disconnected during automatic enrollment stops cleanly and asks to reconnect', async () => {
+  const routes = baseRoutes();
+  routes[WIRELESS] = usbDisconnected;
+  const { window, document, calls } = await makeWizardConsole(routes);
+  document.getElementById('devhubWirelessSetup').click();
+  await settle(window, 6);
+  document.getElementById('devhubWizardAction').click();
+  routes[DEVICES] = () => devicesOk([]);
+  await settle(window, 6);
+
+  assert.equal(currentStep(document), 3);
+  assert.equal(
+    document.getElementById('devhubWizardTitle').textContent,
+    'USB cable disconnected',
+  );
+  const detail = document.getElementById('devhubWizardDetail').textContent;
+  assert.ok(detail.includes('Reconnect the USB cable'), detail);
+  assert.ok(detail.includes('wireless ADB stays disabled'), detail);
+  assert.equal(document.getElementById('devhubManualJoin').hidden, true);
+  assert.equal(document.getElementById('devhubAutoJoin').hidden, true);
+  assert.equal(document.getElementById('devhubWizardAction').disabled, true);
+
+  const stalled = wirelessCalls(calls);
+  await tick(window, 2600);
+  assert.equal(wirelessCalls(calls), stalled, 'no wireless requests while USB is gone');
+
+  routes[DEVICES] = () => devicesOk([usbQuest()]);
+  await tick(window, 1800);
+  await settle(window, 4);
+  assert.equal(
+    document.getElementById('devhubWizardTitle').textContent,
+    'Quest 3S is ready to join VRhotspot',
+    'reconnecting USB resumes the normal flow',
+  );
 });
 
 test('cancelling the wizard stops every polling timer', async () => {

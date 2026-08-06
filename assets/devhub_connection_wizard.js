@@ -13,6 +13,8 @@ ready: false,
 busy: false,
 starting: false,
 complete: false,
+autoJoining: false,
+usbLost: false,
 manualJoin: false,
 manualSsid: '',
 manualNote: '',
@@ -165,6 +167,13 @@ host.appendChild(select);
 function manualJoinPanel(show) {
 const panel = el('devhubManualJoin');
 if (panel) panel.hidden = !show;
+}
+function autoJoinPanel(show) {
+const panel = el('devhubAutoJoin');
+if (panel) panel.hidden = !show;
+}
+function autoJoinStatus(message) {
+text(el('devhubAutoJoinStatus'), message);
 }
 function manualJoinStatus(message) {
 text(el('devhubManualJoinStatus'), message);
@@ -330,8 +339,8 @@ const ssid = state.manualSsid || 'VRhotspot';
 setStep(3);
 wizardCopy(
 `Put on your headset and join ${ssid}`,
-'Horizon OS does not permit automatic Wi-Fi enrollment, so this step '
-+ `happens inside the headset: open Settings → Wi-Fi and select ${ssid}. `
+'Automatic Wi-Fi enrollment did not complete on this headset, so finish '
++ `this step inside the headset: open Settings → Wi-Fi and select ${ssid}. `
 + 'Keep the USB cable connected the whole time.',
 );
 text(el('devhubManualJoinSsid'), ssid);
@@ -350,6 +359,7 @@ if (!action) return;
 renderUsb(device);
 if (state.finishing) {
 manualJoinPanel(false);
+autoJoinPanel(false);
 setStep(4);
 action.disabled = true;
 action.textContent = 'Enabling wireless…';
@@ -357,12 +367,42 @@ return;
 }
 if (state.complete) {
 manualJoinPanel(false);
+autoJoinPanel(false);
 setStep(5);
 action.disabled = false;
 action.textContent = 'Done';
 return;
 }
+if (state.autoJoining) {
+const ssid = state.manualSsid || 'VRhotspot';
+manualJoinPanel(false);
+setStep(3);
+wizardCopy(
+`Connecting ${modelOf(device)} to ${ssid} automatically…`,
+'Keep the headset awake and the USB cable connected.',
+);
+autoJoinStatus(`Joining ${ssid}… This can take up to a minute.`);
+autoJoinPanel(true);
+action.disabled = true;
+action.textContent = 'Connecting…';
+return;
+}
+if (state.usbLost) {
+manualJoinPanel(false);
+autoJoinPanel(false);
+setStep(3);
+wizardCopy(
+'USB cable disconnected',
+'Reconnect the USB cable to the headset. Automatic Wi-Fi setup stopped '
++ 'safely, and wireless ADB stays disabled until the headset is verified '
++ 'on VRhotspot.',
+);
+action.disabled = true;
+action.textContent = 'Reconnect USB';
+return;
+}
 if (state.manualJoin) {
+autoJoinPanel(false);
 const usbState = device ? String(device.state || '').toLowerCase() : '';
 action.textContent = 'I’ve joined — check again';
 if (usbState !== 'device') {
@@ -383,6 +423,7 @@ action.disabled = state.busy;
 return;
 }
 manualJoinPanel(false);
+autoJoinPanel(false);
 action.textContent = 'Join VRhotspot & enable wireless';
 if (!device) {
 setStep(1);
@@ -424,6 +465,12 @@ const modal = el('devhubWirelessWizard');
 if (!modal || modal.hidden || state.busy) return;
 try {
 await loadUsbDevices();
+if (state.usbLost) {
+const device = chosenUsb();
+if (device && String(device.state || '').toLowerCase() === 'device') {
+state.usbLost = false;
+}
+}
 renderWizard();
 } catch (error) {
 wizardCopy('Unable to inspect USB devices', String(error.message || error));
@@ -468,14 +515,14 @@ if (state.busy || state.finishing) return;
 const device = chosenUsb();
 if (!device || device.state !== 'device') return;
 state.busy = true;
-renderWizard();
+state.usbLost = false;
 if (!background && !state.manualJoin) {
-setStep(4);
-wizardCopy(
-'Verifying the VRhotspot network',
-'Developer Hub will not enable wireless ADB on another network.',
-);
-} else if (!background && state.manualJoin) {
+// Primary path: the daemon enrolls the headset on VRhotspot
+// automatically. No manual credential instructions appear yet.
+state.autoJoining = true;
+}
+renderWizard();
+if (!background && state.manualJoin) {
 manualJoinStatus(
 `Checking whether the headset joined ${state.manualSsid || 'VRhotspot'}…`,
 );
@@ -486,8 +533,10 @@ method: 'POST',
 body: JSON.stringify({
 serial: String(device.serial || ''),
 port: 5555,
+auto_join: !state.manualJoin,
 }),
 });
+state.autoJoining = false;
 const result = publicResult(response);
 const data = resultData(response);
 const code = resultCode(response);
@@ -531,6 +580,14 @@ message: resultMessage(response, 'The hotspot configuration is incomplete.'),
 });
 return;
 }
+if (code === 'usb_disconnected') {
+state.manualJoin = false;
+state.usbLost = true;
+stopTimer('joinTimer');
+purgeCredentialSecret();
+feedback('Reconnect the USB cable to continue wireless setup.', 'error');
+return;
+}
 if (
 code === 'wifi_control_unavailable'
 || data.requires_manual_join === true
@@ -569,6 +626,7 @@ setStep(3);
 wizardCopy('Wireless setup needs attention', String(error.message || error));
 feedback(String(error.message || error), 'error');
 } finally {
+state.autoJoining = false;
 state.busy = false;
 renderWizard();
 }
@@ -591,6 +649,10 @@ ${['Connect USB', 'Approve debugging', 'Join VRhotspot', 'Enable wireless', 'Com
 <div class="devhub-wizard-body">
 <h3 id="devhubWizardTitle"></h3>
 <p id="devhubWizardDetail"></p>
+<div id="devhubAutoJoin" class="devhub-auto-join" hidden>
+<span class="devhub-auto-join-spinner" aria-hidden="true"></span>
+<span id="devhubAutoJoinStatus" role="status" aria-live="polite"></span>
+</div>
 <div id="devhubManualJoin" class="devhub-manual-join" hidden>
 <div class="devhub-manual-join-wait">
 <span class="devhub-manual-join-spinner" aria-hidden="true"></span>
@@ -633,7 +695,7 @@ ${['Connect USB', 'Approve debugging', 'Join VRhotspot', 'Enable wireless', 'Com
 </div>
 <p id="devhubManualCredNotice" class="devhub-manual-cred-notice" role="status" aria-live="polite"></p>
 </div>
-<p class="devhub-manual-join-note">Horizon OS does not permit automatic Wi-Fi enrollment. Developer Hub keeps checking automatically and continues as soon as the headset is on VRhotspot.</p>
+<p class="devhub-manual-join-note">Developer Hub keeps checking automatically and continues as soon as the headset is on VRhotspot.</p>
 </div>
 <p class="devhub-wizard-policy">Developer Hub will not expose wireless ADB through another Wi-Fi network.</p>
 <div id="devhubWizardDevice" class="devhub-wizard-device" hidden></div>
@@ -728,11 +790,14 @@ state.manualSsid = '';
 state.manualNote = '';
 state.finishing = false;
 state.busy = false;
+state.autoJoining = false;
+state.usbLost = false;
 state.usbDevices = [];
 state.usbSerial = '';
 stopAdvance();
 purgeCredentialSecret();
 manualJoinPanel(false);
+autoJoinPanel(false);
 el('devhubWirelessWizard').hidden = false;
 document.body.classList.add('devhub-modal-open');
 renderWizard();
@@ -747,6 +812,8 @@ stopTimer('joinTimer');
 stopAdvance();
 purgeCredentialSecret();
 state.finishing = false;
+state.autoJoining = false;
+state.usbLost = false;
 el('devhubWirelessSetup')?.focus();
 }
 function showPrecondition(options = {}) {
