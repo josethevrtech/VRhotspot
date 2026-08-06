@@ -1,74 +1,6 @@
-.devhub-headsets-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.devhub-headsets-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.devhub-unified-discovery {
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.devhub-unified-discovery[hidden] {
-  display: none !important;
-}
-
-.devhub-unified-section-title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 10px;
-}
-
-.devhub-unified-section-title h3 {
-  margin: 0;
-  color: var(--text-main);
-  font-size: 13px;
-  font-weight: 750;
-}
-
-.devhub-advanced-connection {
-  grid-column: 1 / -1;
-}
-
-.devhub-advanced-connection details {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-}
-
-.devhub-advanced-connection summary {
-  cursor: pointer;
-  padding: 13px 14px;
-  color: var(--text-main);
-  font-weight: 700;
-  user-select: none;
-}
-
-.devhub-advanced-connection details[open] summary {
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.devhub-advanced-connection-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  padding: 12px;
-}
-
-.devhub-advanced-connection-grid > .card {
-  min-width: 0;
-  margin: 0;
-}
+/* Developer Hub: VRhotspot-only headset setup */
+/* The wizard is appended to document.body, so these selectors intentionally
+   remain independent of the Developer Hub panel hierarchy. */
 
 body.devhub-modal-open {
   overflow: hidden;
@@ -77,12 +9,12 @@ body.devhub-modal-open {
 .devhub-wizard-overlay {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  z-index: 1200;
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(0, 0, 0, .72);
-  backdrop-filter: blur(5px);
+  background: rgba(3, 5, 15, 0.78);
+  backdrop-filter: blur(8px);
 }
 
 .devhub-wizard-overlay[hidden] {
@@ -91,114 +23,334 @@ body.devhub-modal-open {
 
 .devhub-wizard-dialog {
   width: min(760px, 100%);
-  max-height: min(760px, calc(100vh - 48px));
+  max-height: min(820px, calc(100vh - 48px));
   overflow: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--bg-card);
-  box-shadow: 0 28px 80px rgba(0, 0, 0, .6);
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-lg);
 }
 
-.devhub-wizard-header,
-.devhub-wizard-footer {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 16px 18px;
+body[data-ui-mode="advanced"] .devhub-wizard-dialog {
+  width: min(980px, 100%);
+}
+
+body[data-ui-mode="advanced"] .devhub-wizard-body {
+  min-height: 320px;
+}
+
+body[data-ui-mode="advanced"] .devhub-wizard-device select {
+  min-height: 48px;
+}
+
+.devhub-precondition-dialog {
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
 }
 
 .devhub-wizard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px;
   border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
 }
 
 .devhub-wizard-header h2 {
   margin: 0;
   color: var(--text-main);
-  font-size: 18px;
-}
-
-.devhub-wizard-header .btn {
-  margin-left: auto;
+  font-size: 19px;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
 }
 
 .devhub-wizard-steps {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
-  padding: 16px 18px 0;
+  padding: 18px 22px 0;
 }
 
 .devhub-wizard-step {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
   min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
   color: var(--text-muted);
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .devhub-wizard-step > span {
   display: grid;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
   place-items: center;
-  border: 1px solid currentColor;
+  width: 29px;
+  height: 29px;
+  border: 1px solid var(--border-subtle);
   border-radius: 50%;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-weight: 700;
 }
 
 .devhub-wizard-step strong {
-  min-width: 0;
-  font-size: 11px;
-  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .devhub-wizard-step.current {
-  border-color: var(--accent-primary);
-  color: var(--accent-primary);
-  background: var(--accent-subtle);
+  color: var(--text-main);
 }
 
-.devhub-wizard-step.complete {
+.devhub-wizard-step.current > span {
+  border-color: var(--accent-primary);
+  background: rgba(0, 217, 255, 0.12);
+  color: var(--accent-primary);
+  box-shadow: 0 0 12px rgba(0, 217, 255, 0.2);
+}
+
+.devhub-wizard-step.complete > span {
+  border-color: var(--success);
   color: var(--success);
 }
 
 .devhub-wizard-body {
-  min-height: 250px;
-  display: grid;
-  align-content: center;
-  gap: 12px;
   padding: 28px 24px;
-  text-align: center;
 }
 
 .devhub-wizard-body h3 {
   margin: 0;
   color: var(--text-main);
-  font-size: 21px;
+  font-size: 23px;
 }
 
 .devhub-wizard-body p {
-  max-width: 580px;
-  margin: 0 auto;
+  margin: 12px 0 0;
   color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.devhub-wizard-policy {
+  padding: 11px 13px;
+  border: 1px solid rgba(0, 217, 255, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 217, 255, 0.07);
+  color: var(--text-main) !important;
+  font-size: 13px !important;
+}
+
+.devhub-auto-join {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 217, 255, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 217, 255, 0.07);
+  color: var(--text-main);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.devhub-auto-join[hidden] {
+  display: none !important;
+}
+
+.devhub-auto-join-spinner {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(0, 217, 255, 0.25);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: devhub-manual-join-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .devhub-auto-join-spinner {
+    animation: none;
+  }
+}
+
+.devhub-manual-join {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.devhub-manual-join[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-join-wait {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 217, 255, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 217, 255, 0.07);
+  color: var(--text-main);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.devhub-manual-join-spinner {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(0, 217, 255, 0.25);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: devhub-manual-join-spin 0.9s linear infinite;
+}
+
+@keyframes devhub-manual-join-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .devhub-manual-join-spinner {
+    animation: none;
+  }
+}
+
+.devhub-manual-join-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--text-muted);
+  font-size: 14px;
   line-height: 1.55;
 }
 
-.devhub-wizard-device {
-  width: min(520px, 100%);
+.devhub-manual-join-steps strong {
+  color: var(--text-main);
+}
+
+.devhub-manual-join-ssid {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.devhub-manual-join-note {
+  margin: 0 !important;
+  color: var(--text-muted);
+  font-size: 13px !important;
+}
+
+.devhub-manual-cred {
   display: grid;
-  gap: 6px;
-  margin: 8px auto 0;
-  padding: 14px;
+  gap: 10px;
+  padding: 14px 16px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  text-align: left;
+  background: var(--bg-subtle);
+}
+
+.devhub-manual-cred-title {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 13px;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.devhub-manual-cred-row {
+  display: grid;
+  gap: 4px;
+}
+
+.devhub-manual-cred-row[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-cred-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.devhub-manual-cred-value {
+  display: block;
+  min-height: 1.4em;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.devhub-manual-cred-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.devhub-manual-cred-actions[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-cred-privacy {
+  display: grid;
+  gap: 10px;
+}
+
+.devhub-manual-cred-privacy[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-cred-privacy-title {
+  margin: 0 !important;
+  color: var(--text-main);
+  font-size: 14px !important;
+}
+
+.devhub-manual-cred-privacy-copy {
+  margin: 0 !important;
+  color: var(--text-muted);
+  font-size: 13px !important;
+}
+
+.devhub-manual-cred-confirm {
+  display: grid;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 217, 255, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 217, 255, 0.07);
+}
+
+.devhub-manual-cred-confirm[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-cred-confirm p {
+  margin: 0 !important;
+  color: var(--text-main);
+  font-size: 13px !important;
+}
+
+.devhub-manual-cred-notice {
+  min-height: 18px;
+  margin: 0 !important;
+  color: var(--text-muted);
+  font-size: 13px !important;
+}
+
+.devhub-wizard-device {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
 }
 
 .devhub-wizard-device[hidden] {
@@ -213,118 +365,135 @@ body.devhub-modal-open {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .devhub-wizard-device label {
   display: grid;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 7px;
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .05em;
-  text-transform: uppercase;
-}
-
-.devhub-wizard-device select {
-  width: 100%;
-  min-height: 38px;
+  font-size: 13px;
 }
 
 .devhub-wizard-footer {
+  display: flex;
   justify-content: flex-end;
+  gap: 11px;
+  padding: 18px 22px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+}
+
+.devhub-precondition-status {
+  min-height: 22px;
+  margin-top: 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.devhub-precondition-status[data-state="error"] {
+  color: var(--danger);
+}
+
+.devhub-headsets-header {
+  gap: 16px;
+}
+
+.devhub-headsets-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+}
+
+.devhub-unified-discovery {
+  margin-top: 22px;
+  padding-top: 20px;
   border-top: 1px solid var(--border-subtle);
 }
 
-/* The wizard is appended to document.body, outside #tab-devhub. */
-@media (min-width: 1200px) {
-  body[data-ui-mode="advanced"] .devhub-wizard-dialog {
-    width: min(980px, 100%);
-    max-height: min(900px, calc(100vh - 48px));
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-header,
-  body[data-ui-mode="advanced"] .devhub-wizard-footer {
-    padding: 20px 24px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-header h2 {
-    font-size: 22px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-steps {
-    gap: 10px;
-    padding: 20px 24px 0;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-step {
-    gap: 10px;
-    padding: 12px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-step > span {
-    width: 30px;
-    height: 30px;
-    flex-basis: 30px;
-    font-size: 13px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-step strong {
-    font-size: 13px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-body {
-    min-height: 320px;
-    gap: 16px;
-    padding: 36px 30px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-body h3 {
-    font-size: 26px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-body p {
-    max-width: 720px;
-    font-size: 16px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-device {
-    width: min(700px, 100%);
-    gap: 8px;
-    padding: 18px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-device > span,
-  body[data-ui-mode="advanced"] .devhub-wizard-device label {
-    font-size: 13px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-device select {
-    min-height: 48px;
-    font-size: 16px;
-  }
-
-  body[data-ui-mode="advanced"] .devhub-wizard-footer .btn,
-  body[data-ui-mode="advanced"] .devhub-wizard-header .btn {
-    min-height: 46px;
-    padding-inline: 20px;
-    font-size: 15px;
-  }
+.devhub-unified-discovery[hidden] {
+  display: none !important;
 }
 
-@media (max-width: 900px) {
-  .devhub-advanced-connection-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.devhub-unified-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
 
+.devhub-unified-section-title h3 {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 15px;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+#devhubPackageSerial[hidden],
+label[for="devhubPackageSerial"][hidden] {
+  display: none !important;
+}
+
+.devhub-device-state[hidden] {
+  display: none !important;
+}
+
+#devhubToolsManagement[hidden] {
+  display: none !important;
+}
+
+
+body[data-ui-mode="advanced"] .devhub-precondition-dialog {
+  width: min(760px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+}
+
+body[data-ui-mode="advanced"] .devhub-precondition-dialog .devhub-wizard-body {
+  min-height: 0;
+  padding: 30px 28px;
+}
+
+.devhub-precondition-copy {
+  display: grid;
+  gap: 12px;
+  max-width: 62ch;
+}
+
+.devhub-precondition-dialog .devhub-wizard-body p {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.devhub-precondition-dialog .devhub-wizard-body p + p {
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+.devhub-precondition-dialog .devhub-wizard-footer {
+  flex-wrap: wrap;
+}
+
+.devhub-precondition-dialog .devhub-wizard-footer .btn {
+  min-height: 46px;
+}
+
+@media (max-width: 760px) {
   .devhub-wizard-steps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(76px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 8px;
   }
-}
 
-@media (max-width: 620px) {
+  .devhub-headsets-header,
+  .devhub-headsets-actions {
+    align-items: stretch;
+  }
+
   .devhub-headsets-header {
-    align-items: flex-start;
     flex-direction: column;
   }
 
@@ -333,24 +502,38 @@ body.devhub-modal-open {
     margin-left: 0;
   }
 
+  .devhub-headsets-actions .btn {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 620px) {
   .devhub-wizard-overlay {
-    padding: 10px;
+    align-items: end;
+    padding: 0;
   }
 
   .devhub-wizard-dialog {
-    max-height: calc(100vh - 20px);
-  }
-
-  .devhub-wizard-steps {
-    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    max-height: 94vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 
   .devhub-wizard-header,
+  .devhub-wizard-body,
   .devhub-wizard-footer {
-    padding: 14px;
+    padding-left: 18px;
+    padding-right: 18px;
   }
 
-  .devhub-wizard-body {
-    padding: 24px 16px;
+  .devhub-wizard-footer {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .devhub-wizard-footer .btn {
+    width: 100%;
+    justify-content: center;
   }
 }

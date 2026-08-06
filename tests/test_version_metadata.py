@@ -6,8 +6,8 @@ from unittest.mock import patch
 from vr_hotspotd import __version__
 from vr_hotspotd.api import APIHandler, APP_VERSION, SERVER_VERSION
 
-PACKAGE_VERSION = "1.1.0rc3"
-DISPLAY_VERSION = "v1.1.0-rc3"
+PACKAGE_VERSION = "1.1.0rc4"
+DISPLAY_VERSION = "v1.1.0-rc4"
 
 
 class TestVersionMetadata(unittest.TestCase):

@@ -204,7 +204,11 @@
     const control = make('section', 'basic-guided-hotspot-control');
     const statusCopy = make('div', 'basic-guided-hotspot-copy');
     const stateRow = make('div', 'basic-guided-status-state');
-    const stateDot = make('span', 'basic-guided-status-dot');
+    // Wi-Fi lifecycle glyph from the shared ui.js factory; decorative
+    // only, the lifecycle text next to it carries the state for AT.
+    const stateDot = typeof createHotspotWifiIcon === 'function'
+      ? createHotspotWifiIcon('basic-guided-status-icon')
+      : make('span', 'basic-guided-status-dot');
     stateDot.setAttribute('aria-hidden', 'true');
     const stateText = make('h4', '', 'Loading…');
     stateText.id = 'basicGuidedStateText';
@@ -439,26 +443,62 @@
     renameProfileOptions();
   }
 
-  function hotspotState(rawStatus) {
-    const state = (rawStatus.split('|')[0] || 'Loading…').trim();
-    const normalized = state.toLowerCase();
+  const HOTSPOT_STATE_LABELS = {
+    starting: 'Starting…',
+    running: 'Running',
+    stopping: 'Stopping…',
+    stopped: 'Stopped',
+    restarting: 'Restarting…',
+    repairing: 'Repairing…',
+    error: 'Needs attention',
+    unknown: 'Checking status…',
+  };
 
-    if (normalized.includes('error') || normalized.includes('failed')) {
-      return { name: 'error', label: 'Needs attention' };
-    }
+  const TRANSIENT_STATES = ['starting', 'stopping', 'restarting', 'repairing'];
+
+  const STATE_PRESENTATION = {
+    starting: { title: 'Starting hotspot', summary: 'VRhotspot is applying the connection settings.' },
+    stopping: { title: 'Stopping hotspot', summary: 'VRhotspot is shutting down the hotspot safely.' },
+    restarting: { title: 'Restarting hotspot', summary: 'VRhotspot is restarting the hotspot service.' },
+    repairing: { title: 'Repairing network', summary: 'VRhotspot is repairing the network configuration.' },
+    running: { title: 'Hotspot running', summary: 'Your hotspot is active and ready for your headset.' },
+    stopped: { title: 'Start hotspot', summary: 'The hotspot is stopped.' },
+    error: { title: 'Hotspot needs attention', summary: 'VRhotspot encountered a network problem.' },
+    unknown: { title: 'Start hotspot', summary: 'Checking the hotspot status.' },
+  };
+
+  // Text parsing is the fallback only: order matters because "restarting"
+  // contains "starting" and "not running" contains "running".
+  function lifecycleFromText(rawStatus) {
+    const state = (rawStatus.split('|')[0] || '').trim();
+    const normalized = state.toLowerCase();
+    if (
+      normalized.includes('error')
+      || normalized.includes('failed')
+      || normalized.includes('attention')
+    ) return 'error';
+    if (normalized.includes('restarting')) return 'restarting';
+    if (normalized.includes('repair')) return 'repairing';
+    if (normalized.includes('stopping')) return 'stopping';
+    if (normalized.includes('starting')) return 'starting';
     if (
       normalized.includes('stopped')
       || normalized.includes('inactive')
       || normalized.includes('not running')
-    ) {
-      return { name: 'stopped', label: 'Stopped' };
-    }
-    if (normalized.includes('stopping')) return { name: 'working', label: 'Stopping…' };
-    if (normalized.includes('starting') || normalized.includes('repair')) {
-      return { name: 'working', label: 'Starting…' };
-    }
-    if (normalized.includes('running')) return { name: 'running', label: state };
-    return { name: 'loading', label: state || 'Loading…' };
+    ) return 'stopped';
+    if (normalized.includes('running')) return 'running';
+    return 'unknown';
+  }
+
+  function hotspotState() {
+    // The canonical lifecycle published by ui.js setPill via
+    // data-hotspot-state is authoritative; the pill text is only parsed
+    // when the attribute has not been published yet.
+    const canonical = el('basicPill')?.dataset.hotspotState || '';
+    const name = HOTSPOT_STATE_LABELS[canonical]
+      ? canonical
+      : lifecycleFromText((el('basicPillTxt')?.textContent || '').trim());
+    return { name, label: HOTSPOT_STATE_LABELS[name] };
   }
 
   function syncPrimaryAction(stateName) {
@@ -480,9 +520,9 @@
       action.classList.add('danger');
       return;
     }
-    if (stateName === 'working') {
+    if (TRANSIENT_STATES.includes(stateName)) {
       action.dataset.guidedAction = 'wait';
-      action.textContent = 'Working…';
+      action.textContent = HOTSPOT_STATE_LABELS[stateName];
       action.classList.add('secondary');
       action.disabled = true;
       return;
@@ -501,8 +541,7 @@
   }
 
   function syncStatusPresentation() {
-    const rawStatus = (el('basicPillTxt')?.textContent || 'Loading…').trim();
-    const current = hotspotState(rawStatus);
+    const current = hotspotState();
     const card = document.querySelector('.basic-guided-setup-card');
     const stateText = el('basicGuidedStateText');
     const summary = el('basicGuidedStatusSummary');
@@ -510,28 +549,13 @@
 
     setTextIfChanged(stateText, current.label);
 
-    let summaryText = 'Checking the hotspot status.';
-    let titleText = 'Start hotspot';
-    if (current.name === 'running') {
-      titleText = 'Hotspot running';
-      summaryText = 'Your hotspot is active and ready for your headset.';
-    } else if (current.name === 'error') {
-      titleText = 'Hotspot needs attention';
-      summaryText = 'VRhotspot encountered a network problem.';
-    } else if (current.name === 'working') {
-      titleText = current.label.toLowerCase().includes('stopping')
-        ? 'Stopping hotspot'
-        : 'Starting hotspot';
-      summaryText = 'VRhotspot is applying the connection settings.';
-    } else if (current.name === 'stopped') {
-      summaryText = 'The hotspot is stopped.';
-    }
+    const presentation = STATE_PRESENTATION[current.name] || STATE_PRESENTATION.unknown;
 
     if (card && card.dataset.hotspotState !== current.name) {
       card.dataset.hotspotState = current.name;
     }
-    setTextIfChanged(title, titleText);
-    setTextIfChanged(summary, summaryText);
+    setTextIfChanged(title, presentation.title);
+    setTextIfChanged(summary, presentation.summary);
     syncPrimaryAction(current.name);
 
     if (current.name === 'error' && lastStateName !== 'error') {

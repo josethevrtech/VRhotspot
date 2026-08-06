@@ -1078,6 +1078,12 @@ textarea::placeholder {
   letter-spacing: 0.05em;
 }
 
+/* display: inline-flex above would otherwise override the user-agent
+   [hidden] { display: none }, leaving script-hidden buttons visible. */
+.btn[hidden] {
+  display: none !important;
+}
+
 body[data-ui-mode="basic"] [data-ui-section="basic"] .btn {
   font-size: 12px;
   font-weight: 600;
@@ -1212,6 +1218,67 @@ button:disabled,
   0% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(0.9); }
   100% { opacity: 1; transform: scale(1); }
+}
+
+.pill.busy {
+  background: var(--accent-subtle);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+/* Wi-Fi lifecycle glyph shared by the Basic guided card, the Pro service
+   card, and the raw status pills. The icon is decorative (aria-hidden);
+   the lifecycle text next to it remains the accessible state signal, so
+   no state is conveyed by color alone. */
+.hotspot-wifi-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.pill .hotspot-wifi-icon {
+  width: 14px;
+  height: 14px;
+}
+
+[data-hotspot-state="running"] .hotspot-wifi-icon {
+  color: var(--accent-primary);
+  filter: drop-shadow(0 0 5px rgba(0, 243, 255, 0.5));
+}
+
+[data-hotspot-state="starting"] .hotspot-wifi-icon,
+[data-hotspot-state="restarting"] .hotspot-wifi-icon,
+[data-hotspot-state="repairing"] .hotspot-wifi-icon {
+  color: var(--accent-primary);
+  animation: hotspotWifiPulse 1.6s ease-in-out infinite;
+}
+
+[data-hotspot-state="stopping"] .hotspot-wifi-icon {
+  color: var(--accent-hover);
+  opacity: 0.75;
+  animation: hotspotWifiPulse 1.6s ease-in-out infinite;
+}
+
+[data-hotspot-state="stopped"] .hotspot-wifi-icon,
+[data-hotspot-state="unknown"] .hotspot-wifi-icon {
+  color: var(--text-muted);
+}
+
+[data-hotspot-state="error"] .hotspot-wifi-icon {
+  color: var(--danger);
+  filter: drop-shadow(0 0 5px rgba(255, 0, 85, 0.4));
+}
+
+@keyframes hotspotWifiPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hotspot-wifi-icon {
+    animation: none !important;
+  }
 }
 
 .pill.large {

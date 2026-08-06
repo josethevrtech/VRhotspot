@@ -1,607 +1,1189 @@
-(function addDeveloperHubConnectionWizard() {
-  'use strict';
-
-  const DEVICES_PATH = '/v1/devbridge/adb/devices';
-  const CONNECT_PATH = '/v1/devbridge/adb/connect';
-  const ENABLE_WIRELESS_PATH = '/v1/devbridge/adb/enable-wireless';
-  const WORKSPACE_VIEW_KEY = 'vrhs_devhub_workspace_view';
-  const POLL_MS = 1600;
-
-  let pollTimer = null;
-  let selectedUsbSerial = '';
-  let usbDevices = [];
-  let setupComplete = false;
-  let requestRunning = false;
-  let candidateObserver = null;
-
-  function el(id) {
-    return document.getElementById(id);
-  }
-
-  function infoTip(text) {
-    const tip = document.createElement('span');
-    tip.className = 'tip devhub-info-tip';
-    tip.textContent = 'ⓘ';
-    tip.setAttribute('data-tip', text);
-    tip.setAttribute('aria-label', text);
-    tip.setAttribute('tabindex', '0');
-    return tip;
-  }
-
-  function normalized(value) {
-    return String(value || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-  }
-
-  function operationData(response) {
-    return response && response.json && response.json.data
-      ? response.json.data
-      : {};
-  }
-
-  function nestedData(response) {
-    const result = operationData(response);
-    return result && result.data && typeof result.data === 'object'
-      ? result.data
-      : {};
-  }
-
-  function responseMessage(response, fallback) {
-    const result = operationData(response);
-    return String(
-      (result && result.message)
-      || (response && response.json && response.json.message)
-      || fallback,
-    );
-  }
-
-  function feedback(message, state) {
-    const node = el('devhubFeedback');
-    if (!node) return;
-    node.textContent = message;
-    node.dataset.state = state || 'idle';
-  }
-
-  async function getDevices() {
-    if (typeof api !== 'function') return [];
-    const response = await api(DEVICES_PATH);
-    if (!response.ok) throw new Error(responseMessage(response, 'Unable to inspect ADB devices.'));
-    const data = nestedData(response);
-    return Array.isArray(data.devices) ? data.devices : [];
-  }
-
-  function isUsbDevice(device) {
-    const serial = String((device && device.serial) || '').trim();
-    if (!serial || serial.includes(':')) return false;
-    const props = device && device.properties && typeof device.properties === 'object'
-      ? device.properties
-      : {};
-    return !!props.usb || !serial.includes(':');
-  }
-
-  function deviceModel(device) {
-    const props = device && device.properties && typeof device.properties === 'object'
-      ? device.properties
-      : {};
-    return normalized(props.model || props.product || 'Android XR headset');
-  }
-
-  function cardByTitle(panel, title) {
-    return Array.from(panel.querySelectorAll(':scope > .devhub-workspace-grid > .card')).find((card) => {
-      const heading = card.querySelector('.card-header h2');
-      return heading && heading.textContent.trim() === title;
-    }) || null;
-  }
-
-  function setWizardStep(step) {
-    document.querySelectorAll('.devhub-wizard-step').forEach((node) => {
-      const value = Number(node.dataset.step);
-      node.classList.toggle('current', value === step);
-      node.classList.toggle('complete', value < step);
-    });
-  }
-
-  function setWizardCopy(title, detail) {
-    const titleNode = el('devhubWizardTitle');
-    const detailNode = el('devhubWizardDetail');
-    if (titleNode) titleNode.textContent = title;
-    if (detailNode) detailNode.textContent = detail;
-  }
-
-  function renderUsbDevice(device) {
-    const box = el('devhubWizardDevice');
-    if (!box) return;
-    box.replaceChildren();
-
-    if (!device) {
-      box.hidden = true;
-      return;
-    }
-
-    box.hidden = false;
-    const name = document.createElement('strong');
-    name.textContent = deviceModel(device);
-    const serial = document.createElement('span');
-    serial.className = 'devhub-sensitive-identifier';
-    serial.textContent = String(device.serial || '');
-    box.append(name, serial);
-
-    if (usbDevices.length > 1) {
-      const label = document.createElement('label');
-      label.textContent = 'USB headset';
-      const select = document.createElement('select');
-      select.id = 'devhubWizardUsbSelect';
-      for (const candidate of usbDevices) {
-        const option = document.createElement('option');
-        option.value = String(candidate.serial || '');
-        option.textContent = `${deviceModel(candidate)} — ${candidate.state || 'unknown'}`;
-        option.selected = option.value === selectedUsbSerial;
-        select.appendChild(option);
-      }
-      select.addEventListener('change', () => {
-        selectedUsbSerial = select.value;
-        renderWizardState();
-      });
-      label.appendChild(select);
-      box.appendChild(label);
-    }
-  }
-
-  function chosenUsbDevice() {
-    return usbDevices.find((device) => String(device.serial || '') === selectedUsbSerial)
-      || usbDevices.find((device) => device.state === 'device')
-      || usbDevices[0]
-      || null;
-  }
-
-  function renderWizardState() {
-    const action = el('devhubWizardAction');
-    const device = chosenUsbDevice();
-    if (!action) return;
-
-    if (setupComplete) {
-      setWizardStep(4);
-      action.disabled = false;
-      action.textContent = 'Done';
-      renderUsbDevice(device);
-      return;
-    }
-
-    renderUsbDevice(device);
-    action.textContent = 'Enable Wireless ADB';
-
-    if (!device) {
-      setWizardStep(1);
-      setWizardCopy(
-        'Connect the headset by USB',
-        'Use a data-capable USB cable. VRhotspot will detect the headset automatically.',
-      );
-      action.disabled = true;
-      return;
-    }
-
-    if (String(device.state || '').toLowerCase() === 'unauthorized') {
-      setWizardStep(2);
-      setWizardCopy(
-        'Approve USB debugging inside the headset',
-        'Put on the headset, enable “Always allow from this computer,” and select Allow.',
-      );
-      action.disabled = true;
-      return;
-    }
-
-    if (String(device.state || '').toLowerCase() !== 'device') {
-      setWizardStep(1);
-      setWizardCopy(
-        'Waiting for the USB headset',
-        `The headset currently reports “${device.state || 'unknown'}.” Reconnect the cable and keep it awake.`,
-      );
-      action.disabled = true;
-      return;
-    }
-
-    setWizardStep(3);
-    setWizardCopy(
-      `${deviceModel(device)} is ready`,
-      'VRhotspot will read its Wi-Fi address, enable wireless ADB, and connect it automatically.',
-    );
-    action.disabled = requestRunning;
-  }
-
-  async function pollUsbDevices() {
-    if (requestRunning || !el('devhubWirelessWizard') || el('devhubWirelessWizard').hidden) return;
-    try {
-      usbDevices = (await getDevices()).filter(isUsbDevice);
-      if (!usbDevices.some((device) => String(device.serial || '') === selectedUsbSerial)) {
-        const preferred = usbDevices.find((device) => device.state === 'device') || usbDevices[0];
-        selectedUsbSerial = preferred ? String(preferred.serial || '') : '';
-      }
-      renderWizardState();
-    } catch (error) {
-      setWizardCopy('Unable to inspect USB devices', String(error.message || error));
-    }
-  }
-
-  async function selectWirelessTarget(target) {
-    const refresh = el('devhubRefresh');
-    if (refresh) refresh.click();
-
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 450));
-      const rows = document.querySelectorAll('#devhubDeviceList .devhub-list-item');
-      const row = Array.from(rows).find((candidate) => {
-        if (candidate.dataset.devhubSerial === target) return true;
-        const address = candidate.querySelector('.devhub-device-address');
-        return address && String(address.textContent || '').includes(target);
-      });
-      if (!row) continue;
-      const choose = row.querySelector('button');
-      if (choose) choose.click();
-      return;
-    }
-  }
-
-  async function enableWireless() {
-    if (setupComplete) {
-      closeWizard();
-      return;
-    }
-
-    const device = chosenUsbDevice();
-    if (!device || device.state !== 'device' || requestRunning) return;
-
-    requestRunning = true;
-    renderWizardState();
-    setWizardCopy(
-      'Enabling wireless connection',
-      'Keep the headset awake and connected to Wi-Fi. This usually takes only a few seconds.',
-    );
-
-    try {
-      const response = await api(ENABLE_WIRELESS_PATH, {
-        method: 'POST',
-        body: JSON.stringify({ serial: String(device.serial || ''), port: 5555 }),
-      });
-      const result = operationData(response);
-      if (!response.ok || !result.success) {
-        throw new Error(responseMessage(response, 'Wireless setup failed.'));
-      }
-
-      const data = result.data && typeof result.data === 'object' ? result.data : {};
-      const target = String(data.target || '');
-      setupComplete = true;
-      setWizardCopy(
-        `${normalized(data.model || deviceModel(device))} is connected wirelessly`,
-        'You can disconnect the USB cable. VRhotspot will keep using the wireless connection.',
-      );
-      feedback('Wireless headset setup completed.', 'success');
-      renderWizardState();
-      if (target) await selectWirelessTarget(target);
-    } catch (error) {
-      setWizardStep(3);
-      setWizardCopy('Wireless setup needs attention', String(error.message || error));
-      feedback(String(error.message || error), 'error');
-    } finally {
-      requestRunning = false;
-      renderWizardState();
-    }
-  }
-
-  function startPolling() {
-    if (pollTimer) window.clearInterval(pollTimer);
-    void pollUsbDevices();
-    pollTimer = window.setInterval(pollUsbDevices, POLL_MS);
-  }
-
-  function stopPolling() {
-    if (pollTimer) window.clearInterval(pollTimer);
-    pollTimer = null;
-  }
-
-  function openWizard() {
-    const modal = el('devhubWirelessWizard');
-    if (!modal) return;
-    setupComplete = false;
-    requestRunning = false;
-    usbDevices = [];
-    selectedUsbSerial = '';
-    modal.hidden = false;
-    document.body.classList.add('devhub-modal-open');
-    renderWizardState();
-    startPolling();
-    const close = el('devhubWizardClose');
-    if (close) close.focus();
-  }
-
-  function closeWizard() {
-    const modal = el('devhubWirelessWizard');
-    if (!modal) return;
-    modal.hidden = true;
-    document.body.classList.remove('devhub-modal-open');
-    stopPolling();
-    const trigger = el('devhubWirelessSetup');
-    if (trigger) trigger.focus();
-  }
-
-  function buildWizard() {
-    if (el('devhubWirelessWizard')) return;
-
-    const overlay = document.createElement('div');
-    overlay.id = 'devhubWirelessWizard';
-    overlay.className = 'devhub-wizard-overlay';
-    overlay.hidden = true;
-    overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
-    overlay.setAttribute('aria-labelledby', 'devhubWizardHeading');
-
-    const dialog = document.createElement('div');
-    dialog.className = 'devhub-wizard-dialog';
-
-    const header = document.createElement('div');
-    header.className = 'devhub-wizard-header';
-    const heading = document.createElement('h2');
-    heading.id = 'devhubWizardHeading';
-    heading.textContent = 'Set up wireless headset';
-    const close = document.createElement('button');
-    close.id = 'devhubWizardClose';
-    close.type = 'button';
-    close.className = 'btn sm secondary';
-    close.textContent = 'Close';
-    close.addEventListener('click', closeWizard);
-    header.append(heading, close);
-
-    const steps = document.createElement('div');
-    steps.className = 'devhub-wizard-steps';
-    ['Connect USB', 'Approve', 'Enable wireless', 'Complete'].forEach((label, index) => {
-      const step = document.createElement('div');
-      step.className = 'devhub-wizard-step';
-      step.dataset.step = String(index + 1);
-      const number = document.createElement('span');
-      number.textContent = String(index + 1);
-      const copy = document.createElement('strong');
-      copy.textContent = label;
-      step.append(number, copy);
-      steps.appendChild(step);
-    });
-
-    const body = document.createElement('div');
-    body.className = 'devhub-wizard-body';
-    const title = document.createElement('h3');
-    title.id = 'devhubWizardTitle';
-    const detail = document.createElement('p');
-    detail.id = 'devhubWizardDetail';
-    const device = document.createElement('div');
-    device.id = 'devhubWizardDevice';
-    device.className = 'devhub-wizard-device';
-    device.hidden = true;
-    body.append(title, detail, device);
-
-    const footer = document.createElement('div');
-    footer.className = 'devhub-wizard-footer';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'btn secondary';
-    cancel.textContent = 'Cancel';
-    cancel.addEventListener('click', closeWizard);
-    const action = document.createElement('button');
-    action.id = 'devhubWizardAction';
-    action.type = 'button';
-    action.className = 'btn primary';
-    action.textContent = 'Enable Wireless ADB';
-    action.disabled = true;
-    action.addEventListener('click', () => void enableWireless());
-    footer.append(cancel, action);
-
-    dialog.append(header, steps, body, footer);
-    overlay.appendChild(dialog);
-    overlay.addEventListener('click', (event) => {
-      if (event.target === overlay) closeWizard();
-    });
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !overlay.hidden) closeWizard();
-    });
-    document.body.appendChild(overlay);
-  }
-
-  async function connectCandidate(address, button) {
-    if (!address || requestRunning) return;
-    requestRunning = true;
-    button.disabled = true;
-    feedback(`Connecting to discovered headset ${address}...`, 'loading');
-    try {
-      const response = await api(CONNECT_PATH, {
-        method: 'POST',
-        body: JSON.stringify({ ip: address, port: 5555 }),
-      });
-      if (!response.ok) throw new Error(responseMessage(response, 'Connection failed.'));
-      feedback('Discovered headset connected.', 'success');
-      const refresh = el('devhubRefresh');
-      if (refresh) refresh.click();
-    } catch (error) {
-      feedback(String(error.message || error), 'error');
-    } finally {
-      requestRunning = false;
-      button.disabled = false;
-    }
-  }
-
-  function prepareCandidateRows() {
-    const list = el('devhubCandidateList');
-    if (!list) return;
-
-    list.querySelectorAll('.devhub-list-item').forEach((row) => {
-      const title = row.querySelector('.devhub-list-title');
-      const button = row.querySelector('button');
-      if (!title || !button || row.dataset.wizardCandidateReady === '1') return;
-      const address = String(title.textContent || '').trim();
-      row.dataset.wizardCandidateReady = '1';
-      row.dataset.devhubCandidateAddress = address;
-      title.classList.add('devhub-sensitive-identifier');
-      button.textContent = 'Connect';
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        void connectCandidate(address, button);
-      }, { capture: true });
-    });
-
-    const section = el('devhubUnifiedDiscovery');
-    if (section) {
-      section.hidden = !list.querySelector('.devhub-list-item');
-    }
-  }
-
-  function mergeDiscoveryIntoDevices(discoveryCard, devicesCard) {
-    const candidateList = el('devhubCandidateList');
-    const deviceBody = devicesCard.querySelector('.card-body');
-    if (!candidateList || !deviceBody) return;
-
-    const heading = devicesCard.querySelector('.card-header h2');
-    if (heading) heading.textContent = 'Headsets';
-
-    const section = document.createElement('section');
-    section.id = 'devhubUnifiedDiscovery';
-    section.className = 'devhub-unified-discovery';
-    section.hidden = true;
-    const titleRow = document.createElement('div');
-    titleRow.className = 'devhub-unified-section-title';
-    const title = document.createElement('h3');
-    title.textContent = 'Available on network';
-    titleRow.append(
-      title,
-      infoTip('Headsets discovered on the VRhotspot network appear here when they are available.'),
-    );
-    section.append(titleRow, candidateList);
-    deviceBody.appendChild(section);
-    discoveryCard.remove();
-
-    candidateObserver = new MutationObserver(prepareCandidateRows);
-    candidateObserver.observe(candidateList, { childList: true, subtree: true });
-    prepareCandidateRows();
-  }
-
-  function addSetupButton(devicesCard) {
-    if (el('devhubWirelessSetup')) return;
-    const header = devicesCard.querySelector('.card-header');
-    if (!header) return;
-    header.classList.add('devhub-headsets-header');
-
-    const actions = document.createElement('div');
-    actions.className = 'devhub-headsets-actions';
-    const setup = document.createElement('button');
-    setup.id = 'devhubWirelessSetup';
-    setup.type = 'button';
-    setup.className = 'btn sm primary';
-    setup.textContent = 'Set up wireless headset';
-    setup.addEventListener('click', openWizard);
-
-    const disconnect = el('devhubDisconnect');
-    if (disconnect && disconnect.parentNode === header) {
-      header.insertBefore(actions, disconnect);
-      actions.append(setup, disconnect);
-    } else {
-      actions.appendChild(setup);
-      header.appendChild(actions);
-    }
-  }
-
-  function moveManualConnectionToTools(pairingCard, connectCard, toolsPanel) {
-    const toolsGrid = toolsPanel.querySelector('.devhub-workspace-grid');
-    if (!toolsGrid || el('devhubAdvancedConnection')) return;
-
-    const card = document.createElement('section');
-    card.id = 'devhubAdvancedConnection';
-    card.className = 'card devhub-advanced-connection';
-    const header = document.createElement('div');
-    header.className = 'card-header';
-    const title = document.createElement('h2');
-    title.textContent = 'Advanced ADB';
-    header.append(title, infoTip('Manual pairing and IP connection are retained for non-standard Android devices and troubleshooting.'));
-
-    const body = document.createElement('div');
-    body.className = 'card-body';
-    const details = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = 'Manual pairing and IP connection';
-    const grid = document.createElement('div');
-    grid.className = 'devhub-advanced-connection-grid';
-
-    const pairingTitle = pairingCard.querySelector('.card-header h2');
-    const connectTitle = connectCard.querySelector('.card-header h2');
-    if (pairingTitle) pairingTitle.textContent = 'Pair with code';
-    if (connectTitle) connectTitle.textContent = 'Connect by IP';
-    grid.append(pairingCard, connectCard);
-    details.append(summary, grid);
-    body.appendChild(details);
-    card.append(header, body);
-    toolsGrid.appendChild(card);
-  }
-
-  function normalizeEmptyDeviceCopy() {
-    const list = el('devhubDeviceList');
-    const empty = list && list.querySelector('.devhub-empty');
-    const message = 'No headsets are connected. Use “Set up wireless headset” to add one.';
-    if (empty && empty.textContent !== message) {
-      empty.textContent = message;
-    }
-  }
-
-  function inject() {
-    if (document.documentElement.dataset.devhubConnectionWizardReady === '1') return true;
-    const workspace = el('devhubWorkspace');
-    if (!workspace) return false;
-
-    const devicePanel = workspace.querySelector('.devhub-workspace-panel[data-view="device"]');
-    const connectionPanel = workspace.querySelector('.devhub-workspace-panel[data-view="connection"]');
-    const toolsPanel = workspace.querySelector('.devhub-workspace-panel[data-view="tools"]');
-    if (!devicePanel || !connectionPanel || !toolsPanel) return false;
-
-    const devicesCard = cardByTitle(devicePanel, 'ADB Devices');
-    const discoveryCard = cardByTitle(connectionPanel, 'Network Discovery');
-    const pairingCard = cardByTitle(connectionPanel, 'Wireless Pairing');
-    const connectCard = cardByTitle(connectionPanel, 'Connect Headset');
-    if (!devicesCard || !discoveryCard || !pairingCard || !connectCard) return false;
-
-    document.documentElement.dataset.devhubConnectionWizardReady = '1';
-    buildWizard();
-    addSetupButton(devicesCard);
-    mergeDiscoveryIntoDevices(discoveryCard, devicesCard);
-    moveManualConnectionToTools(pairingCard, connectCard, toolsPanel);
-
-    const connectionTab = workspace.querySelector('.devhub-workspace-tab[data-view="connection"]');
-    const connectionWasActive = connectionTab && connectionTab.classList.contains('active');
-    if (connectionTab) connectionTab.remove();
-    connectionPanel.remove();
-
-    try {
-      if (sessionStorage.getItem(WORKSPACE_VIEW_KEY) === 'connection') {
-        sessionStorage.setItem(WORKSPACE_VIEW_KEY, 'device');
-      }
-    } catch { }
-    if (connectionWasActive) {
-      const deviceTab = workspace.querySelector('.devhub-workspace-tab[data-view="device"]');
-      if (deviceTab) deviceTab.click();
-    }
-
-    const deviceList = el('devhubDeviceList');
-    if (deviceList) {
-      const observer = new MutationObserver(normalizeEmptyDeviceCopy);
-      observer.observe(deviceList, { childList: true });
-    }
-    normalizeEmptyDeviceCopy();
-    return true;
-  }
-
-  function start() {
-    if (inject()) return;
-    const observer = new MutationObserver(() => {
-      if (inject()) observer.disconnect();
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', start, { once: true });
-  } else {
-    start();
-  }
+(function installVrhotspotOnlyDeveloperHub() {
+'use strict';
+const PATHS = {
+status: '/v1/status',
+devices: '/v1/devbridge/adb/devices',
+wireless: '/v1/devbridge/adb/enable-wireless',
+credentials: '/v1/config/hotspot-credentials',
+tools: '/v1/devbridge/tools/status',
+toolsRemove: '/v1/devbridge/tools/remove',
+};
+const state = {
+ready: false,
+busy: false,
+starting: false,
+complete: false,
+autoJoining: false,
+usbLost: false,
+manualJoin: false,
+manualSsid: '',
+manualNote: '',
+finishing: false,
+advanceTimer: null,
+usbSerial: '',
+usbDevices: [],
+usbTimer: null,
+joinTimer: null,
+toolsBusy: false,
+};
+const el = (id) => document.getElementById(id);
+const text = (node, value) => {
+if (node && node.textContent !== value) node.textContent = value;
+};
+const normalize = (value) => String(value || '')
+.replace(/_/g, ' ')
+.replace(/\s+/g, ' ')
+.trim();
+function publicResult(response) {
+return response && response.json && response.json.data
+? response.json.data
+: {};
+}
+function resultData(response) {
+const result = publicResult(response);
+return result && result.data && typeof result.data === 'object'
+? result.data
+: {};
+}
+function resultCode(response) {
+const result = publicResult(response);
+return String(
+result.result_code
+|| (response && response.json && response.json.result_code)
+|| (response ? `HTTP ${response.status}` : 'request_failed'),
+);
+}
+function resultMessage(response, fallback) {
+const result = publicResult(response);
+return String(
+result.message
+|| (response && response.json && response.json.message)
+|| fallback,
+);
+}
+async function call(path, options = {}) {
+if (typeof api !== 'function') {
+return { ok: false, status: 503, json: null, raw: '' };
+}
+return api(path, options);
+}
+function feedback(message, kind = 'idle') {
+const node = el('devhubFeedback');
+text(node, message || '');
+if (node) node.dataset.state = kind;
+}
+function statePayload(response) {
+const data = response && response.json && response.json.data;
+if (!data || typeof data !== 'object') return {};
+return data.data && typeof data.data === 'object' ? data.data : data;
+}
+async function runningStatus() {
+const response = await call(PATHS.status);
+const runtime = statePayload(response);
+return {
+response,
+runtime,
+running: !!(
+response.ok
+&& runtime
+&& (runtime.running || runtime.phase === 'running')
+),
+};
+}
+function stopTimer(name) {
+if (state[name]) window.clearInterval(state[name]);
+state[name] = null;
+}
+function stopAdvance() {
+if (state.advanceTimer) window.clearTimeout(state.advanceTimer);
+state.advanceTimer = null;
+}
+function chosenUsb() {
+return state.usbDevices.find((device) => String(device.serial || '') === state.usbSerial)
+|| state.usbDevices.find((device) => device.state === 'device')
+|| state.usbDevices[0]
+|| null;
+}
+function modelOf(device) {
+const props = device && device.properties && typeof device.properties === 'object'
+? device.properties
+: {};
+return normalize(props.model || props.product || 'Android XR headset');
+}
+async function loadUsbDevices() {
+const response = await call(PATHS.devices);
+if (!response.ok) throw new Error(resultMessage(response, 'Unable to inspect ADB devices.'));
+const data = resultData(response);
+state.usbDevices = (Array.isArray(data.devices) ? data.devices : []).filter((device) => {
+const serial = String(device.serial || '');
+return serial && !serial.includes(':');
+});
+if (!state.usbDevices.some((device) => String(device.serial || '') === state.usbSerial)) {
+const preferred = state.usbDevices.find((device) => device.state === 'device')
+|| state.usbDevices[0];
+state.usbSerial = preferred ? String(preferred.serial || '') : '';
+}
+}
+function setStep(step) {
+document.querySelectorAll('#devhubWirelessWizard .devhub-wizard-step').forEach((node) => {
+const value = Number(node.dataset.step);
+node.classList.toggle('current', value === step);
+node.classList.toggle('complete', value < step);
+});
+}
+function wizardCopy(title, detail) {
+text(el('devhubWizardTitle'), title);
+text(el('devhubWizardDetail'), detail);
+}
+function renderUsb(device) {
+const host = el('devhubWizardDevice');
+if (!host) return;
+host.replaceChildren();
+host.hidden = !device;
+if (!device) return;
+const name = document.createElement('strong');
+name.textContent = modelOf(device);
+const serial = document.createElement('span');
+serial.className = 'devhub-sensitive-identifier';
+serial.textContent = String(device.serial || '');
+host.append(name, serial);
+if (state.usbDevices.length > 1) {
+const select = document.createElement('select');
+select.id = 'devhubWizardUsbSelect';
+for (const candidate of state.usbDevices) {
+const option = document.createElement('option');
+option.value = String(candidate.serial || '');
+option.textContent = `${modelOf(candidate)} — ${candidate.state || 'unknown'}`;
+option.selected = option.value === state.usbSerial;
+select.appendChild(option);
+}
+select.addEventListener('change', () => {
+state.usbSerial = select.value;
+renderWizard();
+});
+host.appendChild(select);
+}
+}
+function manualJoinPanel(show) {
+const panel = el('devhubManualJoin');
+if (panel) panel.hidden = !show;
+}
+function autoJoinPanel(show) {
+const panel = el('devhubAutoJoin');
+if (panel) panel.hidden = !show;
+}
+function autoJoinStatus(message) {
+text(el('devhubAutoJoinStatus'), message);
+}
+function manualJoinStatus(message) {
+text(el('devhubManualJoinStatus'), message);
+}
+// Hotspot Wi-Fi credential assistance for the manual Horizon OS join step.
+// The passphrase lives only in this closure while the wizard needs it and is
+// purged on close, completion, privacy changes, and saved-password edits.
+const CRED_MASK = '••••••••••';
+const cred = {
+ssid: '',
+value: null,
+revealed: false,
+fetching: false,
+error: '',
+sessionReveal: false,
+confirming: false,
+dismissed: false,
+auto: true,
+notice: '',
+noticeStamp: 0,
+};
+function privacyEnabled() {
+const box = el('privacyMode') || el('privacyModeBasic');
+if (box) return !!box.checked;
+try {
+return (window.localStorage.getItem('vr_hotspot_privacy') || '1') === '1';
+} catch {
+return true;
+}
+}
+function setGlobalPrivacy(enabled) {
+try {
+window.localStorage.setItem('vr_hotspot_privacy', enabled ? '1' : '0');
+} catch { }
+const advanced = el('privacyMode');
+const basic = el('privacyModeBasic');
+if (advanced) advanced.checked = enabled;
+if (basic) basic.checked = enabled;
+const source = advanced || basic;
+if (source) source.dispatchEvent(new window.Event('change', { bubbles: true }));
+}
+function credNotice(message) {
+cred.notice = message || '';
+cred.noticeStamp += 1;
+text(el('devhubManualCredNotice'), cred.error || cred.notice);
+}
+function purgeCredentialSecret(options = {}) {
+cred.ssid = '';
+cred.value = null;
+cred.revealed = false;
+cred.fetching = false;
+cred.error = '';
+cred.sessionReveal = false;
+cred.confirming = false;
+cred.dismissed = false;
+cred.auto = options.auto !== false;
+cred.notice = '';
+cred.noticeStamp += 1;
+const secret = el('devhubManualCredSecret');
+if (secret) secret.textContent = '';
+text(el('devhubManualCredNotice'), '');
+}
+async function fetchHotspotCredentials() {
+if (cred.fetching) return;
+if (privacyEnabled() && !cred.sessionReveal) return;
+cred.fetching = true;
+cred.error = '';
+credNotice('Loading the hotspot Wi-Fi password…');
+try {
+const response = await call(PATHS.credentials);
+const data = publicResult(response);
+if (response.ok && typeof data.wpa2_passphrase === 'string' && data.wpa2_passphrase) {
+cred.ssid = String(data.ssid || '');
+cred.value = data.wpa2_passphrase;
+cred.revealed = true;
+credNotice('');
+} else if (resultCode(response) === 'passphrase_not_set') {
+cred.error = 'No hotspot Wi-Fi password is saved.';
+} else {
+cred.error = 'Unable to load the hotspot Wi-Fi password.';
+}
+} catch {
+cred.error = 'Unable to load the hotspot Wi-Fi password.';
+} finally {
+cred.fetching = false;
+renderCredentials();
+}
+}
+async function copyCredentialSecret() {
+if (!cred.value) return;
+try {
+await window.navigator.clipboard.writeText(cred.value);
+credNotice('Password copied to the clipboard.');
+} catch {
+credNotice('Copy is unavailable. Reveal the password and enter it in the headset.');
+}
+const stamp = cred.noticeStamp;
+window.setTimeout(() => {
+if (cred.noticeStamp === stamp) credNotice('');
+}, 4000);
+}
+function toggleCredentialReveal() {
+if (cred.revealed) {
+cred.revealed = false;
+if (privacyEnabled()) {
+purgeCredentialSecret();
+}
+renderCredentials();
+return;
+}
+if (cred.value) {
+cred.revealed = true;
+renderCredentials();
+return;
+}
+void fetchHotspotCredentials();
+renderCredentials();
+}
+function onPrivacyModeChanged() {
+if (privacyEnabled()) purgeCredentialSecret();
+renderCredentials();
+}
+function onSavedPassphraseEdited() {
+if (cred.value === null && !cred.error && !cred.fetching) return;
+purgeCredentialSecret({ auto: false });
+renderCredentials();
+}
+function renderCredentials() {
+const panel = el('devhubManualCredentials');
+if (!panel) return;
+const secretAllowed = !privacyEnabled() || cred.sessionReveal;
+text(el('devhubManualCredSsid'), cred.ssid || state.manualSsid || 'VRhotspot');
+el('devhubManualCredPrivacy').hidden = secretAllowed;
+el('devhubManualCredSecretRow').hidden = !secretAllowed;
+el('devhubManualCredControls').hidden = !secretAllowed;
+if (!secretAllowed) {
+text(el('devhubManualCredSecret'), '');
+el('devhubManualCredPrivacyActions').hidden = cred.dismissed;
+el('devhubManualCredConfirm').hidden = !cred.confirming;
+text(el('devhubManualCredNotice'), '');
+return;
+}
+const wizard = el('devhubWirelessWizard');
+const wizardOpen = !!wizard && !wizard.hidden;
+if (wizardOpen && state.manualJoin && !cred.value && !cred.fetching && !cred.error && cred.auto) {
+void fetchHotspotCredentials();
+}
+const toggle = el('devhubManualCredToggle');
+const copy = el('devhubManualCredCopy');
+if (cred.value && cred.revealed) {
+text(el('devhubManualCredSecret'), cred.value);
+text(toggle, 'Hide');
+} else {
+text(el('devhubManualCredSecret'), CRED_MASK);
+text(toggle, 'Reveal');
+}
+toggle.disabled = cred.fetching;
+copy.disabled = cred.fetching || !cred.value;
+text(el('devhubManualCredNotice'), cred.error || cred.notice);
+}
+function renderManualJoin(device) {
+const ssid = state.manualSsid || 'VRhotspot';
+setStep(3);
+wizardCopy(
+`Put on your headset and join ${ssid}`,
+'Automatic Wi-Fi enrollment did not complete on this headset, so finish '
++ `this step inside the headset: open Settings → Wi-Fi and select ${ssid}. `
++ 'Keep the USB cable connected the whole time.',
+);
+text(el('devhubManualJoinSsid'), ssid);
+if (!state.busy) {
+manualJoinStatus(
+state.manualNote || `Waiting for ${modelOf(device)} to join ${ssid}…`,
+);
+}
+renderCredentials();
+manualJoinPanel(true);
+}
+function renderWizard() {
+const action = el('devhubWizardAction');
+const device = chosenUsb();
+if (!action) return;
+renderUsb(device);
+if (state.finishing) {
+manualJoinPanel(false);
+autoJoinPanel(false);
+setStep(4);
+action.disabled = true;
+action.textContent = 'Enabling wireless…';
+return;
+}
+if (state.complete) {
+manualJoinPanel(false);
+autoJoinPanel(false);
+setStep(5);
+action.disabled = false;
+action.textContent = 'Done';
+return;
+}
+if (state.autoJoining) {
+const ssid = state.manualSsid || 'VRhotspot';
+manualJoinPanel(false);
+setStep(3);
+wizardCopy(
+`Connecting ${modelOf(device)} to ${ssid} automatically…`,
+'Keep the headset awake and the USB cable connected.',
+);
+autoJoinStatus(`Joining ${ssid}… This can take up to a minute.`);
+autoJoinPanel(true);
+action.disabled = true;
+action.textContent = 'Connecting…';
+return;
+}
+if (state.usbLost) {
+manualJoinPanel(false);
+autoJoinPanel(false);
+setStep(3);
+wizardCopy(
+'USB cable disconnected',
+'Reconnect the USB cable to the headset. Automatic Wi-Fi setup stopped '
++ 'safely, and wireless ADB stays disabled until the headset is verified '
++ 'on VRhotspot.',
+);
+action.disabled = true;
+action.textContent = 'Reconnect USB';
+return;
+}
+if (state.manualJoin) {
+autoJoinPanel(false);
+const usbState = device ? String(device.state || '').toLowerCase() : '';
+action.textContent = 'I’ve joined — check again';
+if (usbState !== 'device') {
+stopTimer('joinTimer');
+manualJoinPanel(false);
+setStep(3);
+wizardCopy(
+'USB cable disconnected',
+'Reconnect the USB cable to the headset. Developer Hub paused the '
++ 'VRhotspot network checks and will resume once USB is back.',
+);
+action.disabled = true;
+return;
+}
+renderManualJoin(device);
+if (!state.joinTimer) startManualPolling();
+action.disabled = state.busy;
+return;
+}
+manualJoinPanel(false);
+autoJoinPanel(false);
+action.textContent = 'Join VRhotspot & enable wireless';
+if (!device) {
+setStep(1);
+wizardCopy(
+'Connect the headset by USB',
+'Use a data-capable USB cable. Developer Hub will detect the headset automatically.',
+);
+action.disabled = true;
+return;
+}
+const adbState = String(device.state || '').toLowerCase();
+if (adbState === 'unauthorized') {
+setStep(2);
+wizardCopy(
+'Approve USB debugging inside the headset',
+'Enable “Always allow from this computer,” then select Allow.',
+);
+action.disabled = true;
+return;
+}
+if (adbState !== 'device') {
+setStep(1);
+wizardCopy(
+'Waiting for the USB headset',
+`The headset reports “${adbState || 'unknown'}.” Reconnect it and keep it awake.`,
+);
+action.disabled = true;
+return;
+}
+setStep(3);
+wizardCopy(
+`${modelOf(device)} is ready to join VRhotspot`,
+'Wireless ADB remains disabled until the headset address and route match VRhotspot.',
+);
+action.disabled = state.busy;
+}
+async function pollUsb() {
+const modal = el('devhubWirelessWizard');
+if (!modal || modal.hidden || state.busy) return;
+try {
+await loadUsbDevices();
+if (state.usbLost) {
+const device = chosenUsb();
+if (device && String(device.state || '').toLowerCase() === 'device') {
+state.usbLost = false;
+}
+}
+renderWizard();
+} catch (error) {
+wizardCopy('Unable to inspect USB devices', String(error.message || error));
+}
+}
+function startUsbPolling() {
+stopTimer('usbTimer');
+void pollUsb();
+state.usbTimer = window.setInterval(pollUsb, 1600);
+}
+function selectWirelessTarget(target) {
+el('devhubRefresh')?.click();
+let attempt = 0;
+const timer = window.setInterval(() => {
+attempt += 1;
+const row = Array.from(document.querySelectorAll('#devhubDeviceList .devhub-list-item'))
+.find((candidate) => {
+if (candidate.dataset.devhubSerial === target) return true;
+const address = candidate.querySelector('.devhub-device-address');
+return address && String(address.textContent || '').includes(target);
+});
+if (row) {
+row.querySelector('button')?.click();
+window.clearInterval(timer);
+} else if (attempt >= 10) {
+window.clearInterval(timer);
+}
+}, 450);
+}
+function startManualPolling() {
+stopTimer('joinTimer');
+state.joinTimer = window.setInterval(() => {
+if (state.manualJoin && !state.busy) void bootstrapWireless(true);
+}, 2200);
+}
+async function bootstrapWireless(background = false) {
+if (state.complete) {
+closeWizard();
+return;
+}
+if (state.busy || state.finishing) return;
+const device = chosenUsb();
+if (!device || device.state !== 'device') return;
+state.busy = true;
+state.usbLost = false;
+if (!background && !state.manualJoin) {
+// Primary path: the daemon enrolls the headset on VRhotspot
+// automatically. No manual credential instructions appear yet.
+state.autoJoining = true;
+}
+renderWizard();
+if (!background && state.manualJoin) {
+manualJoinStatus(
+`Checking whether the headset joined ${state.manualSsid || 'VRhotspot'}…`,
+);
+}
+try {
+const response = await call(PATHS.wireless, {
+method: 'POST',
+body: JSON.stringify({
+serial: String(device.serial || ''),
+port: 5555,
+auto_join: !state.manualJoin,
+}),
+});
+state.autoJoining = false;
+const result = publicResult(response);
+const data = resultData(response);
+const code = resultCode(response);
+if (response.ok && result.success) {
+state.manualJoin = false;
+state.finishing = true;
+stopTimer('joinTimer');
+purgeCredentialSecret();
+manualJoinPanel(false);
+setStep(4);
+wizardCopy(
+`${normalize(data.model || modelOf(device))} joined ${data.ssid || 'VRhotspot'}`,
+'Enabling wireless ADB through the VRhotspot network…',
+);
+const doneTitle = `${normalize(data.model || modelOf(device))} is connected through VRhotspot`;
+const doneDetail = `USB can be disconnected. Wireless ADB is using ${data.ssid || 'the dedicated VRhotspot network'}.`;
+const target = data.target ? String(data.target) : '';
+stopAdvance();
+state.advanceTimer = window.setTimeout(() => {
+state.advanceTimer = null;
+state.finishing = false;
+state.complete = true;
+setStep(5);
+wizardCopy(doneTitle, doneDetail);
+feedback('Wireless headset setup completed through VRhotspot.', 'success');
+if (target) selectWirelessTarget(target);
+renderWizard();
+}, 900);
+return;
+}
+if (code === 'hotspot_not_running') {
+closeWizard();
+showPrecondition();
+return;
+}
+if (code === 'hotspot_configuration_incomplete') {
+closeWizard();
+showPrecondition({
+configurationError: true,
+message: resultMessage(response, 'The hotspot configuration is incomplete.'),
+});
+return;
+}
+if (code === 'usb_disconnected') {
+state.manualJoin = false;
+state.usbLost = true;
+stopTimer('joinTimer');
+purgeCredentialSecret();
+feedback('Reconnect the USB cable to continue wireless setup.', 'error');
+return;
+}
+if (
+code === 'wifi_control_unavailable'
+|| data.requires_manual_join === true
+|| code === 'headset_not_on_vrhotspot'
+|| code === 'headset_address_outside_hotspot_subnet'
+) {
+const ssid = String(data.ssid || state.manualSsid || 'VRhotspot');
+const alreadyManual = state.manualJoin;
+state.manualJoin = true;
+state.manualSsid = ssid;
+state.manualNote = '';
+if (!alreadyManual) {
+feedback(`Waiting for the headset to join ${ssid}.`, 'loading');
+}
+return;
+}
+if (background && state.manualJoin) {
+state.manualNote = `The last check did not complete (${code}). Retrying automatically…`;
+return;
+}
+state.manualJoin = false;
+stopTimer('joinTimer');
+purgeCredentialSecret();
+setStep(3);
+wizardCopy('Wireless setup needs attention', resultMessage(response, code));
+feedback(resultMessage(response, code), 'error');
+} catch (error) {
+if (background && state.manualJoin) {
+state.manualNote = 'Unable to reach VRhotspot. Retrying automatically…';
+return;
+}
+state.manualJoin = false;
+stopTimer('joinTimer');
+purgeCredentialSecret();
+setStep(3);
+wizardCopy('Wireless setup needs attention', String(error.message || error));
+feedback(String(error.message || error), 'error');
+} finally {
+state.autoJoining = false;
+state.busy = false;
+renderWizard();
+}
+}
+function ensureDialogs() {
+if (!el('devhubWirelessWizard')) {
+document.body.insertAdjacentHTML('beforeend', `
+<div id="devhubWirelessWizard" class="devhub-wizard-overlay" hidden
+role="dialog" aria-modal="true" aria-labelledby="devhubWizardHeading">
+<div class="devhub-wizard-dialog">
+<div class="devhub-wizard-header">
+<h2 id="devhubWizardHeading">Connect headset to VRhotspot</h2>
+<button id="devhubWizardClose" class="btn sm secondary" type="button">Close</button>
+</div>
+<div class="devhub-wizard-steps">
+${['Connect USB', 'Approve debugging', 'Join VRhotspot', 'Enable wireless', 'Complete']
+.map((label, index) => `<div class="devhub-wizard-step" data-step="${index + 1}"><span>${index + 1}</span><strong>${label}</strong></div>`)
+.join('')}
+</div>
+<div class="devhub-wizard-body">
+<h3 id="devhubWizardTitle"></h3>
+<p id="devhubWizardDetail"></p>
+<div id="devhubAutoJoin" class="devhub-auto-join" hidden>
+<span class="devhub-auto-join-spinner" aria-hidden="true"></span>
+<span id="devhubAutoJoinStatus" role="status" aria-live="polite"></span>
+</div>
+<div id="devhubManualJoin" class="devhub-manual-join" hidden>
+<div class="devhub-manual-join-wait">
+<span class="devhub-manual-join-spinner" aria-hidden="true"></span>
+<span id="devhubManualJoinStatus" role="status" aria-live="polite"></span>
+</div>
+<ol class="devhub-manual-join-steps">
+<li>Put on the headset and open <strong>Settings → Wi-Fi</strong>.</li>
+<li>Select <strong id="devhubManualJoinSsid" class="devhub-manual-join-ssid"></strong> and join it.</li>
+<li>Keep the USB cable connected the whole time.</li>
+</ol>
+<div id="devhubManualCredentials" class="devhub-manual-cred">
+<h4 class="devhub-manual-cred-title">Hotspot Wi-Fi credentials</h4>
+<div class="devhub-manual-cred-row">
+<span class="devhub-manual-cred-label">Network</span>
+<code id="devhubManualCredSsid" class="devhub-manual-cred-value"></code>
+</div>
+<div id="devhubManualCredSecretRow" class="devhub-manual-cred-row" hidden>
+<span class="devhub-manual-cred-label">Hotspot Wi-Fi password</span>
+<code id="devhubManualCredSecret" class="devhub-manual-cred-value devhub-manual-cred-secret"></code>
+</div>
+<div id="devhubManualCredControls" class="devhub-manual-cred-actions" hidden>
+<button id="devhubManualCredToggle" class="btn sm secondary" type="button">Reveal</button>
+<button id="devhubManualCredCopy" class="btn sm secondary" type="button">Copy password</button>
+</div>
+<div id="devhubManualCredPrivacy" class="devhub-manual-cred-privacy" hidden>
+<p class="devhub-manual-cred-privacy-title"><strong>Password hidden by Privacy Mode.</strong></p>
+<p class="devhub-manual-cred-privacy-copy">Privacy Mode hides passwords and sensitive information so they are not exposed while screen sharing, streaming, or recording.</p>
+<div id="devhubManualCredPrivacyActions" class="devhub-manual-cred-actions">
+<button id="devhubManualCredShowOnce" class="btn sm secondary" type="button">Show password once</button>
+<button id="devhubManualCredPrivacyOff" class="btn sm secondary" type="button">Turn off Privacy Mode</button>
+<button id="devhubManualCredKeepHidden" class="btn sm secondary" type="button">Keep hidden</button>
+</div>
+<div id="devhubManualCredConfirm" class="devhub-manual-cred-confirm" hidden>
+<p>Reveal the hotspot Wi-Fi password on this screen? It stays visible only for this setup session, and Privacy Mode stays on.</p>
+<div class="devhub-manual-cred-actions">
+<button id="devhubManualCredConfirmShow" class="btn sm primary" type="button">Reveal password</button>
+<button id="devhubManualCredConfirmCancel" class="btn sm secondary" type="button">Cancel</button>
+</div>
+</div>
+</div>
+<p id="devhubManualCredNotice" class="devhub-manual-cred-notice" role="status" aria-live="polite"></p>
+</div>
+<p class="devhub-manual-join-note">Developer Hub keeps checking automatically and continues as soon as the headset is on VRhotspot.</p>
+</div>
+<p class="devhub-wizard-policy">Developer Hub will not expose wireless ADB through another Wi-Fi network.</p>
+<div id="devhubWizardDevice" class="devhub-wizard-device" hidden></div>
+</div>
+<div class="devhub-wizard-footer">
+<button id="devhubWizardCancel" class="btn secondary" type="button">Cancel</button>
+<button id="devhubWizardAction" class="btn primary" type="button" disabled>Join VRhotspot &amp; enable wireless</button>
+</div>
+</div>
+</div>`);
+el('devhubWizardClose').addEventListener('click', closeWizard);
+el('devhubWizardCancel').addEventListener('click', closeWizard);
+el('devhubWizardAction').addEventListener('click', () => void bootstrapWireless(false));
+el('devhubWirelessWizard').addEventListener('click', (event) => {
+if (event.target === el('devhubWirelessWizard')) closeWizard();
+});
+el('devhubManualCredToggle').addEventListener('click', toggleCredentialReveal);
+el('devhubManualCredCopy').addEventListener('click', () => void copyCredentialSecret());
+el('devhubManualCredShowOnce').addEventListener('click', () => {
+cred.confirming = true;
+cred.dismissed = false;
+renderCredentials();
+});
+el('devhubManualCredConfirmShow').addEventListener('click', () => {
+cred.confirming = false;
+cred.sessionReveal = true;
+void fetchHotspotCredentials();
+renderCredentials();
+});
+el('devhubManualCredConfirmCancel').addEventListener('click', () => {
+cred.confirming = false;
+renderCredentials();
+});
+el('devhubManualCredPrivacyOff').addEventListener('click', () => {
+cred.confirming = false;
+cred.dismissed = false;
+cred.auto = true;
+setGlobalPrivacy(false);
+renderCredentials();
+});
+el('devhubManualCredKeepHidden').addEventListener('click', () => {
+cred.confirming = false;
+cred.dismissed = true;
+renderCredentials();
+});
+document.addEventListener('change', (event) => {
+const id = event.target ? String(event.target.id || '') : '';
+if (id === 'privacyMode' || id === 'privacyModeBasic') onPrivacyModeChanged();
+});
+document.addEventListener('input', (event) => {
+const id = event.target ? String(event.target.id || '') : '';
+if (id === 'wpa2_passphrase' || id === 'wpa2_passphrase_basic') onSavedPassphraseEdited();
+});
+}
+if (!el('devhubHotspotPrecondition')) {
+document.body.insertAdjacentHTML('beforeend', `
+<div id="devhubHotspotPrecondition" class="devhub-wizard-overlay" hidden
+role="dialog" aria-modal="true" aria-labelledby="devhubHotspotPreconditionTitle">
+<div class="devhub-wizard-dialog devhub-precondition-dialog">
+<div class="devhub-wizard-header">
+<h2 id="devhubHotspotPreconditionTitle">Start VRhotspot first</h2>
+</div>
+<div class="devhub-wizard-body">
+<div class="devhub-precondition-copy">
+<p><strong>Wireless headset setup only works through the dedicated VRhotspot network.</strong></p>
+<p>Start the hotspot before continuing. Developer Hub will never enable wireless ADB through another Wi-Fi network.</p>
+</div>
+<div id="devhubHotspotPreconditionStatus" class="devhub-precondition-status"
+role="status" aria-live="polite"></div>
+</div>
+<div class="devhub-wizard-footer">
+<button id="devhubHotspotCancel" class="btn secondary" type="button">Cancel</button>
+<button id="devhubOpenHotspotSetup" class="btn secondary" type="button" hidden>Open Hotspot Setup</button>
+<button id="devhubStartHotspot" class="btn primary" type="button">Start Hotspot</button>
+</div>
+</div>
+</div>`);
+el('devhubHotspotCancel').addEventListener('click', closePrecondition);
+el('devhubOpenHotspotSetup').addEventListener('click', navigateToSetup);
+el('devhubStartHotspot').addEventListener('click', () => void startFromPrecondition());
+}
+document.addEventListener('keydown', (event) => {
+if (event.key !== 'Escape') return;
+if (!el('devhubWirelessWizard').hidden) closeWizard();
+else if (!el('devhubHotspotPrecondition').hidden) closePrecondition();
+});
+}
+function openWizard() {
+state.complete = false;
+state.manualJoin = false;
+state.manualSsid = '';
+state.manualNote = '';
+state.finishing = false;
+state.busy = false;
+state.autoJoining = false;
+state.usbLost = false;
+state.usbDevices = [];
+state.usbSerial = '';
+stopAdvance();
+purgeCredentialSecret();
+manualJoinPanel(false);
+autoJoinPanel(false);
+el('devhubWirelessWizard').hidden = false;
+document.body.classList.add('devhub-modal-open');
+renderWizard();
+startUsbPolling();
+el('devhubWizardClose').focus();
+}
+function closeWizard() {
+el('devhubWirelessWizard').hidden = true;
+document.body.classList.remove('devhub-modal-open');
+stopTimer('usbTimer');
+stopTimer('joinTimer');
+stopAdvance();
+purgeCredentialSecret();
+state.finishing = false;
+state.autoJoining = false;
+state.usbLost = false;
+el('devhubWirelessSetup')?.focus();
+}
+function showPrecondition(options = {}) {
+const configurationError = options.configurationError === true;
+const status = el('devhubHotspotPreconditionStatus');
+text(status, String(options.message || ''));
+status.dataset.state = configurationError ? 'error' : '';
+el('devhubStartHotspot').hidden = configurationError;
+el('devhubStartHotspot').disabled = false;
+text(el('devhubStartHotspot'), 'Start Hotspot');
+el('devhubOpenHotspotSetup').hidden = !configurationError;
+el('devhubHotspotPrecondition').hidden = false;
+document.body.classList.add('devhub-modal-open');
+(configurationError ? el('devhubOpenHotspotSetup') : el('devhubStartHotspot')).focus();
+}
+function closePrecondition() {
+el('devhubHotspotPrecondition').hidden = true;
+document.body.classList.remove('devhub-modal-open');
+el('devhubWirelessSetup')?.focus();
+}
+async function waitForRunning(timeoutMs = 30000) {
+const deadline = Date.now() + timeoutMs;
+while (Date.now() <= deadline) {
+const checked = await runningStatus();
+if (checked.running) return true;
+await new Promise((resolve) => window.setTimeout(resolve, 700));
+}
+return false;
+}
+async function startFromPrecondition() {
+if (state.starting) return;
+state.starting = true;
+const start = el('devhubStartHotspot');
+const open = el('devhubOpenHotspotSetup');
+const status = el('devhubHotspotPreconditionStatus');
+start.disabled = true;
+text(start, 'Starting…');
+text(status, 'Starting VRhotspot through the existing hotspot workflow…');
+open.hidden = true;
+try {
+if (typeof startHotspot === 'function') {
+await startHotspot(null, 'Developer Hub');
+} else {
+const button = el('btnStart') || el('btnStartBasic');
+if (!button) throw new Error('Hotspot setup is not available.');
+button.click();
+}
+if (!(await waitForRunning(30000))) {
+throw new Error('VRhotspot did not reach the running state.');
+}
+closePrecondition();
+openWizard();
+} catch (error) {
+text(status, String(error.message || error));
+status.dataset.state = 'error';
+start.hidden = true;
+open.hidden = false;
+} finally {
+state.starting = false;
+}
+}
+function navigateToSetup() {
+closePrecondition();
+const nav = Array.from(document.querySelectorAll('.nav-item')).find((item) =>
+String(item.textContent || '').toLowerCase().includes('set up hotspot')
+) || document.querySelector('.nav-item[data-tab="status"]');
+nav?.click();
+window.setTimeout(() => (el('btnStartBasic') || el('btnStart') || el('ssid'))?.focus(), 0);
+}
+async function beginSetup() {
+if ((await runningStatus()).running) openWizard();
+else showPrecondition();
+}
+function card(panel, title) {
+return Array.from(panel.querySelectorAll(':scope > .devhub-workspace-grid > .card'))
+.find((node) => node.querySelector('.card-header h2')?.textContent.trim() === title);
+}
+function restructureWorkspace(workspace) {
+const devicePanel = workspace.querySelector('.devhub-workspace-panel[data-view="device"]');
+const connectionPanel = workspace.querySelector('.devhub-workspace-panel[data-view="connection"]');
+if (!devicePanel || !connectionPanel) return false;
+const devices = card(devicePanel, 'ADB Devices');
+const discovery = card(connectionPanel, 'Network Discovery');
+const pairing = card(connectionPanel, 'Wireless Pairing');
+const connect = card(connectionPanel, 'Connect Headset');
+if (!devices || !discovery || !pairing || !connect) return false;
+devices.querySelector('.card-header h2').textContent = 'Headsets';
+const header = devices.querySelector('.card-header');
+header.classList.add('devhub-headsets-header');
+const actions = document.createElement('div');
+actions.className = 'devhub-headsets-actions';
+const setup = document.createElement('button');
+setup.id = 'devhubWirelessSetup';
+setup.type = 'button';
+setup.className = 'btn sm primary';
+setup.textContent = 'Set up wireless headset';
+setup.addEventListener('click', () => void beginSetup());
+const disconnect = el('devhubDisconnect');
+if (disconnect && disconnect.parentNode === header) {
+header.insertBefore(actions, disconnect);
+actions.append(setup, disconnect);
+} else {
+actions.appendChild(setup);
+header.appendChild(actions);
+}
+const connectionQuickAction = Array.from(
+workspace.querySelectorAll('.devhub-quick-action'),
+).find((item) => item.querySelector('strong')?.textContent.trim() === 'Connection');
+if (connectionQuickAction) {
+const oldButton = connectionQuickAction.querySelector('button');
+if (oldButton) {
+const replacement = oldButton.cloneNode(true);
+const label = replacement.querySelector('strong');
+if (label) label.textContent = 'Set up wireless headset';
+replacement.addEventListener('click', () => void beginSetup());
+oldButton.replaceWith(replacement);
+}
+const tip = connectionQuickAction.querySelector('.devhub-quick-action-tip');
+if (tip) {
+const help = 'Connect and authorize a headset only through the dedicated VRhotspot network.';
+tip.setAttribute('data-tip', help);
+tip.setAttribute('aria-label', help);
+}
+}
+const candidates = el('devhubCandidateList');
+if (candidates) {
+const section = document.createElement('section');
+section.id = 'devhubUnifiedDiscovery';
+section.className = 'devhub-unified-discovery';
+section.innerHTML = '<div class="devhub-unified-section-title"><h3>Detected on VRhotspot</h3></div>';
+section.appendChild(candidates);
+devices.querySelector('.card-body').appendChild(section);
+}
+discovery.remove();
+pairing.remove();
+connect.remove();
+el('devhubAdvancedConnection')?.remove();
+const connectionTab = workspace.querySelector(
+'.devhub-workspace-tab[data-view="connection"]',
+);
+const connectionWasActive = !!(
+connectionTab && connectionTab.classList.contains('active')
+);
+connectionTab?.remove();
+connectionPanel.remove();
+try {
+if (sessionStorage.getItem('vrhs_devhub_workspace_view') === 'connection') {
+sessionStorage.setItem('vrhs_devhub_workspace_view', 'device');
+}
+} catch { }
+if (connectionWasActive) {
+workspace.querySelector('.devhub-workspace-tab[data-view="device"]')?.click();
+}
+return true;
+}
+function cleanCandidates() {
+const section = el('devhubUnifiedDiscovery');
+const rows = section?.querySelectorAll('.devhub-list-item') || [];
+if (section) section.hidden = rows.length === 0;
+rows.forEach((row) => {
+row.querySelector('button')?.remove();
+const meta = row.querySelector('.devhub-list-meta');
+if (meta && !meta.textContent.includes('Use USB setup')) {
+text(meta, `${meta.textContent} · Use USB setup to authorize`);
+}
+});
+}
+function cleanApps() {
+const pathInput = el('devhubApkPath');
+if (pathInput) {
+pathInput.required = false;
+const container = pathInput.closest('.devhub-host-path') || pathInput.closest('div');
+container?.remove();
+}
+const serial = el('devhubPackageSerial');
+if (serial) {
+serial.required = false;
+serial.hidden = true;
+serial.tabIndex = -1;
+serial.setAttribute('aria-hidden', 'true');
+const label = document.querySelector('label[for="devhubPackageSerial"]');
+if (label) label.hidden = true;
+}
+document.querySelectorAll('#tab-devhub .small.faded').forEach((node) => {
+if (String(node.textContent || '').toLowerCase().includes('path must exist on the linux machine')) {
+node.remove();
+}
+});
+el('devhubAdvancedConnection')?.remove();
+if (typeof companionAuthBridgeAvailable === 'function' && companionAuthBridgeAvailable()) {
+const choose = document.querySelector('#devhubApkPicker .btn');
+const drop = document.querySelector('#devhubApkPicker .devhub-file-drop');
+const meta = document.querySelector('#devhubApkPicker .devhub-file-meta');
+if (choose) choose.disabled = true;
+if (drop) {
+drop.tabIndex = -1;
+drop.removeAttribute('role');
+drop.setAttribute('aria-disabled', 'true');
+}
+text(
+meta,
+'APK file upload is temporarily unavailable in the desktop companion. Open the browser Web Portal to deploy an APK.',
+);
+}
+}
+function normalizeDeviceStates() {
+document.querySelectorAll('#devhubDeviceList .devhub-list-item').forEach((row) => {
+const node = row.querySelector('.devhub-device-state');
+if (!node) return;
+const raw = String(row.dataset.devhubState || node.textContent || '').trim().toLowerCase();
+if (raw === 'device') {
+node.hidden = true;
+node.setAttribute('aria-hidden', 'true');
+text(node, 'device');
+return;
+}
+node.hidden = false;
+node.removeAttribute('aria-hidden');
+text(node, {
+unauthorized: 'Approve USB debugging',
+offline: 'Offline',
+recovery: 'Recovery mode',
+}[raw] || 'Unavailable');
+});
+}
+function toolsModel(response) {
+const outer = publicResult(response);
+const status = outer.adb ? outer : (outer.data && outer.data.adb ? outer.data : {});
+const adb = status.adb && typeof status.adb === 'object' ? status.adb : {};
+return {
+source: String(adb.source || 'missing'),
+managed: adb.managed && typeof adb.managed === 'object' ? adb.managed : {},
+system: adb.system && typeof adb.system === 'object' ? adb.system : {},
+};
+}
+function bindToolsRemoveButton() {
+const current = el('devhubRemoveTools');
+if (!current || current.dataset.vrhotspotRemoveBound === '1') return current;
+const replacement = current.cloneNode(true);
+replacement.dataset.vrhotspotRemoveBound = '1';
+replacement.addEventListener('click', async () => {
+const source = String(replacement.dataset.toolsSource || 'managed');
+const adbPath = String(replacement.dataset.adbPath || '');
+if (source === 'system') {
+const confirmed = window.confirm(
+`Uninstall the operating-system package that provides ${adbPath || 'adb'}? `
++ 'Other Android development tools on this computer may also use it.',
+);
+if (!confirmed) return;
+}
+replacement.disabled = true;
+feedback(
+source === 'system'
+? 'Uninstalling the system ADB package...'
+: 'Removing VRhotspot-managed Android Platform-Tools...',
+'loading',
+);
+try {
+const response = await call(PATHS.toolsRemove, {
+method: 'POST',
+body: JSON.stringify({ source, path: adbPath }),
+});
+const result = publicResult(response);
+if (!response.ok || result.success !== true) {
+feedback(resultMessage(response, resultCode(response)), 'error');
+return;
+}
+feedback(result.message || 'ADB removal completed.', 'success');
+el('devhubRefresh')?.click();
+await updateTools();
+} catch (error) {
+feedback(String(error.message || error), 'error');
+} finally {
+replacement.disabled = false;
+}
+});
+current.replaceWith(replacement);
+return replacement;
+}
+async function updateTools() {
+const section = el('devhubToolsManagement');
+if (!section || state.toolsBusy) return;
+state.toolsBusy = true;
+try {
+const response = await call(PATHS.tools);
+if (!response.ok) return;
+const model = toolsModel(response);
+const install = el('devhubInstallTools');
+const remove = bindToolsRemoveButton();
+const license = el('devhubAcceptToolsLicense')?.closest('.devhub-checks');
+const status = document.querySelector('#tab-devhub .devhub-card-status .small');
+const broken = model.managed.present === true && model.managed.verified === false;
+const managed = model.source === 'managed'
+&& model.managed.installed === true
+&& model.managed.verified !== false;
+section.hidden = false;
+if (broken) {
+install.hidden = false;
+text(install, 'Repair Managed ADB');
+remove.hidden = false;
+remove.dataset.toolsSource = 'managed';
+remove.dataset.adbPath = String(model.managed.path || '');
+text(remove, 'Remove Managed ADB');
+if (license) license.hidden = false;
+text(status, 'Managed ADB needs repair');
+} else if (managed) {
+install.hidden = false;
+text(install, 'Reinstall Managed ADB');
+remove.hidden = false;
+remove.dataset.toolsSource = 'managed';
+remove.dataset.adbPath = String(model.managed.path || '');
+text(remove, 'Remove Managed ADB');
+if (license) license.hidden = false;
+text(status, 'Managed ADB ready');
+} else if (model.source === 'system') {
+section.hidden = false;
+install.hidden = true;
+remove.hidden = false;
+remove.dataset.toolsSource = 'system';
+remove.dataset.adbPath = String(model.system.path || '');
+text(remove, 'Uninstall System ADB');
+if (license) license.hidden = true;
+text(status, 'System ADB ready');
+} else {
+install.hidden = false;
+text(install, 'Install Managed ADB');
+remove.hidden = true;
+remove.dataset.toolsSource = 'managed';
+remove.dataset.adbPath = '';
+if (license) license.hidden = false;
+text(status, 'ADB unavailable');
+}
+} finally {
+state.toolsBusy = false;
+}
+}
+function reconcile() {
+cleanCandidates();
+cleanApps();
+normalizeDeviceStates();
+const empty = el('devhubDeviceList')?.querySelector('.devhub-empty');
+text(empty, empty ? 'No headsets are connected. Use “Set up wireless headset” to add one.' : '');
+void updateTools();
+}
+function inject() {
+if (state.ready) return true;
+const workspace = el('devhubWorkspace');
+if (!workspace || !restructureWorkspace(workspace)) return false;
+ensureDialogs();
+state.ready = true;
+document.documentElement.dataset.devhubVrhotspotOnlyReady = '1';
+const observer = new MutationObserver(reconcile);
+observer.observe(workspace, { childList: true, subtree: true });
+reconcile();
+window.setInterval(() => {
+const pane = el('tab-devhub');
+if (pane?.classList.contains('active') && !document.hidden) reconcile();
+}, 5000);
+return true;
+}
+function start() {
+if (inject()) return;
+const observer = new MutationObserver(() => {
+if (inject()) observer.disconnect();
+});
+observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+if (document.readyState === 'loading') {
+document.addEventListener('DOMContentLoaded', start, { once: true });
+} else {
+start();
+}
 })();

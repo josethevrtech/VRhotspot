@@ -302,6 +302,7 @@ function apiPayload(url, { passphraseSaved, enableInternet = true, running = fal
       result_code: 'ok',
       data: {
         running,
+        phase: running ? 'running' : 'stopped',
         state: running ? 'running' : 'stopped',
         adapter: 'wlan1',
         band: '5ghz',
@@ -880,7 +881,11 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
   // Changes & Restart and drive exactly one restart through the live
   // (hidden) Save & Restart node.
   stubOptions.running = true;
+  // Mirror the canonical publication chain: setPill exposes the lifecycle
+  // through data-hotspot-state, which the composer reads before any text.
+  const serviceCard = document.querySelector('.pro-service-card');
   const statusText = document.getElementById('proServiceStateText');
+  serviceCard.dataset.hotspotState = 'running';
   statusText.textContent = 'Running';
   await tick(window, 150);
   // Autosave's field listeners require trusted events, which jsdom cannot
@@ -903,6 +908,7 @@ async function runFullPortalScenario({ passphraseSaved, enableInternet = true })
   assert.equal(document.getElementById('btnStart').dataset.proGuidedWired, '1',
     'the primary action must be wired for the apply flow');
   stubOptions.running = false;
+  serviceCard.dataset.hotspotState = 'stopped';
   statusText.textContent = 'Stopped';
   await tick(window, 150);
 

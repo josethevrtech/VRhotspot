@@ -1362,6 +1362,33 @@ class APIHandler(BaseHTTPRequestHandler):
             self._respond(200, self._envelope(correlation_id=cid, data=cfg))
             return
 
+        if path == "/v1/config/hotspot-credentials":
+            # Narrow secret-reveal contract for the manual Wi-Fi join flow:
+            # only the SSID and the passphrase, nothing else. The passphrase
+            # must never reach logs, warnings, or the general config view.
+            cfg = load_config()
+            pw = cfg.get("wpa2_passphrase")
+            if not isinstance(pw, str) or not pw:
+                self._respond(
+                    404,
+                    self._envelope(
+                        correlation_id=cid,
+                        result_code="passphrase_not_set",
+                    ),
+                )
+                return
+            self._respond(
+                200,
+                self._envelope(
+                    correlation_id=cid,
+                    data={
+                        "ssid": str(cfg.get("ssid") or ""),
+                        "wpa2_passphrase": pw,
+                    },
+                ),
+            )
+            return
+
         if path == "/v1/info":
             data = {
                 "version": APP_VERSION,

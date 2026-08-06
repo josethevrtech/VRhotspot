@@ -43,7 +43,13 @@ def test_service_status_uses_one_state_aware_primary_action() -> None:
     assert "proServiceAction" in source
     assert "Stop Hotspot" in source
     assert "Start Hotspot" in source
-    assert "Working…" in source
+    # Transitional states mirror the exact lifecycle action instead of a
+    # generic Working… label.
+    assert "'Starting…'" in source
+    assert "'Stopping…'" in source
+    assert "'Restarting…'" in source
+    assert "'Repairing…'" in source
+    assert "Working…" not in source
     assert "const stop = el('btnStop')" in source
     assert "if (stop) stop.click()" in source
     assert "btnRestart" in source

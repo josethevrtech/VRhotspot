@@ -271,24 +271,15 @@ window.UI_FIELD_VISIBILITY = {
       body[data-ui-mode="advanced"] .pro-service-state-row {
         display: flex; align-items: center; gap: 14px;
       }
+      body[data-ui-mode="advanced"] .pro-service-state-icon,
       body[data-ui-mode="advanced"] .pro-service-state-dot {
-        width: 12px; height: 12px; flex: 0 0 12px; border-radius: 50%;
-        background: var(--text-muted);
+        width: 26px; height: 26px; flex: 0 0 26px;
       }
       body[data-ui-mode="advanced"] .pro-service-state-copy h3 {
         margin: 0; color: var(--text-main); font-size: 28px;
       }
       body[data-ui-mode="advanced"] .pro-service-state-copy p {
-        margin: 8px 0 0 26px; color: var(--text-muted); font-size: 15px;
-      }
-      body[data-ui-mode="advanced"] .pro-service-card[data-service-state="running"] .pro-service-state-dot {
-        background: var(--success); box-shadow: 0 0 9px rgba(0, 255, 157, .45);
-      }
-      body[data-ui-mode="advanced"] .pro-service-card[data-service-state="working"] .pro-service-state-dot {
-        background: var(--accent-primary);
-      }
-      body[data-ui-mode="advanced"] .pro-service-card[data-service-state="error"] .pro-service-state-dot {
-        background: var(--danger); box-shadow: 0 0 9px rgba(255, 0, 85, .4);
+        margin: 8px 0 0 40px; color: var(--text-muted); font-size: 15px;
       }
       body[data-ui-mode="advanced"] .pro-service-actions { display: grid; gap: 12px; }
       body[data-ui-mode="advanced"] .pro-service-primary {
@@ -456,31 +447,46 @@ window.UI_FIELD_VISIBILITY = {
     return { configuration, supportBundle };
   }
 
-  function serviceState(raw) {
-    const text = String(raw || 'Loading…').split('|')[0].trim();
-    const normalized = text.toLowerCase();
-    if (normalized.includes('error') || normalized.includes('failed')) {
-      return { name: 'error', label: 'Needs attention', summary: 'The hotspot encountered a problem. Use Repair Network or review Diagnostics.' };
-    }
-    if (normalized.includes('stopping')) {
-      return { name: 'working', label: 'Stopping…', summary: 'VRhotspot is stopping the hotspot.' };
-    }
-    if (normalized.includes('starting') || normalized.includes('repair') || normalized.includes('restart')) {
-      return { name: 'working', label: text, summary: 'VRhotspot is applying the requested operation.' };
-    }
-    if (normalized.includes('running')) {
-      return { name: 'running', label: 'Running', summary: 'The hotspot is active and ready for connected devices.' };
-    }
-    if (normalized.includes('stopped') || normalized.includes('inactive') || normalized.includes('not running')) {
-      return { name: 'stopped', label: 'Stopped', summary: 'The hotspot is not active.' };
-    }
-    return { name: 'loading', label: text || 'Loading…', summary: 'Checking the hotspot status.' };
+  const SERVICE_STATE_PRESENTATION = {
+    starting: { label: 'Starting…', transient: true, summary: 'VRhotspot is applying the connection settings.' },
+    running: { label: 'Running', summary: 'The hotspot is active and ready for connected devices.' },
+    stopping: { label: 'Stopping…', transient: true, summary: 'VRhotspot is shutting down the hotspot safely.' },
+    stopped: { label: 'Stopped', summary: 'The hotspot is not active.' },
+    restarting: { label: 'Restarting…', transient: true, summary: 'VRhotspot is restarting the hotspot service.' },
+    repairing: { label: 'Repairing…', transient: true, summary: 'VRhotspot is repairing the network configuration.' },
+    error: { label: 'Needs attention', summary: 'The hotspot encountered a problem. Use Repair Network or review Diagnostics.' },
+    unknown: { label: 'Checking status…', summary: 'Checking the hotspot status.' },
+  };
+
+  // Fallback text parsing, used only until setPill publishes the canonical
+  // lifecycle. Order matters: "restarting" contains "starting" and
+  // "not running" contains "running".
+  function lifecycleFromText(raw) {
+    const text = String(raw || '').split('|')[0].trim().toLowerCase();
+    if (text.includes('error') || text.includes('failed') || text.includes('attention')) return 'error';
+    if (text.includes('restarting') || text.includes('restart')) return 'restarting';
+    if (text.includes('repair')) return 'repairing';
+    if (text.includes('stopping')) return 'stopping';
+    if (text.includes('starting')) return 'starting';
+    if (text.includes('stopped') || text.includes('inactive') || text.includes('not running')) return 'stopped';
+    if (text.includes('running')) return 'running';
+    return 'unknown';
+  }
+
+  function serviceState() {
+    // The canonical lifecycle published by ui.js setPill via
+    // data-hotspot-state is authoritative; pill text is a fallback only.
+    const canonical = el('pill')?.dataset.hotspotState || '';
+    const name = SERVICE_STATE_PRESENTATION[canonical]
+      ? canonical
+      : lifecycleFromText(el('pillTxt')?.textContent || '');
+    return Object.assign({ name }, SERVICE_STATE_PRESENTATION[name]);
   }
 
   function syncServicePresentation() {
     const card = document.querySelector('.pro-service-card');
-    const state = serviceState(el('pillTxt')?.textContent || 'Loading…');
-    if (card) card.dataset.serviceState = state.name;
+    const state = serviceState();
+    if (card) card.dataset.hotspotState = state.name;
     const title = el('proServiceStateText');
     const summary = el('proServiceStateSummary');
     if (title && title.textContent !== state.label) title.textContent = state.label;
@@ -488,14 +494,16 @@ window.UI_FIELD_VISIBILITY = {
 
     const primary = el('btnStart');
     if (!primary) return;
-    primary.disabled = state.name === 'working' || state.name === 'loading';
+    primary.disabled = !!state.transient || state.name === 'unknown';
     primary.classList.remove('primary', 'danger', 'secondary');
     if (state.name === 'running') {
       primary.textContent = 'Stop Hotspot';
       primary.classList.add('danger');
       primary.dataset.proServiceAction = 'stop';
-    } else if (state.name === 'working' || state.name === 'loading') {
-      primary.textContent = state.name === 'working' ? 'Working…' : 'Checking Status…';
+    } else if (state.transient || state.name === 'unknown') {
+      // Mirror the exact lifecycle action (Starting…/Stopping…/…) instead
+      // of a generic busy label.
+      primary.textContent = state.transient ? state.label : 'Checking Status…';
       primary.classList.add('secondary');
       primary.dataset.proServiceAction = 'wait';
     } else {
@@ -512,7 +520,11 @@ window.UI_FIELD_VISIBILITY = {
 
     const stateCopy = make('div', 'pro-service-state-copy');
     const row = make('div', 'pro-service-state-row');
-    const dot = make('span', 'pro-service-state-dot');
+    // Wi-Fi lifecycle glyph from the shared ui.js factory; decorative
+    // only, the lifecycle text next to it carries the state for AT.
+    const dot = typeof createHotspotWifiIcon === 'function'
+      ? createHotspotWifiIcon('pro-service-state-icon')
+      : make('span', 'pro-service-state-dot');
     dot.setAttribute('aria-hidden', 'true');
     const title = make('h3', '', 'Loading…');
     title.id = 'proServiceStateText';
