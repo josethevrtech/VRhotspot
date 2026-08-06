@@ -142,6 +142,76 @@ body[data-ui-mode="advanced"] .devhub-wizard-device select {
   font-size: 13px !important;
 }
 
+.devhub-manual-join {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.devhub-manual-join[hidden] {
+  display: none !important;
+}
+
+.devhub-manual-join-wait {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 217, 255, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 217, 255, 0.07);
+  color: var(--text-main);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.devhub-manual-join-spinner {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(0, 217, 255, 0.25);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: devhub-manual-join-spin 0.9s linear infinite;
+}
+
+@keyframes devhub-manual-join-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .devhub-manual-join-spinner {
+    animation: none;
+  }
+}
+
+.devhub-manual-join-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.devhub-manual-join-steps strong {
+  color: var(--text-main);
+}
+
+.devhub-manual-join-ssid {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.devhub-manual-join-note {
+  margin: 0 !important;
+  color: var(--text-muted);
+  font-size: 13px !important;
+}
+
 .devhub-wizard-device {
   display: grid;
   gap: 8px;
