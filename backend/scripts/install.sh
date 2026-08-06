@@ -221,7 +221,55 @@ validate_bazzite_vendor_stack() {
   done
 }
 
-# Allow focused tests to source the firewall helpers without running installation.
+copy_application_files() {
+  local repo_root="$1"
+  local install_dir="$2"
+  local -a excludes=(
+    "--exclude=./.git"
+    "--exclude=./.git/*"
+    "--exclude=./node_modules"
+    "--exclude=./node_modules/*"
+    "--exclude=*/node_modules"
+    "--exclude=*/node_modules/*"
+    "--exclude=./.venv"
+    "--exclude=./.venv/*"
+    "--exclude=*/.venv"
+    "--exclude=*/.venv/*"
+    "--exclude=*/__pycache__"
+    "--exclude=*/__pycache__/*"
+    "--exclude=./.pytest_cache"
+    "--exclude=./.pytest_cache/*"
+    "--exclude=./.ruff_cache"
+    "--exclude=./.ruff_cache/*"
+    "--exclude=./.mypy_cache"
+    "--exclude=./.mypy_cache/*"
+    "--exclude=./htmlcov"
+    "--exclude=./htmlcov/*"
+    "--exclude=./.coverage"
+    "--exclude=*.pyc"
+    "--exclude=*.pyo"
+  )
+
+  command -v tar >/dev/null 2>&1 || die "tar not found (required for safe application sync)"
+  mkdir -p "$install_dir"
+
+  # Remove stale top-level development artifacts from older installs. This
+  # also handles node_modules when a previous copy left it as a file rather
+  # than a directory, which made recursive cp abort after stopping the daemon.
+  rm -rf \
+    "$install_dir/node_modules" \
+    "$install_dir/.venv" \
+    "$install_dir/.pytest_cache" \
+    "$install_dir/.ruff_cache" \
+    "$install_dir/.mypy_cache" \
+    "$install_dir/htmlcov" \
+    "$install_dir/.coverage"
+
+  tar -C "$repo_root" "${excludes[@]}" -cf - . \
+    | tar -C "$install_dir" -xf -
+}
+
+# Allow focused tests to source the firewall and copy helpers without running installation.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
@@ -232,8 +280,32 @@ ENABLE_AUTOSTART="0"
 FIX_AUTOSTART_CONFIG="0"
 DAEMON_UNIT="vr-hotspotd.service"
 AUTOSTART_UNIT="vr-hotspot-autostart.service"
+DAEMON_WAS_ACTIVE="0"
+AUTOSTART_WAS_ACTIVE="0"
+SERVICES_STOPPED="0"
 # Backward-compat cleanup only.
 LEGACY_SYSTEMD_UNITS=("vr-hotspotd-autostart.service")
+
+restore_active_services_on_failure() {
+  local status=$?
+  trap - EXIT
+
+  if [[ "$status" -ne 0 && "$SERVICES_STOPPED" == "1" ]]; then
+    log "Installation failed; attempting to restore previously active services"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if [[ "$DAEMON_WAS_ACTIVE" == "1" ]]; then
+      systemctl start "$DAEMON_UNIT" >/dev/null 2>&1 \
+        || log "Warning: could not restart $DAEMON_UNIT after installation failure"
+    fi
+    if [[ "$AUTOSTART_WAS_ACTIVE" == "1" ]]; then
+      systemctl start "$AUTOSTART_UNIT" >/dev/null 2>&1 \
+        || log "Warning: could not restart $AUTOSTART_UNIT after installation failure"
+    fi
+  fi
+
+  exit "$status"
+}
+trap restore_active_services_on_failure EXIT
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -252,6 +324,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BACKEND_SRC="$REPO_ROOT/backend"
 
 [[ -d "$BACKEND_SRC/vr_hotspotd" ]] || die "Expected $BACKEND_SRC/vr_hotspotd not found. Are you in the right repo?"
+[[ -d "$REPO_ROOT/assets" ]] || die "Assets directory not found at $REPO_ROOT/assets"
 command -v systemctl >/dev/null 2>&1 || die "systemctl not found (systemd required)"
 
 # Create dirs
@@ -264,18 +337,21 @@ install -d -m 755 /etc/vr-hotspot
 touch /etc/vr-hotspot/env
 chmod 600 /etc/vr-hotspot/env || true
 
+if systemctl is-active --quiet "$DAEMON_UNIT"; then
+  DAEMON_WAS_ACTIVE="1"
+fi
+if systemctl is-active --quiet "$AUTOSTART_UNIT"; then
+  AUTOSTART_WAS_ACTIVE="1"
+fi
+
 log "Stopping active VRhotspot services before file sync"
 systemctl stop "$AUTOSTART_UNIT" "$DAEMON_UNIT" &>/dev/null || true
+SERVICES_STOPPED="1"
 
 log "Copying application files -> $INSTALL_DIR"
-# Copy source code
-mkdir -p "$INSTALL_DIR"
-cp -r "$BACKEND_SRC/../." "$INSTALL_DIR/"
+copy_application_files "$REPO_ROOT" "$INSTALL_DIR"
 
 # Ensure Web UI assets are refreshed in the install directory.
-if [[ ! -d "$REPO_ROOT/assets" ]]; then
-  die "Assets directory not found at $REPO_ROOT/assets"
-fi
 log "Syncing Web UI assets -> $INSTALL_DIR/assets"
 install -d -m 755 "$INSTALL_DIR/assets"
 cp -a "$REPO_ROOT/assets/." "$INSTALL_DIR/assets/"
@@ -421,5 +497,6 @@ sync_autostart_service_state
 
 log "Starting $DAEMON_UNIT (after asset sync)"
 systemctl restart "$DAEMON_UNIT"
+SERVICES_STOPPED="0"
 
 log "Backend install complete."
