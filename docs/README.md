@@ -7,8 +7,13 @@ The documents here cover advanced usage, design, and development.
 
 - [Troubleshooting](troubleshooting.md) — service status, logs, common issues,
   repair, support bundles, SteamOS validation checklist
-- [Supported Wi-Fi adapters](wifi-adapters.md) — recommended hardware and known
-  issues
+- [Adapter compatibility and VR qualification](wifi-adapters.md) — compatibility
+  evidence, hardware limitations, and streaming qualification status
+- [Streaming stability](streaming-stability.md) — fixes, freeze reproduction,
+  and release acceptance criteria
+- [CLI diagnostics](cli.md) — passive session capture, freeze markers, and exports
+- [Channel selection](channel-selection.md) — startup-only selection and width limitations
+- [UDP diagnostics](udp-diagnostics.md) — opt-in echo measurements and their limits
 - [Advanced installation & configuration](advanced-install.md) — manual
   install, installer flags, API token, firewall ports, autostart, performance
   tuning

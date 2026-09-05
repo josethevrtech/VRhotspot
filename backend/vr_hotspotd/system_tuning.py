@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from vr_hotspotd.engine.tx_power import get_tx_power, set_tx_power, tx_power_mbm
+
 
 SYSCTL_TUNING_DEFAULTS: Dict[str, str] = {
     "net.core.rmem_max": "134217728",
@@ -407,6 +409,122 @@ def _write_io_scheduler(device: str, scheduler: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
+def _interface_admin_up(ifname: str) -> Optional[bool]:
+    """Read IFF_UP without probing or changing the interface."""
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", ifname):
+        return None
+    try:
+        flags = int((Path("/sys/class/net") / ifname / "flags").read_text().strip(), 0)
+        if flags < 0:
+            return None
+        return bool(flags & 0x1)
+    except (OSError, ValueError):
+        return None
+
+
+def _interface_connected(iw: str, ifname: str) -> Optional[bool]:
+    """Bounded read-only check for a selected managed parent that remains up."""
+    try:
+        result = subprocess.run(
+            [iw, "dev", ifname, "link"], capture_output=True, text=True, timeout=2.0
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    output = (result.stdout or "").strip()
+    if output == "Not connected.":
+        return False
+    if output.startswith("Connected to "):
+        return True
+    return None
+
+
+def _tx_power_target_guard(
+    ap_ifname: str, adapter_ifname: Optional[str], ssid: object
+) -> Optional[str]:
+    """Prove AP identity and exclusive active use before touching radio power.
+
+    Some drivers apply even `iw dev` power requests to the entire PHY. An
+    inactive parent interface is fine; any active or uninspectable peer is not.
+    None means the current snapshot is safe. Every uncertainty returns a reason
+    so startup can continue without changing the radio.
+    """
+    if not adapter_ifname or not isinstance(ssid, str) or not ssid:
+        return "identity_metadata_missing"
+    iw = _iw_bin()
+    if not iw:
+        return "iw_not_found"
+    try:
+        result = subprocess.run([iw, "dev"], capture_output=True, text=True, timeout=2.0)
+    except Exception as exc:
+        return f"inventory_failed:{type(exc).__name__}"
+    if result.returncode != 0:
+        return f"inventory_failed:rc={result.returncode}"
+    output = result.stdout or ""
+    if not output or len(output) > 131072:
+        return "inventory_invalid"
+
+    records: List[Dict[str, str]] = []
+    current: Optional[Dict[str, str]] = None
+    phy: Optional[str] = None
+    for raw in output.splitlines():
+        line = raw.lstrip()
+        if line.startswith("phy#"):
+            match = re.fullmatch(r"phy#(\d+)", line)
+            if not match:
+                return "inventory_invalid"
+            phy = match.group(1)
+            current = None
+        elif line.startswith("Interface ") or line == "Unnamed/non-netdev interface":
+            if phy is None:
+                return "inventory_invalid"
+            name = line[len("Interface "):] if line.startswith("Interface ") else ""
+            if name and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", name):
+                return "inventory_invalid"
+            current = {"phy": phy, "ifname": name}
+            records.append(current)
+        elif current is not None:
+            if line.startswith("type "):
+                current["type"] = line[5:]
+            elif line.startswith("ssid "):
+                current["ssid"] = line[5:]
+            elif line.startswith("channel "):
+                match = re.match(r"channel (\d+) \(", line)
+                if match and int(match.group(1)) > 0:
+                    current["channel"] = match.group(1)
+
+    aps = [record for record in records if record["ifname"] == ap_ifname]
+    adapters = [record for record in records if record["ifname"] == adapter_ifname]
+    if len(aps) != 1 or len(adapters) != 1:
+        return "identity_interface_missing_or_ambiguous"
+    ap, adapter = aps[0], adapters[0]
+    if ap["phy"] != adapter["phy"]:
+        return "identity_phy_mismatch"
+    if ap.get("type") != "AP" or not ap.get("channel"):
+        return "ap_not_ready"
+    if ap.get("ssid") != ssid:
+        return "identity_ssid_mismatch"
+    if _interface_admin_up(ap_ifname) is not True:
+        return "ap_link_state_unavailable_or_down"
+    for peer in records:
+        if peer is ap or peer["phy"] != ap["phy"]:
+            continue
+        name = peer["ifname"]
+        up = _interface_admin_up(name) if name else None
+        if up is None:
+            return "shared_phy_peer_state_unknown"
+        if up:
+            if name == adapter_ifname and peer.get("type") == "managed":
+                connected = _interface_connected(iw, name)
+                if connected is False:
+                    continue
+                if connected is None:
+                    return "shared_phy_peer_state_unknown"
+            return "shared_phy_active_interface"
+    return None
+
+
 def apply_runtime(
     state: Dict[str, object],
     cfg: Dict[str, object],
@@ -415,7 +533,47 @@ def apply_runtime(
     adapter_ifname: Optional[str],
     cpu_affinity_pids: Iterable[int],
 ) -> Tuple[Dict[str, object], List[str]]:
+    """Apply settings once the AP is ready, before reporting session startup.
+
+    This is a startup hook, not a streaming telemetry callback. Transmit power
+    is recorded in the per-start state so repeated calls cannot adjust it during
+    the same session, even if the saved preference changes.
+    """
     warnings: List[str] = []
+
+    requested_power = cfg.get("tx_power")
+    try:
+        tx_power_mbm(requested_power)
+    except ValueError as exc:
+        # Lifecycle validates configuration before starting an engine. Keep this
+        # guard for direct callers, before any runtime tuning can mutate a host.
+        return state, [str(exc)]
+
+    previous_power = state.get("tx_power")
+    if ap_ifname and not (
+        isinstance(previous_power, dict) and previous_power.get("interface") == ap_ifname
+    ):
+        power_state = {
+            "interface": ap_ifname,
+            "mode": "auto" if requested_power is None else "fixed",
+            "requested_dbm": requested_power,
+            "effective_dbm": None,
+            "status": "skipped",
+        }
+        guard_error = _tx_power_target_guard(ap_ifname, adapter_ifname, cfg.get("ssid"))
+        if guard_error:
+            power_state["error"] = guard_error
+            warnings.append(f"tx_power_skipped:{ap_ifname}:{guard_error}")
+        else:
+            ok, result = set_tx_power(ap_ifname, requested_power)
+            # iw reports a driver value, not a physical RF measurement. Keep it
+            # separate from the request, including after rejected settings.
+            power_state["effective_dbm"] = get_tx_power(ap_ifname)
+            power_state["status"] = "applied" if ok else "failed"
+            if not ok:
+                power_state["error"] = result
+                warnings.append(f"tx_power_apply_failed:{ap_ifname}:{result}")
+        state["tx_power"] = power_state
 
     if _truthy(cfg.get("wifi_power_save_disable")) and ap_ifname:
         prev: Dict[str, str] = {}

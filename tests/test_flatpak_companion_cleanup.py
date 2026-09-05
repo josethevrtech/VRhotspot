@@ -1,4 +1,4 @@
-"""Flatpak companion cleanup in install.sh existing-install cleanup and uninstall.sh.
+"""Flatpak companion cleanup helpers and preservation during daemon updates.
 
 Both scripts share the same best-effort `cleanup_flatpak_companion` behavior:
 stop the running companion, uninstall only the VRhotspot app ID from the user
@@ -262,7 +262,7 @@ def test_already_stopped_tray_is_nonfatal_and_uninstall_proceeds(
     assert not (home / ".var" / "app" / APP_ID).exists()
 
 
-def test_installer_existing_install_cleanup_invokes_companion_cleanup(tmp_path):
+def test_installer_existing_install_cleanup_preserves_companion(tmp_path):
     install_root = tmp_path / "install-root"
     install_root.mkdir()
 
@@ -282,11 +282,9 @@ def test_installer_existing_install_cleanup_invokes_companion_cleanup(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "companion-cleanup-called" in result.stdout
+    assert "companion-cleanup-called" not in result.stdout
+    assert "Preserving any installed Flatpak companion" in result.stdout
     assert "firewall-rollback-called" in result.stdout
-    assert result.stdout.index("companion-cleanup-called") < result.stdout.index(
-        "firewall-rollback-called"
-    )
     assert "Cleanup complete" in result.stdout
 
 

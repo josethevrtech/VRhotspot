@@ -6,6 +6,7 @@ from email.message import Message
 
 import vr_hotspotd.api as api
 from vr_hotspotd.api import APIHandler
+from vr_hotspotd.diagnostics.streaming import CaptureError, StreamingCaptureManager
 
 
 def _make_handler(path: str = "/v1/diagnostics/support_bundle"):
@@ -245,3 +246,49 @@ def test_support_bundle_reports_vendor_collector_failure_without_failing_bundle(
     assert "vendor_provenance_unavailable" in bundle_manifest["warnings"]
     assert vendor_provenance["manifest_status"] == "unreadable"
     assert vendor_provenance["enforcement_boundary"] == "reporting_only"
+
+
+def test_bundle_reuses_retained_streaming_report_without_collecting_again(monkeypatch):
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
+    _stub_bundle_sources(monkeypatch)
+    samples = []
+    manager = StreamingCaptureManager(lambda: samples.append(True) or {})
+    monkeypatch.setattr(api, "streaming_capture", manager)
+    try:
+        capture_id = manager.start(10)["capture_id"]
+        manager.mark(capture_id)
+        manager.stop(capture_id)
+        previous_count = len(samples)
+        handler = _make_handler()
+        handler.headers["X-Api-Token"] = "secret"
+        handler.do_GET()
+        members = _zip_members(handler)
+        report = json.loads(members["vr-hotspot/streaming-session.json"])
+        assert handler._last_code == 200
+        assert report["capture_id"] == capture_id
+        assert report["markers"][0]["kind"] == "freeze"
+        assert report["summary"]["vr_qualified"] is False
+        assert len(samples) == previous_count
+    finally:
+        manager.close()
+
+
+def test_bundle_capture_expiry_is_optional_not_an_archive_failure(monkeypatch):
+    monkeypatch.setenv("VR_HOTSPOTD_API_TOKEN", "secret")
+    _stub_bundle_sources(monkeypatch)
+
+    class ExpiredCapture:
+        def status(self):
+            return {"capture_id": "expired"}
+
+        def report(self, _capture_id):
+            raise CaptureError("capture_not_found")
+
+    monkeypatch.setattr(api, "streaming_capture", ExpiredCapture())
+    handler = _make_handler()
+    handler.headers["X-Api-Token"] = "secret"
+    handler.do_GET()
+    members = _zip_members(handler)
+    assert handler._last_code == 200
+    assert "vr-hotspot/streaming-session.json" not in members
+    assert "streaming_capture_expired_or_replaced" in json.loads(members["manifest.json"])["warnings"]

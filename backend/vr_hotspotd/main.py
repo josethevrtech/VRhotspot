@@ -107,6 +107,11 @@ def main():
     finally:
         stop_event.set()
         try:
+            from vr_hotspotd.api import streaming_capture
+            streaming_capture.close()
+        except Exception:
+            log.exception("streaming_capture_shutdown_failed")
+        try:
             server.shutdown()
         except Exception:
             log.exception("server_shutdown_failed")

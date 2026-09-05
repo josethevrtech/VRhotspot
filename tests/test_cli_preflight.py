@@ -525,7 +525,7 @@ def test_preflight_command_reports_unwritable_output_path(monkeypatch, tmp_path,
 
     captured = capsys.readouterr()
     assert exc_info.value.code == 1
-    assert "Unable to write preflight report" in captured.err
+    assert "Unable to write report" in captured.err
     assert not output.exists()
     assert secret not in captured.out
     assert secret not in captured.err

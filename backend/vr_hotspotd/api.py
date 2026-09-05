@@ -50,6 +50,8 @@ from vr_hotspotd.devtools.platform_tools import collect_devbridge_tools_status
 from vr_hotspotd.diagnostics.ping import run_ping, ping_available
 from vr_hotspotd.diagnostics.load import LoadGenerator, validate_curl_url, validate_network_host
 from vr_hotspotd.diagnostics.udp_latency import run_udp_latency_test
+from vr_hotspotd.diagnostics.streaming import CaptureError, StreamingCaptureManager
+from vr_hotspotd.diagnostics.streaming_collectors import collect_streaming_snapshot, summarize_streaming_report
 from vr_hotspotd.diagnostics import limits as diagnostic_limits
 from vr_hotspotd.diagnostics.platform import collect_platform_matrix
 from vr_hotspotd.diagnostics.preflight_report import collect_preflight_report
@@ -58,6 +60,7 @@ from vr_hotspotd.diagnostics.support_bundle import (
     assemble_support_bundle,
     file_collection_result,
     redact_support_bundle_data,
+    redact_known_secrets,
 )
 from vr_hotspotd.diagnostics.vendor_provenance import (
     collect_vendor_provenance,
@@ -69,6 +72,7 @@ from vr_hotspotd.host_facts_builder import build_host_facts_snapshot
 from vr_hotspotd.state import load_state
 
 log = logging.getLogger("vr_hotspotd.api")
+streaming_capture = StreamingCaptureManager(collect_streaming_snapshot)
 
 # Keep this tight: what the UI is allowed to change on-disk via /v1/config.
 _CONFIG_MUTABLE_KEYS = {
@@ -389,6 +393,15 @@ _ASSET_CONTENT_TYPES = {
 class APIHandler(BaseHTTPRequestHandler):
     server_version = SERVER_VERSION
 
+    def _streaming_error(self, cid: str, error: CaptureError) -> None:
+        status = {
+            'capture_not_found': 404, 'capture_in_progress': 409,
+            'capture_not_running': 409, 'capture_closed': 503,
+            'marker_limit_reached': 429, 'report_size_limit': 413,
+        }.get(error.code, 400)
+        self._respond(status, self._envelope(correlation_id=cid,
+                      result_code=error.code, warnings=[error.code]))
+
     def log_message(self, format, *args):
         return
 
@@ -670,7 +683,18 @@ class APIHandler(BaseHTTPRequestHandler):
                 elif b is not None:
                     out[k] = b
 
-            if k in _INT_KEYS:
+            if k == "tx_power":
+                # Never silently truncate a fractional power or turn a bool into 1 dBm.
+                # Keep invalid values intact so strict config validation rejects them.
+                try:
+                    if isinstance(v, str):
+                        out[k] = int(v.strip(), 10)
+                    elif isinstance(v, float) and v.is_integer():
+                        out[k] = int(v)
+                except (ValueError, OverflowError):
+                    warnings.append("type_coerce_failed:tx_power")
+
+            if k in _INT_KEYS and k != "tx_power":
                 try:
                     if isinstance(v, str):
                         out[k] = int(v.strip(), 10)
@@ -973,7 +997,8 @@ class APIHandler(BaseHTTPRequestHandler):
         except Exception:
             out["platform"] = {}
 
-        return out
+        out['streaming_capture'] = streaming_capture.status()
+        return redact_known_secrets(out, [*secrets, self._env_token()])
 
     def _config_view(self, *, include_secrets: bool) -> Dict[str, Any]:
         cfg = load_config()
@@ -1155,6 +1180,17 @@ class APIHandler(BaseHTTPRequestHandler):
                     error_summary="vendor provenance unavailable",
                 )
             )
+
+        try:
+            capture_id = streaming_capture.status().get('capture_id')
+            if capture_id:
+                report = streaming_capture.report(capture_id)
+                report['summary'] = summarize_streaming_report(report)
+                files.append(self._support_bundle_json_file(
+                    'vr-hotspot/streaming-session.json', 'passive streaming capture', report,
+                ))
+        except CaptureError:
+            warnings.append('streaming_capture_expired_or_replaced')
 
         return assemble_support_bundle(
             files=files,
@@ -1484,6 +1520,23 @@ class APIHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path in ("/v1/diagnostics/streaming", "/v1/diagnostics/streaming/report"):
+            try:
+                if path.endswith('/report'):
+                    raw_query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    if set(raw_query) != {'capture_id'} or len(raw_query['capture_id']) != 1:
+                        raise CaptureError('invalid_capture_id')
+                    report = streaming_capture.report(qs['capture_id'])
+                    report['summary'] = summarize_streaming_report(report)
+                else:
+                    if qs:
+                        raise CaptureError('invalid_request')
+                    report = streaming_capture.status()
+                self._respond(200, self._envelope(correlation_id=cid, data=report))
+            except CaptureError as exc:
+                self._streaming_error(cid, exc)
+            return
+
         if path == "/v1/diagnostics/support_bundle":
             bundle = self._build_support_bundle()
             self._respond_attachment(
@@ -1556,6 +1609,24 @@ class APIHandler(BaseHTTPRequestHandler):
             return
 
         body, body_warnings = self._read_json_body()
+
+        if path in ("/v1/diagnostics/streaming", "/v1/diagnostics/streaming/mark", "/v1/diagnostics/streaming/stop"):
+            try:
+                if body_warnings or _qs:
+                    raise CaptureError('invalid_request')
+                if path.endswith('/mark') or path.endswith('/stop'):
+                    if set(body) != {'capture_id'}:
+                        raise CaptureError('invalid_capture_id')
+                    action = streaming_capture.mark if path.endswith('/mark') else streaming_capture.stop
+                    result = action(body['capture_id'])
+                else:
+                    if set(body) - {'duration_s'}:
+                        raise CaptureError('invalid_request')
+                    result = streaming_capture.start(body.get('duration_s', 120))
+                self._respond(200, self._envelope(correlation_id=cid, data=result))
+            except CaptureError as exc:
+                self._streaming_error(cid, exc)
+            return
 
         if path == "/v1/start":
             overrides_raw: Optional[Dict[str, Any]] = None
@@ -2092,6 +2163,14 @@ class APIHandler(BaseHTTPRequestHandler):
             request_body = body if isinstance(body, dict) else {}
             target_ip = str(request_body.get("target_ip") or "").strip()
 
+            for key in ('duration_s', 'interval_ms', 'target_port', 'packet_size', 'count', 'packets'):
+                value = request_body.get(key)
+                if value is not None and (isinstance(value, bool) or
+                   not isinstance(value, (int, str)) and not (isinstance(value, float) and value.is_integer())):
+                    self._respond(400, self._envelope(correlation_id=cid, result_code='invalid_request',
+                                  warnings=warnings + ['invalid_diagnostic_params']))
+                    return
+
             try:
                 ipaddress.IPv4Address(target_ip)
             except Exception:
@@ -2136,7 +2215,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 packet_size = _clamp_int(
                     request_body.get("packet_size"),
                     default=diagnostic_limits.UDP_DEFAULT_PACKET_SIZE,
-                    min_val=diagnostic_limits.DIAGNOSTIC_MIN_PACKET_SIZE,
+                    min_val=diagnostic_limits.UDP_MIN_PACKET_SIZE,
                     max_val=diagnostic_limits.DIAGNOSTIC_MAX_PACKET_SIZE,
                     warnings=warnings,
                     name="packet_size",

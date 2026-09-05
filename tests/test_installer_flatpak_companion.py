@@ -150,6 +150,7 @@ def test_main_parses_explicit_noninteractive_companion_opt_in():
         }}
         install_dependencies() {{ :; }}
         get_source_files() {{ TEMP_INSTALL_DIR="$PWD"; }}
+        rm() {{ :; }}
         validate_endeavouros_runtime_dependencies() {{ :; }}
         configure_install() {{ configure_flatpak_companion_install; }}
         install_daemon() {{ :; }}
@@ -190,11 +191,13 @@ def test_missing_flatpak_prerequisite_is_clear_and_nonfatal(tmp_path, missing_to
 
     assert result.returncode == 0, result.stderr
     assert f"missing required tool(s): {missing_tool}" in result.stdout
-    assert "Continuing without the optional Flatpak companion app" in result.stdout
+    assert "rerun with --flatpak-companion-only" in result.stdout
+    assert "Optional Flatpak companion install/update did not complete" in result.stdout
     assert "daemon-install-continues" in result.stdout
 
 
-def test_flatpak_build_failure_is_bounded_nonfatal_and_cleans_temp_dir(tmp_path):
+@pytest.mark.parametrize("companion_only", [0, 1])
+def test_flatpak_build_failure_is_bounded_nonfatal_and_cleans_temp_dir(tmp_path, companion_only):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     builder_args = tmp_path / "flatpak-builder.args"
@@ -233,6 +236,7 @@ exit 23
         f"""
         source {shlex.quote(str(INSTALLER))}
         INSTALL_FLATPAK_COMPANION=y
+        FLATPAK_COMPANION_ONLY={companion_only}
         TEMP_INSTALL_DIR={shlex.quote(str(ROOT))}
         resolve_flatpak_companion_user() {{
             FLATPAK_COMPANION_USER="$(id -un)"
@@ -248,8 +252,15 @@ exit 23
     assert result.returncode == 0, result.stderr
     assert "failed (exit 23)" in result.stdout
     assert "deterministic fake builder failure" in result.stdout
-    assert "Continuing without the optional Flatpak companion app" in result.stdout
+    assert "Optional Flatpak companion install/update did not complete" in result.stdout
     assert "daemon-install-continues" in result.stdout
+    assert "retry with --flatpak-companion-only" in result.stdout
+    if companion_only:
+        assert "Companion-only mode did not install or change the daemon" in result.stdout
+        assert "daemon installation remains complete" not in result.stdout
+        assert "daemon installation can continue" not in result.stdout
+    else:
+        assert "daemon installation remains complete" in result.stdout
     assert "must-not-reach-flatpak-builder" not in result.stdout
     output_lines = result.stdout.splitlines()
     assert "builder-line-1" not in output_lines
@@ -271,12 +282,42 @@ exit 23
     build_root = Path(state_arg.removeprefix("--state-dir=")).parent
     assert build_root.name.startswith("vrhotspot-flatpak-companion.")
     assert not build_root.exists()
+    log_match = re.search(r"Private companion diagnostic log: (/tmp/\S+\.log)", result.stdout)
+    assert log_match is not None
+    retained_log = Path(log_match.group(1))
+    try:
+        assert "builder-line-1\n" in retained_log.read_text(encoding="utf-8")
+        assert stat.S_IMODE(retained_log.stat().st_mode) == 0o600
+        assert retained_log.stat().st_uid == os.getuid()
+    finally:
+        retained_log.unlink()
+
+
+def write_fake_installed_flatpak(fake_bin: Path, deployment: Path, *, smoke_status=0, gui_status=0):
+    desktop = deployment / "export/share/applications/io.github.josethevrtech.VRhotspot.desktop"
+    desktop.parent.mkdir(parents=True)
+    desktop.write_text("[Desktop Entry]\n", encoding="utf-8")
+    make_executable(
+        fake_bin / "flatpak",
+        f"""#!/bin/sh
+case "$1" in
+    info) printf '%s\\n' {shlex.quote(str(deployment))} ;;
+    run)
+        case " $* " in
+            *" --command=python3 "*) exit {gui_status} ;;
+            *) exit {smoke_status} ;;
+        esac
+        ;;
+esac
+""",
+    )
+    return desktop
 
 
 def test_flatpak_builder_success_is_reported_as_user_scoped(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    make_executable(fake_bin / "flatpak")
+    write_fake_installed_flatpak(fake_bin, tmp_path / "deployment")
     make_executable(fake_bin / "flatpak-builder")
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
@@ -292,6 +333,7 @@ def test_flatpak_builder_success_is_reported_as_user_scoped(tmp_path):
         }}
         check_flatpak_companion_prerequisites
         build_and_install_flatpak_companion
+        rm -f -- "$FLATPAK_COMPANION_LOG"
         """,
         env=env,
     )
@@ -301,6 +343,73 @@ def test_flatpak_builder_success_is_reported_as_user_scoped(tmp_path):
         "io.github.josethevrtech.VRhotspot) installed for test-desktop-user"
         in result.stdout
     )
+    assert "desktop launcher, offline entry point and GUI imports verified" in result.stdout
+
+
+@pytest.mark.parametrize("failure", ["registration", "desktop", "startup", "gui-imports"])
+def test_builder_success_requires_registered_app_launcher_and_startup(tmp_path, failure):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    desktop = write_fake_installed_flatpak(
+        fake_bin, tmp_path / "deployment", smoke_status=42 if failure == "startup" else 0,
+        gui_status=42 if failure == "gui-imports" else 0,
+    )
+    if failure == "registration":
+        make_executable(fake_bin / "flatpak", "#!/bin/sh\nexit 1\n")
+    elif failure == "desktop":
+        desktop.unlink()
+    make_executable(fake_bin / "flatpak-builder")
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    result = run_bash(
+        f"""
+        source {shlex.quote(str(INSTALLER))}
+        FLATPAK_COMPANION_USER=test-desktop-user
+        FLATPAK_COMPANION_UID="$(id -u)"
+        FLATPAK_COMPANION_GID="$(id -g)"
+        FLATPAK_BUILDER_BIN={shlex.quote(str(fake_bin / 'flatpak-builder'))}
+        FLATPAK_COMPANION_MANIFEST={shlex.quote(str(FLATPAK_MANIFEST))}
+        FLATPAK_COMPANION_INSTALLED=0
+        if build_and_install_flatpak_companion; then echo forbidden-success; fi
+        echo "installed=$FLATPAK_COMPANION_INSTALLED"
+        rm -f -- "$FLATPAK_COMPANION_LOG"
+        """,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "forbidden-success" not in result.stdout
+    assert "installed=0" in result.stdout
+    assert "installation could not be verified" in result.stdout
+    if failure == "gui-imports":
+        assert "could not import its GTK 4/WebKitGTK 6.0 graphical dependencies" in result.stdout
+
+
+def test_existing_user_companion_is_preserved_and_available_for_pairing_without_rebuild(tmp_path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    write_fake_installed_flatpak(fake_bin, tmp_path / "deployment")
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    result = run_bash(
+        f"""
+        source {shlex.quote(str(INSTALLER))}
+        INSTALL_FLATPAK_COMPANION=n
+        resolve_flatpak_companion_user() {{
+            FLATPAK_COMPANION_USER=test-desktop-user
+            FLATPAK_COMPANION_UID="$(id -u)"
+            FLATPAK_COMPANION_GID="$(id -g)"
+        }}
+        build_and_install_flatpak_companion() {{ echo forbidden-rebuild; }}
+        install_flatpak_companion_if_requested
+        echo "installed=$FLATPAK_COMPANION_INSTALLED"
+        echo "status=$FLATPAK_COMPANION_STATUS"
+        """,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "installed=1" in result.stdout
+    assert "existing user installation preserved" in result.stdout
+    assert "forbidden-rebuild" not in result.stdout
 
 
 def installer_companion_section() -> str:
@@ -331,7 +440,7 @@ def test_installer_companion_token_use_is_limited_to_stdin_pairing_pipe():
     assert re.search(
         r'printf \'%s\\n\' "\$API_TOKEN" \|\s*'
         r"run_flatpak_companion_session_as_user \\\s*"
-        r'flatpak run "\$FLATPAK_COMPANION_APP_ID" \\\s*'
+        r'flatpak run --user "\$FLATPAK_COMPANION_APP_ID" \\\s*'
         r"--pair-token-stdin --save",
         companion,
     )
@@ -368,10 +477,14 @@ def auto_pair_script(overrides: str = "") -> str:
     export API_TOKEN
     wait_for_daemon_health() {{ echo health-polled; }}
     flatpak_companion_session_bus_available() {{ return 0; }}
+    sleep() {{ :; }}
     {overrides}
     pair_flatpak_companion_if_installed
     echo "paired=$FLATPAK_COMPANION_PAIRED"
     echo "tray=$FLATPAK_COMPANION_TRAY_LAUNCHED"
+    if [ -n "${{FLATPAK_COMPANION_LOG:-}}" ]; then
+        rm -f -- "$FLATPAK_COMPANION_LOG"
+    fi
     """
 
 
@@ -384,6 +497,12 @@ if [ "${{API_TOKEN+x}}" = x ] || [ "${{VR_HOTSPOTD_API_TOKEN+x}}" = x ]; then
     echo present >> "$FAKE_FLATPAK_CREDENTIAL_STATE"
 else
     echo absent >> "$FAKE_FLATPAK_CREDENTIAL_STATE"
+fi
+if [ "$1" = ps ]; then
+    if [ "${{FAKE_FLATPAK_PS_EMPTY:-0}}" -ne 1 ]; then
+        echo io.github.josethevrtech.VRhotspot
+    fi
+    exit 0
 fi
 for argument in "$@"; do
     if [ "$argument" = --pair-token-stdin ]; then
@@ -442,7 +561,7 @@ def test_auto_pair_pipes_token_only_via_stdin_and_launches_tray(tmp_path):
     assert "paired=1" in result.stdout
     assert "tray=1" in result.stdout
     assert "authentication saved" in result.stdout
-    assert "tray companion launched" in result.stdout.lower()
+    assert "companion process is running" in result.stdout.lower()
     assert "deterministic-test-pairing-token" not in result.stdout
     assert "deterministic-test-pairing-token" not in result.stderr
 
@@ -483,6 +602,20 @@ def test_auto_pair_nonzero_exit_falls_back_without_tray_launch(tmp_path):
     assert stdin_file.read_text(encoding="utf-8") == (
         "deterministic-test-pairing-token\n"
     )
+
+
+def test_detached_launcher_success_without_running_app_is_not_claimed_as_launch(tmp_path):
+    result, args_file, _stdin_file, _credential_file = run_auto_pair(
+        tmp_path,
+        pairing_body='        printf \'%s\\n\' \'{"ok":true}\'\n        exit 0',
+        overrides="export FAKE_FLATPAK_PS_EMPTY=1",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "paired=1" in result.stdout
+    assert "tray=0" in result.stdout
+    assert "could not be launched" in result.stdout
+    assert "companion process is running" not in result.stdout
+    assert "--tray" in args_file.read_text(encoding="utf-8").splitlines()
 
 
 def test_auto_pair_requires_desktop_session_bus(tmp_path):
@@ -564,6 +697,29 @@ def test_completion_screen_omits_token_after_successful_auto_pair():
     assert "Your API Token" not in result.stdout
 
 
+def test_completion_screen_preserves_separate_flatpak_failure_and_recovery_commands():
+    result = run_bash(
+        completion_script(
+            """
+            INSTALL_FLATPAK_COMPANION=y
+            FLATPAK_COMPANION_INSTALLED=0
+            FLATPAK_COMPANION_STATUS="missing prerequisites: flatpak-builder"
+            FLATPAK_COMPANION_USER=desktop-user
+            FLATPAK_COMPANION_LOG=/tmp/vrhotspot-flatpak-install.example.log
+            PKG_MANAGER=pacman
+            """
+        )
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Flatpak companion NOT ready: missing prerequisites: flatpak-builder" in result.stdout
+    assert "separate installations" in result.stdout
+    assert "sudo pacman -Syu --needed flatpak flatpak-builder" in result.stdout
+    assert "flatpak info --user io.github.josethevrtech.VRhotspot" in result.stdout
+    assert "flatpak run --user io.github.josethevrtech.VRhotspot" in result.stdout
+    assert "desktop-user, without sudo" in result.stdout
+    assert "/tmp/vrhotspot-flatpak-install.example.log" in result.stdout
+
+
 def test_completion_screen_mentions_remote_manual_auth_after_auto_pair():
     result = run_bash(
         completion_script(
@@ -612,6 +768,7 @@ def test_main_runs_auto_pair_after_companion_install():
         }}
         install_dependencies() {{ :; }}
         get_source_files() {{ TEMP_INSTALL_DIR="$PWD"; }}
+        rm() {{ :; }}
         validate_endeavouros_runtime_dependencies() {{ :; }}
         configure_install() {{ configure_flatpak_companion_install; }}
         install_daemon() {{ :; }}
@@ -627,6 +784,41 @@ def test_main_runs_auto_pair_after_companion_install():
     assert result.stdout.index("pair-step") < result.stdout.index("completion-step")
 
 
+@pytest.mark.parametrize("install_succeeds", [True, False])
+def test_companion_only_mode_never_touches_daemon_and_returns_install_result(install_succeeds):
+    result = run_bash(
+        f"""
+        source {shlex.quote(str(INSTALLER))}
+        check_root() {{ echo forbidden-root-check; return 99; }}
+        cleanup_previous_install() {{ echo forbidden-daemon-cleanup; return 99; }}
+        detect_os() {{ PKG_MANAGER=pacman; }}
+        get_source_files() {{ TEMP_INSTALL_DIR="$PWD"; }}
+        install_dependencies() {{ echo forbidden-system-packages; return 99; }}
+        configure_install() {{ echo forbidden-daemon-config; return 99; }}
+        install_daemon() {{ echo forbidden-daemon-install; return 99; }}
+        pair_flatpak_companion_if_installed() {{ echo forbidden-token-pairing; return 99; }}
+        enable_firewalld_uplink_forwarding() {{ echo forbidden-firewall; return 99; }}
+        show_completion() {{ echo forbidden-daemon-success; return 99; }}
+        rm() {{ echo forbidden-source-removal; return 99; }}
+        install_flatpak_companion_if_requested() {{
+            echo "companion-requested=$INSTALL_FLATPAK_COMPANION"
+            FLATPAK_COMPANION_REQUEST_SUCCEEDED={int(install_succeeds)}
+            FLATPAK_COMPANION_INSTALLED={int(install_succeeds)}
+            FLATPAK_COMPANION_STATUS=test-result
+        }}
+        main --non-interactive --flatpak-companion-only --no-clear
+        """
+    )
+    assert result.returncode == (0 if install_succeeds else 1), result.stderr
+    assert "companion-requested=y" in result.stdout
+    assert "forbidden-" not in result.stdout
+    assert "flatpak run --user io.github.josethevrtech.VRhotspot" in result.stdout
+    if install_succeeds:
+        assert "offline entry point and GUI imports verified" in result.stdout
+    else:
+        assert "install/repair did not complete: test-result" in result.stdout
+
+
 def test_no_installer_token_cli_argument_and_companion_flag_is_documented():
     result = subprocess.run(
         ["/bin/bash", str(INSTALLER), "--help"],
@@ -638,6 +830,7 @@ def test_no_installer_token_cli_argument_and_companion_flag_is_documented():
 
     assert result.returncode == 0, result.stderr
     assert "--install-flatpak-companion" in result.stdout
+    assert "--flatpak-companion-only" in result.stdout
     assert "--token" not in result.stdout
     assert "--api-token" not in result.stdout
 

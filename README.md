@@ -68,7 +68,7 @@ Then:
 
 1. Enter your **API token** (shown at the end of installation — see
    [Retrieve your API token](#retrieve-your-api-token) if you lost it)
-2. Select your Wi-Fi adapter (wlan1 recommended over wlan0)
+2. Select a dedicated AP-capable Wi-Fi adapter; interface names such as wlan0/wlan1 do not establish hardware quality. See [adapter compatibility and VR qualification](docs/wifi-adapters.md).
 3. Click **Start** to create your hotspot
 4. Connect your VR headset to the new network, or use Developer Hub to enroll a
    Quest automatically for wireless development

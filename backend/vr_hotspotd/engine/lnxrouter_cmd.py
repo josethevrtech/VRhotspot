@@ -1,6 +1,9 @@
 import os
 from typing import List, Optional
 
+from vr_hotspotd.engine.channel_geometry import (
+    center_channel as geometry_center, hostapd_oper_width, ht40_capability, normalize_width,
+)
 from vr_hotspotd.vendor_paths import resolve_vendor_exe, vendor_bin_dirs
 
 
@@ -83,21 +86,38 @@ def build_cmd(
     if wifi6:
         cmd += ["--wifi6"]
 
-    # Channel width (VHT/HE for 80MHz on 5GHz)
-    width = str(channel_width).lower().strip() if channel_width else ""
-    if bp == "5ghz" and width in ("40", "80", "160"):
-        # Enable HT/VHT for wider channels when explicitly requested
+    # Override linux-router's unconditional HT40+ default whenever a width is
+    # requested. All engines use the same primary/secondary/center geometry.
+    if channel_width is not None and bp in ("2.4ghz", "5ghz"):
+        width = normalize_width(bp, channel_width)
         cmd += ["--wifi4"]
-        if width in ("80", "160") or wifi6:
+        ht40 = None
+        computed_center = None
+        if channel is not None:
+            computed_center = geometry_center(bp, int(channel), width)
+            if computed_center is None:
+                raise ValueError("invalid_channel_block")
+            ht40 = ht40_capability(bp, int(channel), width)
+        if width == 20:
+            cmd += ["--ht-capab", ""]
+        elif ht40:
+            cmd += ["--ht-capab", f"[{ht40}]"]
+        if bp == "5ghz" and (width >= 80 or wifi6):
             cmd += ["--wifi5"]
-        if width == "80":
-            cmd += ["--vht-ch-width", "1"]
-            if center_channel is not None:
-                cmd += ["--vht-seg0-ch", str(int(center_channel))]
+        if bp == "5ghz" and width >= 80:
+            if width == 160:
+                cmd += ["--vht-capab", "[VHT160]"]
+            if center_channel is not None and computed_center is not None:
+                if int(center_channel) != computed_center:
+                    raise ValueError("channel_center_mismatch")
+            center = computed_center if computed_center is not None else center_channel
+            cmd += ["--vht-ch-width", str(hostapd_oper_width(width))]
+            if center is not None:
+                cmd += ["--vht-seg0-ch", str(int(center))]
             if wifi6:
-                cmd += ["--he-ch-width", "1"]
-                if center_channel is not None:
-                    cmd += ["--he-seg0-ch", str(int(center_channel))]
+                cmd += ["--he-ch-width", str(hostapd_oper_width(width))]
+                if center is not None:
+                    cmd += ["--he-seg0-ch", str(int(center))]
 
     # Fixed channel
     if channel is not None:

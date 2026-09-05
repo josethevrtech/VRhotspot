@@ -1007,6 +1007,7 @@ function renderLoginSplash(errorText = '', opts = {}) {
   if (splash) splash.setAttribute('aria-hidden', 'false');
   setAuthState('unauthenticated');
   isAuthenticated = false;
+  clearStreamingCapture();
   clearLoggedOutRouteState();
   stopActivePolling();
   setMsg('');
@@ -1721,7 +1722,7 @@ function renderTelemetry(t) {
     `clients=${summary.client_count ?? 0} ` +
     `rssi_avg=${fmtDbm(summary.rssi_avg_dbm)} ` +
     `quality_avg=${fmtNum(summary.quality_score_avg, 0)} ` +
-    `loss_avg=${fmtPct(summary.loss_pct_avg)}%`;
+    `driver_tx_failures_avg=${fmtPct(summary.loss_pct_avg)}% (not receiver packet loss)`;
 
   const warns = (t.warnings || []).join(' | ');
   warnEl.textContent = warns ? `warnings: ${warns}` : '';
@@ -2122,7 +2123,9 @@ async function api(path, opts = {}) {
   if (tok && !headerKeys['x-api-token']) baseHeaders['X-Api-Token'] = tok;
   if (fetchOpts.body && !headerKeys['content-type']) baseHeaders['Content-Type'] = 'application/json';
 
-  const res = await fetch(BASE + path, Object.assign({}, fetchOpts, { headers: baseHeaders }));
+  // Never forward the explicit API token to a redirect destination. Keep this
+  // after caller options so no endpoint can accidentally opt back into follow.
+  const res = await fetch(BASE + path, Object.assign({}, fetchOpts, { headers: baseHeaders, redirect: 'error' }));
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { }
@@ -2190,7 +2193,7 @@ async function apiBlob(path, opts = {}) {
   delete fetchOpts.tokenOverride;
   delete fetchOpts.skipAuthHandling;
   const headers = getAuthenticatedHeaders(fetchOpts);
-  const res = await fetch(BASE + path, Object.assign({}, fetchOpts, { headers }));
+  const res = await fetch(BASE + path, Object.assign({}, fetchOpts, { headers, redirect: 'error' }));
   if (!skipAuthHandling && isUnauthorizedStatus(res.status)) {
     logoutToSplash('Your session expired. Sign in again to download the support bundle.');
   }
@@ -2246,14 +2249,7 @@ async function downloadSupportBundle() {
     }
 
     const filename = safeZipFilename(filenameFromContentDisposition(res.headers.get('Content-Disposition')));
-    const url = URL.createObjectURL(res.blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+    downloadDiagnosticBlob(res.blob, filename);
     if (msg) {
       msg.textContent = `Downloaded ${filename}`;
       msg.className = 'small success-text';
@@ -2266,6 +2262,117 @@ async function downloadSupportBundle() {
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+function downloadDiagnosticBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Session capture shares the existing authenticated API and status refresh.
+let streamingCaptureView = null;
+let streamingCaptureBusy = false;
+let streamingCaptureRequestSeq = 0;
+
+function clearStreamingCapture() {
+  streamingCaptureRequestSeq += 1;
+  streamingCaptureBusy = false;
+  renderStreamingCapture(null);
+}
+
+function renderStreamingCapture(view) {
+  streamingCaptureView = view || null;
+  const panel = document.getElementById('streamingCapturePanel');
+  if (!panel) return;
+  const duration = document.getElementById('streamingCaptureDuration');
+  const status = document.getElementById('streamingCaptureStatus');
+  const running = view?.state === 'running';
+  const available = !!view && isAuthenticated && !!duration && !!status;
+  for (const button of panel.querySelectorAll('[data-capture-action]')) {
+    const action = button.dataset.captureAction;
+    button.disabled = streamingCaptureBusy || !available ||
+      (action === 'start' ? running : !view?.capture_id ||
+        ((action === 'mark' || action === 'stop') && !running));
+  }
+  if (duration) duration.disabled = streamingCaptureBusy || running || !available;
+  if (!status) return;
+  if (!available) status.textContent = isAuthenticated
+    ? 'Session capture is unavailable on this daemon. Update the daemon to use it.'
+    : 'Sign in to record a session.';
+  else if (view.state === 'idle') status.textContent = 'Ready. Start recording before reproducing a stutter.';
+  else status.textContent = `${running ? 'Recording' : 'Recording ' + view.state}: ` +
+    `${Math.floor(Number(view.elapsed_s) || 0)} seconds · ${view.sample_count || 0} samples · ${view.marker_count || 0} freeze markers` +
+    (view.warnings?.length ? ' · Some evidence was unavailable; see the report.' : '');
+}
+
+function wireStreamingCapture() {
+  const panel = document.getElementById('streamingCapturePanel');
+  if (!panel || panel.dataset.captureWired) return;
+  panel.dataset.captureWired = '1';
+  panel.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-capture-action]');
+    if (!button || button.disabled || streamingCaptureBusy || !isAuthenticated) return;
+    const duration = document.getElementById('streamingCaptureDuration');
+    const status = document.getElementById('streamingCaptureStatus');
+    if (!duration || !status) {
+      renderStreamingCapture(streamingCaptureView);
+      return;
+    }
+    const action = button.dataset.captureAction;
+    const id = streamingCaptureView?.capture_id;
+    const requestSeq = ++streamingCaptureRequestSeq;
+    streamingCaptureBusy = true;
+    renderStreamingCapture(streamingCaptureView);
+    try {
+      let result;
+      if (action === 'download') {
+        result = await api('/v1/diagnostics/streaming/report?capture_id=' + encodeURIComponent(id));
+      } else {
+        const body = action === 'start'
+          ? { duration_s: Number(duration.value) }
+          : { capture_id: id };
+        result = await api('/v1/diagnostics/streaming' + (action === 'start' ? '' : '/' + action),
+          { method: 'POST', body: JSON.stringify(body) });
+      }
+      if (!isAuthenticated || requestSeq !== streamingCaptureRequestSeq) {
+        if (requestSeq === streamingCaptureRequestSeq) clearStreamingCapture();
+        return;
+      }
+      if (!result.ok || result.json?.result_code !== 'ok' || !result.json?.data) {
+        throw new Error(result.status === 409 ? 'Another capture is active or this one has ended. Refresh status and try again.'
+          : result.status === 404 ? 'This capture expired or the daemon restarted. Start a new recording.'
+          : 'Session capture request failed. Check authentication and daemon status.');
+      }
+      if (action !== 'start' && result.json.data.capture_id !== id) {
+        throw new Error('The response belongs to a different recording. Refresh status and try again.');
+      }
+      if (action === 'download') {
+        downloadDiagnosticBlob(new Blob([JSON.stringify(result.json.data, null, 2) + '\n'],
+          { type: 'application/json' }), 'vr-hotspot-streaming-session.json');
+      } else {
+        streamingCaptureView = result.json.data;
+      }
+      streamingCaptureBusy = false;
+      renderStreamingCapture(streamingCaptureView);
+      if (action === 'download') status.textContent = 'Session report downloaded. Review it before sharing.';
+      // Invalidate any old in-flight status response using the canonical refresh.
+      if (action !== 'download') await refresh();
+    } catch (error) {
+      if (!isAuthenticated || requestSeq !== streamingCaptureRequestSeq) {
+        if (requestSeq === streamingCaptureRequestSeq) clearStreamingCapture();
+        return;
+      }
+      streamingCaptureBusy = false;
+      renderStreamingCapture(streamingCaptureView);
+      status.textContent = error instanceof Error ? error.message : 'Session capture request failed.';
+    }
+  });
 }
 
 // --- Canonical preflight diagnostics view
@@ -3287,8 +3394,10 @@ function getForm() {
   if (txPowerRaw !== undefined) {
     const txPower = txPowerRaw.trim();
     if (txPower) {
-      const n = parseInt(txPower, 10);
-      if (!Number.isNaN(n)) out.tx_power = n;
+      // Preserve invalid values for server validation; never truncate fractions
+      // or serialize Infinity/NaN as null (which would silently select Auto).
+      const n = Number(txPower);
+      out.tx_power = Number.isFinite(n) ? n : txPower;
     } else {
       out.tx_power = null;
     }
@@ -3662,6 +3771,7 @@ async function refresh() {
   if (stderrEl) stderrEl.textContent = privacy ? '(hidden)' : (err || '(empty)');
 
   renderTelemetry(s.telemetry);
+  renderStreamingCapture(s.streaming_capture);
 }
 
 async function refreshVisibleUi() {
@@ -3927,6 +4037,7 @@ function bootstrapAuthenticatedUi() {
     });
   }
   const btnDownloadSupportBundle = document.getElementById('btnDownloadSupportBundle');
+  wireStreamingCapture();
   if (btnDownloadSupportBundle) {
     btnDownloadSupportBundle.addEventListener('click', downloadSupportBundle);
   }

@@ -503,7 +503,7 @@
 
               <div class="form-group" data-field="tx_power">
                 <label for="tx_power">TX Power (dBm)</label>
-                <input id="tx_power" type="number" step="1" min="1" max="30" placeholder="Auto" />
+                <input id="tx_power" type="number" step="1" min="0" max="30" placeholder="Auto (driver default)" />
               </div>
 
               <div class="form-group" data-field="channel_auto_select">
@@ -690,6 +690,24 @@
               <div class="small warning-text" id="telemetryWarnings"></div>
             </div>
             <div class="card-body">
+              <section class="info-banner mb-12" id="streamingCapturePanel" aria-label="VR session capture">
+                <h3>Record a VR session</h3>
+                <p class="small">Record radio counters and system events while you play. Mark a freeze when it happens, then download the private report. No scans, test traffic, or hotspot restarts.</p>
+                <div class="action-group">
+                  <label for="streamingCaptureDuration">Record for</label>
+                  <select id="streamingCaptureDuration">
+                    <option value="120">2 minutes</option>
+                    <option value="300">5 minutes</option>
+                    <option value="600">10 minutes</option>
+                  </select>
+                  <button type="button" class="btn sm" data-capture-action="start" disabled>Start recording</button>
+                  <button type="button" class="btn sm secondary" data-capture-action="mark" disabled>Mark freeze</button>
+                  <button type="button" class="btn sm secondary" data-capture-action="stop" disabled>Stop recording</button>
+                  <button type="button" class="btn sm secondary" data-capture-action="download" disabled>Download session report</button>
+                </div>
+                <div class="small mt-6" id="streamingCaptureStatus" role="status" aria-live="polite">Waiting for daemon status…</div>
+                <div class="small faded mt-6">Closing this page does not stop recording. Reports stay in daemon memory for 30 minutes. Counters do not measure headset latency; include your streamer timings when reporting a freeze.</div>
+              </section>
               <div class="chart-wrapper">
                 <canvas id="rssiChart"></canvas>
               </div>
@@ -708,7 +726,7 @@
                       <th>RX Mbps</th>
                       <th>Quality</th>
                       <th>Retries %</th>
-                      <th>Loss %</th>
+                      <th>TX failures %</th>
                     </tr>
                   </thead>
                   <tbody id="telemetryBody"></tbody>

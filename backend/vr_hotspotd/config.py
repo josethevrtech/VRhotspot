@@ -71,7 +71,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "qos_preset": "off",  # off | vr | balanced | ultra_low_latency | high_throughput
     "nat_accel": False,
     "connection_quality_monitoring": True,  # Enable real-time connection quality scoring
-    "auto_channel_switch": False,  # Auto-switch channels on interference
+    "auto_channel_switch": False,  # Legacy key; live channel switching is disabled
     "irq_affinity": "",  # IRQ affinity for network interfaces (e.g., "2" or "2-3")
     "interrupt_coalescing": False,  # Tune interrupt coalescing for network interfaces
     "tcp_low_latency": False,  # Enable TCP low-latency mode with optimized buffers
@@ -115,6 +115,13 @@ def validate_network_config(config: Mapping[str, Any]) -> list[str]:
         cfg.update(config)
 
     errors: list[str] = []
+    tx_power = cfg.get("tx_power")
+    if tx_power is not None and (
+        isinstance(tx_power, bool)
+        or not isinstance(tx_power, int)
+        or not 0 <= tx_power <= 30
+    ):
+        errors.append("invalid_tx_power_integer_0_30_or_null")
     ssid = cfg.get("ssid")
     if not isinstance(ssid, str) or not ssid:
         errors.append("invalid_ssid")

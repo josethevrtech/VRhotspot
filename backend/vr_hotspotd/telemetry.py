@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import threading
+from copy import deepcopy
 from typing import Any, Dict, Optional
 
 from vr_hotspotd.diagnostics.clients import get_clients_snapshot
@@ -9,6 +11,8 @@ from vr_hotspotd.diagnostics.clients import get_clients_snapshot
 _LAST_SAMPLE: Dict[str, Dict[str, Any]] = {}
 _LAST_TS: Optional[float] = None
 _LAST_RESULT: Optional[Dict[str, Any]] = None
+_LAST_IDENTITY = None
+_SAMPLE_LOCK = threading.RLock()
 
 
 def _delta(prev: Optional[int], cur: Optional[int]) -> Optional[int]:
@@ -31,18 +35,43 @@ def get_snapshot(
     enabled: bool = True,
     interval_s: float = 2.0,
 ) -> Dict[str, Any]:
+    """Share one serialized sample per radio; callers cannot mutate the cache."""
+    global _LAST_IDENTITY, _LAST_TS, _LAST_RESULT
+    identity = (adapter_ifname, ap_interface_hint)
+    with _SAMPLE_LOCK:
+        if identity != _LAST_IDENTITY or not enabled:
+            _LAST_SAMPLE.clear()
+            _LAST_TS = None
+            _LAST_RESULT = None
+            _LAST_IDENTITY = identity
+        return deepcopy(_get_snapshot_locked(adapter_ifname=adapter_ifname,
+                        ap_interface_hint=ap_interface_hint, enabled=enabled,
+                        interval_s=interval_s))
+
+
+def _get_snapshot_locked(
+    *, adapter_ifname: Optional[str], ap_interface_hint: Optional[str],
+    enabled: bool, interval_s: float,
+) -> Dict[str, Any]:
     global _LAST_TS, _LAST_RESULT
     if not enabled:
         return {"enabled": False}
 
-    now = time.time()
+    now = time.monotonic()
     if _LAST_RESULT is not None and _LAST_TS is not None:
         if interval_s > 0 and (now - _LAST_TS) < interval_s:
             return _LAST_RESULT
 
     snap = get_clients_snapshot(adapter_ifname, ap_interface_hint=ap_interface_hint)
+    # The client collector may resolve a fallback AP despite unchanged hints.
+    # Its actual identity, not only the caller's requested interface, owns the
+    # counter baseline. Never difference one radio against another.
+    if _LAST_RESULT is not None and snap.get("ap_interface") != _LAST_RESULT.get("ap_interface"):
+        _LAST_SAMPLE.clear()
+        _LAST_TS = None
     ts = now
-    dt = (ts - _LAST_TS) if _LAST_TS else None
+    dt = (ts - _LAST_TS) if _LAST_TS is not None else None
+    next_sample: Dict[str, Dict[str, Any]] = {}
 
     clients_out = []
     rssis = []
@@ -55,6 +84,14 @@ def get_snapshot(
     for client in snap.get("clients", []):
         mac = (client.get("mac") or "").lower()
         prev = _LAST_SAMPLE.get(mac, {})
+        connected_time = client.get("connected_time_s")
+        previous_connected_time = prev.get("connected_time_s")
+        if (isinstance(connected_time, (int, float))
+                and isinstance(previous_connected_time, (int, float))
+                and connected_time < previous_connected_time):
+            # A reconnect between samples need not expose an empty station list
+            # or lower all counters. It still requires a fresh baseline.
+            prev = {}
 
         cur_tx = client.get("tx_packets")
         cur_failed = client.get("tx_failed")
@@ -70,7 +107,8 @@ def get_snapshot(
         d_tx_bytes = _delta(prev.get("tx_bytes"), cur_tx_bytes)
         d_rx_bytes = _delta(prev.get("rx_bytes"), cur_rx_bytes)
 
-        loss_pct = _ratio(d_failed, (d_tx or 0) + (d_failed or 0))
+        failure_denominator = d_tx + d_failed if d_tx is not None and d_failed is not None else None
+        loss_pct = _ratio(d_failed, failure_denominator)
         retry_pct = _ratio(d_retries, d_tx)
 
         tx_pps = (d_tx / dt) if (dt and d_tx is not None) else None
@@ -98,15 +136,15 @@ def get_snapshot(
         # Connection quality score (0-100, higher is better)
         # Based on RSSI, loss, retry rate, and bitrate
         quality_score = None
-        if rssi is not None:
+        if all(value is not None for value in (rssi, tx_rate, loss_pct, retry_pct)):
             # RSSI component (0-40 points): -30dBm = 40, -90dBm = 0
             rssi_score = max(0, min(40, 40 + (rssi + 30) * 0.67))
             
             # Loss component (0-30 points): 0% = 30, 5%+ = 0
-            loss_score = max(0, min(30, 30 - (loss_pct or 0) * 6))
+            loss_score = max(0, min(30, 30 - loss_pct * 6))
             
             # Retry component (0-20 points): 0% = 20, 20%+ = 0
-            retry_score = max(0, min(20, 20 - (retry_pct or 0)))
+            retry_score = max(0, min(20, 20 - retry_pct))
             
             # Bitrate component (0-10 points): 100+ Mbps = 10, <10 Mbps = 0
             bitrate_score = 0
@@ -141,17 +179,21 @@ def get_snapshot(
             }
         )
 
-        _LAST_SAMPLE[mac] = {
+        next_sample[mac] = {
             "tx_packets": cur_tx,
             "tx_failed": cur_failed,
             "tx_retries": cur_retries,
             "rx_packets": cur_rx,
             "tx_bytes": cur_tx_bytes,
             "rx_bytes": cur_rx_bytes,
+            "connected_time_s": connected_time,
         }
 
+    _LAST_SAMPLE.clear()
+    _LAST_SAMPLE.update(next_sample)
     _LAST_TS = ts
 
+    quality_complete = bool(clients_out) and len(quality_scores) == len(clients_out)
     summary = {
         "client_count": len(clients_out),
         "rssi_avg_dbm": (sum(rssis) / len(rssis)) if rssis else None,
@@ -161,13 +203,19 @@ def get_snapshot(
         "tx_mbps_total": (sum(tx_mbps_values) if tx_mbps_values else None),
         "rx_mbps_total": (sum(rx_mbps_values) if rx_mbps_values else None),
         "loss_pct_avg": (sum(loss_pcts) / len(loss_pcts)) if loss_pcts else None,
-        "quality_score_avg": (sum(quality_scores) / len(quality_scores)) if quality_scores else None,
-        "quality_score_min": min(quality_scores) if quality_scores else None,
+        "quality_score_avg": (sum(quality_scores) / len(quality_scores)) if quality_complete else None,
+        "quality_score_min": min(quality_scores) if quality_complete else None,
     }
 
     result = {
         "enabled": True,
-        "ts": int(ts),
+        "ts": int(time.time()),
+        "metric_notes": {
+            "loss_pct": "driver TX failure ratio, not receiver-measured packet loss",
+            "retry_pct": "driver retry attempts per transmitted packet; may exceed 100%",
+            "quality_score": "heuristic advisory; unavailable without RSSI, bitrate, and valid failure/retry deltas; not a VR streaming qualification",
+            "quality_score_summary": "unavailable unless all current clients have adequate quality evidence",
+        },
         "ap_interface": snap.get("ap_interface"),
         "clients": clients_out,
         "summary": summary,

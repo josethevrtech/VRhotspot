@@ -391,6 +391,8 @@ Options:
   --yes, -y           Alias for --non-interactive
   --install-flatpak-companion
                       Build and install the prototype Flatpak companion for the invoking user
+  --flatpak-companion-only
+                      Install/repair only the desktop app; leave the daemon and hotspot settings alone
   --check-os          Detect OS and print dependency plan only
   --no-clear          Do not clear the terminal before output
   -h, --help          Show this help
@@ -556,8 +558,9 @@ check_flatpak_companion_prerequisites() {
     fi
 
     if [ "${#missing_tools[@]}" -gt 0 ]; then
+        FLATPAK_COMPANION_STATUS="missing prerequisites: ${missing_tools[*]}"
         print_warning "Flatpak companion install skipped; missing required tool(s): ${missing_tools[*]}."
-        print_info "Install the missing tools and the GNOME 50 runtime/SDK, then rerun with --install-flatpak-companion."
+        print_info "Install the missing tools and the GNOME 50 runtime/SDK, then rerun with --flatpak-companion-only."
         return 1
     fi
 
@@ -574,6 +577,70 @@ check_flatpak_companion_prerequisites() {
     if [ "$(id -u)" -ne "$FLATPAK_COMPANION_UID" ] &&
        ! command -v sudo >/dev/null 2>&1; then
         print_warning "Flatpak companion install skipped; sudo is required to install for $FLATPAK_COMPANION_USER."
+        return 1
+    fi
+}
+
+flatpak_companion_recovery_steps() {
+    print_info "Companion commands below must run as ${FLATPAK_COMPANION_USER:-your desktop user}, without sudo:"
+    print_info "  flatpak info --user $FLATPAK_COMPANION_APP_ID"
+    print_info "  flatpak run --user $FLATPAK_COMPANION_APP_ID"
+    print_info "If installed but absent from the application menu, log out and back in to refresh Flatpak desktop exports."
+    if [ "${INSTALL_FLATPAK_COMPANION:-n}" = "y" ] && [ "${FLATPAK_COMPANION_INSTALLED:-0}" -ne 1 ]; then
+        case "${PKG_MANAGER:-}" in
+            pacman)
+                print_info "Install build prerequisites with: sudo pacman -Syu --needed flatpak flatpak-builder"
+                ;;
+        esac
+        print_info "Check available runtimes with: flatpak list --runtime"
+        print_info "The manifest requires the GNOME 50 Platform and SDK. Install these from a trusted configured Flatpak source before retrying: bash ./install.sh --flatpak-companion-only"
+    fi
+    if [ -n "${FLATPAK_COMPANION_LOG:-}" ]; then
+        print_info "Private companion diagnostic log: $FLATPAK_COMPANION_LOG"
+        if [ "$(id -u)" -eq 0 ]; then
+            print_info "The log is root-owned because this installer ran as root; read it with sudo."
+        fi
+    fi
+}
+
+create_flatpak_companion_log() {
+    # Keep diagnostics outside the disposable build tree. Retain the installer's
+    # ownership so privileged redirections cannot follow a user-replaced path.
+    if ! FLATPAK_COMPANION_LOG="$(mktemp /tmp/vrhotspot-flatpak-install.XXXXXX.log)"; then
+        print_warning "Could not create a private Flatpak diagnostic log."
+        return 1
+    fi
+    if ! chmod 600 "$FLATPAK_COMPANION_LOG"; then
+        rm -f -- "$FLATPAK_COMPANION_LOG"
+        FLATPAK_COMPANION_LOG=""
+        return 1
+    fi
+}
+
+verify_flatpak_companion_install() {
+    local deployment
+    if ! deployment="$(run_flatpak_companion_as_user timeout 20 \
+        flatpak info --user --show-location "$FLATPAK_COMPANION_APP_ID")"; then
+        print_warning "Flatpak builder exited successfully, but the app is not registered for $FLATPAK_COMPANION_USER."
+        return 1
+    fi
+    if [ -z "$deployment" ] ||
+       ! run_flatpak_companion_as_user test -f \
+           "$deployment/export/share/applications/$FLATPAK_COMPANION_APP_ID.desktop"; then
+        print_warning "The installed Flatpak is missing its exported desktop launcher."
+        return 1
+    fi
+    # --smoke-json exercises the Python entry point and offline model; it does
+    # not import graphical dependencies or prove desktop session availability.
+    if ! run_flatpak_companion_as_user timeout 20 \
+        flatpak run --user "$FLATPAK_COMPANION_APP_ID" --smoke-json; then
+        print_warning "The installed Flatpak failed its offline entry-point check."
+        return 1
+    fi
+    if ! run_flatpak_companion_as_user timeout 20 \
+        flatpak run --user --command=python3 "$FLATPAK_COMPANION_APP_ID" \
+        -c 'import gi; gi.require_version("Gtk", "4.0"); gi.require_version("WebKit", "6.0"); from gi.repository import Gtk, WebKit, Gio, GLib'; then
+        print_warning "The installed Flatpak could not import its GTK 4/WebKitGTK 6.0 graphical dependencies."
         return 1
     fi
 }
@@ -601,7 +668,11 @@ build_and_install_flatpak_companion() {
     fi
     build_dir="$build_root/build"
     state_dir="$build_root/state"
-    build_log="$build_root/flatpak-builder.log"
+    if ! create_flatpak_companion_log; then
+        cleanup_flatpak_companion_build_root "$build_root"
+        return 1
+    fi
+    build_log="$FLATPAK_COMPANION_LOG"
     current_uid="$(id -u)"
 
     chmod 700 "$build_root"
@@ -624,18 +695,35 @@ build_and_install_flatpak_companion() {
         --state-dir="$state_dir" \
         "$build_dir" \
         "$FLATPAK_COMPANION_MANIFEST" >"$build_log" 2>&1; then
-        FLATPAK_COMPANION_INSTALLED=1
-        print_success "Flatpak companion app ($FLATPAK_COMPANION_APP_ID) installed for $FLATPAK_COMPANION_USER."
+        if verify_flatpak_companion_install >>"$build_log" 2>&1; then
+            FLATPAK_COMPANION_INSTALLED=1
+            FLATPAK_COMPANION_STATUS="installed; launcher, offline entry point and GUI imports verified"
+            print_success "Flatpak companion app ($FLATPAK_COMPANION_APP_ID) installed for $FLATPAK_COMPANION_USER; desktop launcher, offline entry point and GUI imports verified."
+        else
+            build_status=1
+            FLATPAK_COMPANION_INSTALLED=0
+            FLATPAK_COMPANION_STATUS="installation verification failed"
+            print_warning "Flatpak companion installation could not be verified."
+        fi
     else
         build_status=$?
+        FLATPAK_COMPANION_STATUS="build/install failed (exit $build_status)"
         print_warning "Flatpak companion build/install failed (exit $build_status)."
+    fi
+    if [ "$build_status" -ne 0 ]; then
         if [ -s "$build_log" ]; then
             print_info "Last Flatpak builder messages:"
             tail -n 20 "$build_log" | cut -c 1-500
         fi
-        print_info "The daemon installation remains complete. This installer does not add Flatpak remotes."
-        print_info "Install the GNOME 50 runtime/SDK from a trusted configured source, then retry with --install-flatpak-companion."
+        if [ "${FLATPAK_COMPANION_ONLY:-0}" -eq 1 ]; then
+            print_info "Companion-only mode did not install or change the daemon."
+        else
+            print_info "The daemon installation remains complete."
+        fi
+        print_info "This installer does not add Flatpak remotes."
+        print_info "Install the GNOME 50 runtime/SDK from a trusted configured source, then retry with --flatpak-companion-only."
     fi
+    print_info "Private companion diagnostic log: $build_log"
 
     if ! cleanup_flatpak_companion_build_root "$build_root"; then
         print_warning "Temporary Flatpak companion build files may remain at $build_root."
@@ -644,16 +732,29 @@ build_and_install_flatpak_companion() {
 }
 
 install_flatpak_companion_if_requested() {
+    FLATPAK_COMPANION_REQUEST_SUCCEEDED=0
+    # A daemon update must not remove a user's existing desktop app. Detect it
+    # even when rebuilding was not requested, so it can receive the new token.
+    if command -v flatpak >/dev/null 2>&1 &&
+       resolve_flatpak_companion_user >/dev/null 2>&1 &&
+       run_flatpak_companion_as_user timeout 20 flatpak info --user \
+           "$FLATPAK_COMPANION_APP_ID" >/dev/null 2>&1; then
+        FLATPAK_COMPANION_INSTALLED=1
+        FLATPAK_COMPANION_STATUS="existing user installation preserved"
+    fi
     if [ "${INSTALL_FLATPAK_COMPANION:-n}" != "y" ]; then
         return 0
     fi
 
+    FLATPAK_COMPANION_STATUS="installation prerequisites unavailable"
     if ! check_flatpak_companion_prerequisites; then
-        print_warning "Continuing without the optional Flatpak companion app."
+        print_warning "Optional Flatpak companion install/update did not complete."
         return 0
     fi
-    if ! build_and_install_flatpak_companion; then
-        print_warning "Continuing without the optional Flatpak companion app."
+    if build_and_install_flatpak_companion; then
+        FLATPAK_COMPANION_REQUEST_SUCCEEDED=1
+    else
+        print_warning "Optional Flatpak companion install/update did not complete."
     fi
     return 0
 }
@@ -703,9 +804,32 @@ PY
 }
 
 launch_flatpak_companion_tray() {
-    run_flatpak_companion_session_as_user \
-        setsid --fork flatpak run "$FLATPAK_COMPANION_APP_ID" --tray \
-        </dev/null >/dev/null 2>&1
+    local attempt running
+    if [ -z "${FLATPAK_COMPANION_LOG:-}" ] && ! create_flatpak_companion_log; then
+        return 1
+    fi
+    if ! run_flatpak_companion_session_as_user \
+        setsid --fork flatpak run --user "$FLATPAK_COMPANION_APP_ID" --tray \
+        </dev/null >>"$FLATPAK_COMPANION_LOG" 2>&1; then
+        return 1
+    fi
+    # setsid --fork returning zero only means a child was spawned. Require the
+    # app to remain registered in two successive samples before claiming launch.
+    running=0
+    for attempt in 1 2 3 4 5; do
+        sleep 1
+        if run_flatpak_companion_session_as_user timeout 5 flatpak ps \
+            --columns=application 2>>"$FLATPAK_COMPANION_LOG" |
+            grep -Fxq "$FLATPAK_COMPANION_APP_ID"; then
+            running=$((running + 1))
+            if [ "$running" -ge 2 ]; then
+                return 0
+            fi
+        else
+            running=0
+        fi
+    done
+    return 1
 }
 
 pair_flatpak_companion_if_installed() {
@@ -738,7 +862,7 @@ pair_flatpak_companion_if_installed() {
     pair_output="$(
         printf '%s\n' "$API_TOKEN" |
             run_flatpak_companion_session_as_user \
-                flatpak run "$FLATPAK_COMPANION_APP_ID" \
+                flatpak run --user "$FLATPAK_COMPANION_APP_ID" \
                 --pair-token-stdin --save 2>/dev/null
     )" || pair_status=$?
 
@@ -756,7 +880,7 @@ pair_flatpak_companion_if_installed() {
 
     if launch_flatpak_companion_tray; then
         FLATPAK_COMPANION_TRAY_LAUNCHED=1
-        print_success "Flatpak tray companion launched."
+        print_success "Flatpak companion process is running. Tray icon visibility depends on your desktop's tray support."
     else
         print_warning "The Flatpak tray companion could not be launched; use the manual Web UI steps shown below."
     fi
@@ -1034,8 +1158,7 @@ cleanup_previous_install() {
     done
     pkill -f "vr_hotspotd/main.py" &>/dev/null || true
 
-    print_info "Cleaning up the optional Flatpak companion..."
-    cleanup_flatpak_companion
+    print_info "Preserving any installed Flatpak companion and its desktop settings during this daemon update."
 
     print_info "Rolling back recorded firewall rules..."
     rollback_owned_firewall_rules
@@ -1242,6 +1365,7 @@ print_dependency_summary() {
 }
 
 get_source_files() {
+    TEMP_INSTALL_DIR_OWNED=0
     print_step "Getting source files..."
     if [ -f "pyproject.toml" ] && [ -d "backend" ]; then
         print_success "Using local files."
@@ -1252,12 +1376,39 @@ get_source_files() {
             exit 1
         fi
         TEMP_INSTALL_DIR="/tmp/vr-hotspot-install-$$"
+        # Claim a new directory before cloning. Never adopt a pre-existing
+        # directory or symlink as installer-owned cleanup material.
+        if ! mkdir -m 755 -- "$TEMP_INSTALL_DIR"; then
+            print_error "Cannot create a new installer source directory at $TEMP_INSTALL_DIR."
+            return 1
+        fi
+        TEMP_INSTALL_DIR_OWNED=1
         local install_ref
         install_ref="${VR_HOTSPOT_INSTALL_REF:-main}"
         print_info "Cloning repository ref $install_ref to $TEMP_INSTALL_DIR..."
-        git clone -q --branch "$install_ref" https://github.com/josethevrtech/VRhotspot.git "$TEMP_INSTALL_DIR"
+        if ! git clone -q --branch "$install_ref" https://github.com/josethevrtech/VRhotspot.git "$TEMP_INSTALL_DIR"; then
+            print_error "Source clone failed."
+            cleanup_installer_source || true
+            return 1
+        fi
         print_success "Repository cloned."
     fi
+}
+
+cleanup_installer_source() {
+    if [ "${TEMP_INSTALL_DIR_OWNED:-0}" -ne 1 ]; then
+        return 0
+    fi
+    if [ "${TEMP_INSTALL_DIR:-}" != "/tmp/vr-hotspot-install-$$" ] ||
+       [ -L "$TEMP_INSTALL_DIR" ]; then
+        print_warning "Refusing to clean unexpected installer source path: ${TEMP_INSTALL_DIR:-unset}."
+        return 1
+    fi
+    if ! rm -rf -- "$TEMP_INSTALL_DIR"; then
+        print_warning "Could not remove temporary installer source at $TEMP_INSTALL_DIR."
+        return 1
+    fi
+    TEMP_INSTALL_DIR_OWNED=0
 }
 
 configure_install() {
@@ -1405,6 +1556,19 @@ show_completion() {
     echo "╚══════════════════════════════════════════════════════════════════╝${NC}"
     echo
     print_success "$APP_NAME is installed and running!"
+    if [ "${INSTALL_FLATPAK_COMPANION:-n}" = "y" ] || [ "${FLATPAK_COMPANION_INSTALLED:-0}" -eq 1 ]; then
+        if [ "${FLATPAK_COMPANION_INSTALLED:-0}" -eq 1 ]; then
+            print_info "Flatpak companion: ${FLATPAK_COMPANION_STATUS:-installed}."
+            if [ "${FLATPAK_COMPANION_TRAY_LAUNCHED:-0}" -ne 1 ]; then
+                print_warning "Companion process launch was not verified. Open it from your desktop session using the command below."
+            fi
+        else
+            print_warning "Flatpak companion NOT ready: ${FLATPAK_COMPANION_STATUS:-installation failed}. The daemon and desktop app are separate installations."
+        fi
+        flatpak_companion_recovery_steps
+    else
+        print_info "Flatpak companion: not requested. No desktop app was installed by this run."
+    fi
     echo
     echo -e "${CYAN}📱 ${BOLD}Access the Web UI:${NC}"
     if [ "$ENABLE_REMOTE" == "y" ]; then
@@ -1418,7 +1582,7 @@ show_completion() {
        [ "${FLATPAK_COMPANION_TRAY_LAUNCHED:-0}" -eq 1 ]; then
         echo -e "${CYAN}🖥️ ${BOLD}Flatpak Companion:${NC}"
         echo -e "   The desktop companion is already paired with this daemon and its"
-        echo -e "   tray app is running. No token copy/paste is needed on this desktop."
+        echo -e "   process is running. No token copy/paste is needed on this desktop."
         if [ "$ENABLE_REMOTE" == "y" ]; then
             echo -e "   Remote browsers still require manual authentication. Read the token with:"
             echo -e "   ${BOLD}sudo grep VR_HOTSPOTD_API_TOKEN $ENV_FILE${NC}"
@@ -1452,10 +1616,14 @@ main() {
     SKIP_CLEAR=0
     REQUESTED_INTERACTIVE_MODE="auto"
     FLATPAK_COMPANION_OPT_IN=0
+    FLATPAK_COMPANION_ONLY=0
     INSTALL_FLATPAK_COMPANION="n"
     FLATPAK_COMPANION_INSTALLED=0
     FLATPAK_COMPANION_PAIRED=0
     FLATPAK_COMPANION_TRAY_LAUNCHED=0
+    FLATPAK_COMPANION_STATUS="not requested"
+    FLATPAK_COMPANION_LOG=""
+    TEMP_INSTALL_DIR_OWNED=0
 
     for arg in "$@"; do
         case "$arg" in
@@ -1466,6 +1634,10 @@ main() {
                 REQUESTED_INTERACTIVE_MODE="non-interactive"
                 ;;
             --install-flatpak-companion)
+                FLATPAK_COMPANION_OPT_IN=1
+                ;;
+            --flatpak-companion-only)
+                FLATPAK_COMPANION_ONLY=1
                 FLATPAK_COMPANION_OPT_IN=1
                 ;;
             --check-os)
@@ -1499,6 +1671,25 @@ main() {
         print_dependency_summary
         return 0
     fi
+
+    if [ "$FLATPAK_COMPANION_ONLY" -eq 1 ]; then
+        # This recovery mode works as an ordinary desktop user. It never
+        # configures or restarts the daemon and never regenerates credentials.
+        local companion_status=0
+        detect_os
+        get_source_files
+        INSTALL_FLATPAK_COMPANION=y
+        install_flatpak_companion_if_requested
+        if [ "${FLATPAK_COMPANION_REQUEST_SUCCEEDED:-0}" -eq 1 ]; then
+            print_success "Desktop companion installation, offline entry point and GUI imports verified. Open the app in your desktop session and use Authentication if pairing is needed."
+        else
+            companion_status=1
+            print_warning "Desktop companion install/repair did not complete: ${FLATPAK_COMPANION_STATUS:-installation failed}."
+        fi
+        flatpak_companion_recovery_steps
+        cleanup_installer_source || true
+        return "$companion_status"
+    fi
     
     check_root
     cleanup_previous_install
@@ -1524,10 +1715,7 @@ main() {
 
     show_completion
 
-    # Clean up cloned repo if necessary
-    if [[ "$TEMP_INSTALL_DIR" == /tmp/* ]]; then
-        rm -rf "$TEMP_INSTALL_DIR"
-    fi
+    cleanup_installer_source || true
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

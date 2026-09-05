@@ -111,6 +111,36 @@ def test_single_address_dhcp_range_is_rejected():
     assert config.validate_network_config(candidate) == ["dhcp_range_invalid"]
 
 
+@pytest.mark.parametrize("power", [True, False, -1, 31, 17.5, float("nan"), float("inf"), "17", [], {}])
+def test_invalid_transmit_power_is_rejected_before_persistence(power, monkeypatch, tmp_path):
+    target = tmp_path / "config.json"
+    monkeypatch.setattr(config, "CONFIG_PATH", target)
+    monkeypatch.setattr(config, "CONFIG_TMP", tmp_path / "config.json.tmp")
+    with pytest.raises(config.ConfigValidationError, match="invalid_tx_power"):
+        config.write_config_file({"tx_power": power})
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("power", [None, 0, 17, 30])
+def test_valid_transmit_power(power):
+    assert config.validate_network_config(_config(tx_power=power)) == []
+
+
+@pytest.mark.parametrize("power", [True, False, 17.5, float("nan"), float("inf"), "not-a-number"])
+def test_api_does_not_normalize_invalid_transmit_power_into_valid_value(power):
+    handler = api.APIHandler.__new__(api.APIHandler)
+    normalized, _warnings = handler._coerce_config_types({"tx_power": power})
+    assert "invalid_tx_power_integer_0_30_or_null" in config.validate_network_config(normalized)
+
+
+@pytest.mark.parametrize("power,expected", [("17", 17), (17.0, 17), (None, None)])
+def test_api_normalizes_valid_transmit_power(power, expected):
+    handler = api.APIHandler.__new__(api.APIHandler)
+    normalized, _warnings = handler._coerce_config_types({"tx_power": power})
+    assert normalized["tx_power"] == expected
+    assert config.validate_network_config(normalized) == []
+
+
 @pytest.mark.parametrize(
     ("updates", "expected_error"),
     (
@@ -438,7 +468,7 @@ def test_watchdog_rejects_invalid_network_config_before_teardown(monkeypatch):
     monkeypatch.setattr(lifecycle, "_stop_hotspot_impl", forbidden)
     monkeypatch.setattr(lifecycle, "_start_hotspot_impl", forbidden)
 
-    lifecycle._restart_from_watchdog("connection_quality_degraded:score=20")
+    lifecycle._restart_from_watchdog("hostapd_exited")
 
     assert len(updates) == 1
     assert updates[0]["last_error"] == config.INVALID_NETWORK_CONFIG

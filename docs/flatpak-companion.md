@@ -5,11 +5,22 @@ desktop tray app plus a locked Web Portal window for controlling the VR Hotspot
 daemon. This document covers installation, automatic pairing, tray behavior,
 authentication handling, and uninstall behavior in detail.
 
+The preservation, verification, logging, and `--flatpak-companion-only`
+recovery behavior below is part of the **unreleased reliability candidate**.
+The published v1.1.0-rc4 installer does not include these changes. Use the
+candidate checkout when testing these instructions.
+
 ## Installing the companion
 
 The guided installer asks `Install the Flatpak companion app?` and defaults to
-No while the companion and its local packaging mature. Choosing No leaves the
-existing daemon installation unchanged. Choosing Yes makes a best-effort,
+No while the companion and its local packaging mature. Choosing No skips the
+companion build; the full installer still proceeds with daemon installation.
+An existing companion and its desktop settings are preserved during daemon
+updates, including when a companion rebuild is not requested or fails.
+Installer source cleanup also preserves a user-supplied checkout, including one
+under `/tmp`. It removes only the exact temporary clone directory created and
+owned by that installer run; retained companion logs are separate from it.
+Choosing Yes makes a best-effort,
 user-scoped build/install from
 `packaging/flatpak/io.github.josethevrtech.VRhotspot.json`.
 
@@ -24,18 +35,85 @@ sudo bash /tmp/vrhotspot-install.sh --non-interactive \
 The optional path requires `flatpak`, `flatpak-builder`, and the GNOME 50
 runtime/SDK to already be available. It does not add Flathub or another Flatpak
 remote. Missing prerequisites or a failed build are reported clearly, temporary
-build files are removed, and the daemon install continues.
+build files are removed, and the full daemon install continues. The final screen
+reports daemon and companion outcomes separately; successful daemon installation
+does not mean the desktop app was installed.
+
+Builder success is followed by bounded checks for the user-scoped deployment,
+its exported desktop launcher, the application's offline `--smoke-json` entry
+point, and imports of PyGObject, GTK 4, and WebKitGTK 6.0 inside the sandbox.
+The offline JSON check constructs a deterministic offline model: it does not
+contact the daemon or initialize the graphical interface. The import check
+detects missing graphical libraries but does not prove a window can open,
+desktop pairing works, or a tray icon is visible. Test those from the intended
+desktop session after installation.
+
+## Repairing a missing desktop app
+
+From the candidate checkout, run this as the intended desktop user, **without
+sudo**:
+
+```bash
+bash ./install.sh --flatpak-companion-only --non-interactive
+```
+
+This mode only builds and installs the user-scoped companion. It does not
+install system packages, reinstall or restart the daemon, change hotspot
+settings or firewall rules, or generate a new authentication token. It exits
+with status 0 after installation checks succeed and status 1 if the requested
+companion install or verification fails. It does not pair or launch the app
+automatically; open it in your desktop session and use Authentication if needed.
+Use this mode for companion recovery rather than rerunning the full daemon
+installer with `--install-flatpak-companion`.
+
+On CachyOS or another Arch-based system, install missing build tools through a
+normal complete package upgrade:
+
+```bash
+sudo pacman -Syu --needed flatpak flatpak-builder
+```
+
+Check `flatpak list --runtime` for the GNOME 50 Platform and SDK. If absent,
+install `org.gnome.Platform//50` and `org.gnome.Sdk//50` from a trusted configured
+Flatpak remote, then retry companion-only mode. The installer does not add a
+remote or download missing runtimes automatically.
+
+Check and open the application as the same desktop user, without sudo:
+
+```bash
+flatpak info --user io.github.josethevrtech.VRhotspot
+flatpak run --user io.github.josethevrtech.VRhotspot
+```
+
+If the first command succeeds but the menu entry is absent, log out and back in
+to refresh the desktop's Flatpak exports. If launching fails, retain the terminal
+error along with the installer log. If the window opens but there is no tray icon,
+check whether the desktop supports StatusNotifier tray icons.
+
+Build and launch diagnostics are retained at the printed
+`/tmp/vrhotspot-flatpak-install.*.log` path, separate from disposable build
+files. The log has mode `0600` and belongs to the account that ran the installer:
+the desktop user for companion-only mode without sudo, or root when the installer
+was run through sudo. Use sudo to read a root-owned log. Credential environment
+variables are removed from companion subprocesses; pairing passes its token
+through stdin rather than placing it in the diagnostic log. Logs in `/tmp` can
+be removed by reboot or the system's temporary-file cleanup, so copy a needed
+log before that occurs. Review diagnostics before sharing them.
 
 ## Automatic pairing during install
 
-After a successful companion install, the installer pairs the companion with
-the freshly installed daemon automatically. It waits for the daemon health
-endpoint, then runs `flatpak run io.github.josethevrtech.VRhotspot
+After a successful full daemon installation, the installer can pair a newly
+installed or preserved user-scoped companion with the freshly installed daemon.
+It waits for the daemon health
+endpoint, then runs `flatpak run --user io.github.josethevrtech.VRhotspot
 --pair-token-stdin --save` as the original desktop user (never root) and feeds
 the daemon token through the stdin pipe only—never through command-line
 arguments, environment variables, or the Web UI. On success it launches
-`flatpak run io.github.josethevrtech.VRhotspot --tray` detached, and the final
-completion screen no longer asks for token copy/paste on that desktop. Remote
+`flatpak run --user io.github.josethevrtech.VRhotspot --tray` detached. It only
+reports a running companion after the application appears in two consecutive
+`flatpak ps` samples. A running process does not prove the desktop displays a
+tray icon. Once pairing and process verification succeed, the final completion
+screen no longer asks for token copy/paste on that desktop. Remote
 browsers still require manual authentication. If the desktop session bus is
 unavailable, the daemon does not become healthy, pairing is rejected, or the
 tray cannot be launched, the installer falls back to the existing manual Web
@@ -109,7 +187,7 @@ distinct from starting the hotspot automatically with the computer.
 
 ## Uninstall behavior
 
-The uninstaller (and the installer's existing-install cleanup) also removes the
+The explicit uninstaller removes the
 optional Flatpak companion when present: it stops the running companion/tray,
 uninstalls `io.github.josethevrtech.VRhotspot` from the invoking desktop user's
 user-scoped Flatpak (and best-effort from the system scope), and deletes only
@@ -120,6 +198,10 @@ companion step is best-effort: a missing `flatpak` binary, a missing app, an
 already-stopped tray, or an undetectable desktop user never fails the
 uninstall. Shared Flatpak runtimes, Flatpak remotes, unrelated Flatpak apps,
 and unrelated autostart files are never touched.
+
+Daemon installation and updates preserve the companion and these settings.
+Companion-only repair also preserves them. Removal is confined to an explicit
+uninstall rather than being part of a routine daemon update.
 
 Removing the app plus its app data removes all companion-local state. A token
 the companion explicitly saved through the desktop keyring (Secret Service)

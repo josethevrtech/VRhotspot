@@ -12,6 +12,9 @@ from typing import Optional, List, Tuple
 
 from vr_hotspotd import host_probes
 from vr_hotspotd.config import ConfigValidationError, validate_network_config
+from vr_hotspotd.engine.channel_geometry import (
+    center_channel, hostapd_oper_width, normalize_width, six_ghz_operating_class,
+)
 from vr_hotspotd.engine.secret_io import (
     add_passphrase_arguments,
     read_passphrase,
@@ -209,8 +212,8 @@ def _write_hostapd_6ghz_conf(
     Key points (6 GHz / WPA3):
       - wpa_key_mgmt=SAE
       - ieee80211w=2 (PMF required)
-      - sae_pwe=2 (H2E-only is recommended/expected for 6 GHz in many deployments)
-      - op_class=131 is commonly used for 6 GHz 20 MHz operation
+      - sae_pwe=1 selects H2E-only for 6 GHz
+      - operating class and center frequency match the requested width
     """
     validation_errors = validate_network_config(
         {"ssid": ssid, "wpa2_passphrase": passphrase, "ap_adapter": ifname}
@@ -220,25 +223,10 @@ def _write_hostapd_6ghz_conf(
 
     cc = (country or "").strip().upper()
     
-    # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
-    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
-    chwidth = chwidth_map.get(channel_width.lower(), 2)  # Default to 80MHz for VR
-
-    def _he_center_seg0_idx_6ghz(primary_channel: int, width: int) -> Optional[int]:
-        if width < 2:
-            return None
-        if (primary_channel - 1) % 4 != 0:
-            return None
-        if width == 2:
-            block = 16
-            offset = 6
-        else:
-            block = 32
-            offset = 14
-        start = primary_channel - ((primary_channel - 1) % block)
-        return start + offset
-
-    seg0 = _he_center_seg0_idx_6ghz(int(channel), chwidth)
+    width = normalize_width("6ghz", channel_width)
+    seg0 = center_channel("6ghz", int(channel), width)
+    if seg0 is None:
+        raise ValueError("invalid_6ghz_channel_block")
     
     lines = [
         f"interface={ifname}",
@@ -250,31 +238,23 @@ def _write_hostapd_6ghz_conf(
         f"channel={int(channel)}",
         f"beacon_int={beacon_interval}",
         f"dtim_period={dtim_period}",
-        "op_class=131",
+        f"op_class={six_ghz_operating_class(width)}",
         "ieee80211ax=1",
         "wmm_enabled=1",
         # 6 GHz HE operating params
-        f"he_oper_chwidth={chwidth}",
+        f"he_oper_chwidth={hostapd_oper_width(width)}",
     ]
     if seg0 is not None:
         lines.append(f"he_oper_centr_freq_seg0_idx={seg0}")
     
-    if short_guard_interval:
-        # Short guard interval for improved throughput
-        # For HE (802.11ax), SGI is enabled by default, but we can specify it explicitly
-        lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
-    
+    # HT/VHT capability flags are not valid HE guard-interval controls.
+    # In 6 GHz hostapd derives bandwidth from operating class and center index.
+
     # MIMO/Beamforming optimizations for WiFi 6
     lines += [
         "he_su_beamformee=1",
         "he_su_beamformer=1",
         "he_mu_beamformer=1",
-    ]
-    
-    # Frame aggregation for improved throughput
-    lines += [
-        "amsdu_frames=1",  # Enable A-MSDU aggregation
-        "ampdu_density=0",  # Aggressive A-MPDU density for low latency
     ]
     
     # Security: WPA3-SAE only
@@ -283,7 +263,7 @@ def _write_hostapd_6ghz_conf(
         "wpa_key_mgmt=SAE",
         "rsn_pairwise=CCMP",
         "ieee80211w=2",
-        "sae_pwe=2",
+        "sae_pwe=1",
         f"sae_password={passphrase}",
     ]
     
@@ -293,8 +273,8 @@ def _write_hostapd_6ghz_conf(
             "ieee80211d=1",
         ]
     
-    if tx_power is not None:
-        lines.append(f"tx_power={tx_power}")
+    # hostapd has no tx_power directive. The shared runtime startup path applies
+    # this setting through iw after the AP interface and channel are ready.
 
     write_protected_text(path, "\n".join(lines) + "\n")
 
