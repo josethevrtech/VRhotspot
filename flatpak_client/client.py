@@ -8,7 +8,7 @@ import json
 import math
 from typing import Any, Dict, Mapping, Optional, Protocol, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from urllib.request import (
     build_opener,
     HTTPRedirectHandler,
@@ -54,6 +54,10 @@ _PORTAL_REQUEST_METHODS = {
     "/v1/devbridge/status": frozenset({"GET"}),
     "/v1/diagnostics/preflight": frozenset({"GET"}),
     "/v1/diagnostics/support_bundle": frozenset({"GET"}),
+    "/v1/diagnostics/streaming": frozenset({"GET", "POST"}),
+    "/v1/diagnostics/streaming/mark": frozenset({"POST"}),
+    "/v1/diagnostics/streaming/stop": frozenset({"POST"}),
+    "/v1/diagnostics/streaming/report": frozenset({"GET"}),
     "/v1/info": frozenset({"GET"}),
     "/v1/repair": frozenset({"POST"}),
     "/v1/restart": frozenset({"POST"}),
@@ -531,12 +535,24 @@ class LocalApiClient:
     ) -> HttpResponse:
         """Run one exact Web Portal route without exposing the token to WebKit."""
 
-        if not isinstance(path, str) or path not in _PORTAL_REQUEST_METHODS:
+        route = path
+        if isinstance(path, str) and path.startswith('/v1/diagnostics/streaming/report?'):
+            parsed = urlsplit(path)
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            try:
+                valid_id = (set(query) == {'capture_id'} and len(query['capture_id']) == 1
+                            and str(uuid.UUID(query['capture_id'][0])) == query['capture_id'][0])
+            except (ValueError, TypeError, AttributeError):
+                valid_id = False
+            if parsed.fragment or not valid_id:
+                raise LocalApiClientError("The streaming capture identifier is invalid.")
+            route = parsed.path
+        if not isinstance(path, str) or route not in _PORTAL_REQUEST_METHODS:
             raise LocalApiClientError("The local Web Portal route is not allowed.")
         if not isinstance(method, str):
             raise LocalApiClientError("The local Web Portal method is not allowed.")
         normalized_method = method.upper()
-        if normalized_method not in _PORTAL_REQUEST_METHODS[path]:
+        if normalized_method not in _PORTAL_REQUEST_METHODS[route]:
             raise LocalApiClientError("The local Web Portal method is not allowed.")
         if normalized_method == "GET" and body is not None:
             raise LocalApiClientError("GET requests cannot include a request body.")

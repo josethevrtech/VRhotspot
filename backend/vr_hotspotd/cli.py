@@ -1,4 +1,4 @@
-"""Read-only command-line client for the VR Hotspot daemon API."""
+"""Command-line diagnostics client for the VR Hotspot daemon API."""
 
 from __future__ import annotations
 
@@ -7,14 +7,18 @@ import errno
 import getpass
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import sys
+import time
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import build_opener, HTTPRedirectHandler, Request
 import uuid
+
+from .diagnostics.streaming import MAX_REPORT_BYTES
 
 
 DEFAULT_API_URL = "http://127.0.0.1:8732"
@@ -25,6 +29,8 @@ DEVBRIDGE_DEVICES_PATH = "/v1/devbridge/devices"
 DEVBRIDGE_ADB_PATH = "/v1/devbridge/adb"
 DEVBRIDGE_READINESS_PATH = "/v1/devbridge/readiness"
 DEVBRIDGE_TOOLS_STATUS_PATH = "/v1/devbridge/tools/status"
+STREAMING_PATH = "/v1/diagnostics/streaming"
+STREAMING_RESPONSE_LIMIT = MAX_REPORT_BYTES + 65536
 
 _ENV_KEYS = {
     "VR_HOTSPOTD_API_TOKEN",
@@ -143,7 +149,7 @@ def _api_url_from_settings(settings: Mapping[str, str]) -> str:
 def _api_error_detail(raw: bytes, *, secret: str = "") -> Optional[str]:
     try:
         payload = json.loads(raw.decode("utf-8", "replace"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return None
     if not isinstance(payload, Mapping):
         return None
@@ -216,7 +222,7 @@ def _transport_cli_error(
 ) -> CLIError:
     if isinstance(exc, HTTPError):
         try:
-            raw = exc.read()
+            raw = exc.read(STREAMING_RESPONSE_LIMIT + 1)
         except Exception as read_exc:
             safe_error = _redacted_error_text(read_exc, token)
             return CLIError(f"Unable to read the VR Hotspot API response: {safe_error}")
@@ -246,8 +252,11 @@ def _fetch_api_data(
     timeout: float = 15.0,
     correlation_prefix: str = "cli",
     payload_description: str = "a response payload",
+    method: str = "GET",
+    request_data: Optional[Mapping[str, Any]] = None,
+    max_response_bytes: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Fetch one GET endpoint and return only the data from the API envelope."""
+    """Request an endpoint and return only data from the API envelope."""
 
     endpoint = _validated_api_url(api_url) + path
     token = _validated_token(token)
@@ -258,12 +267,18 @@ def _fetch_api_data(
     }
     if token:
         headers["X-Api-Token"] = token
+    body = None
+    if request_data is not None:
+        body = json.dumps(request_data, allow_nan=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     transport_exc: Optional[Exception] = None
     try:
-        request = Request(endpoint, headers=headers, method="GET")
+        request = Request(endpoint, data=body, headers=headers, method=method)
         with _open_preflight_request(request, timeout=timeout) as response:
             status = int(getattr(response, "status", 200))
-            raw = response.read()
+            raw = response.read(max_response_bytes + 1) if max_response_bytes is not None else response.read()
+            if max_response_bytes is not None and len(raw) > max_response_bytes:
+                raise CLIError("The VR Hotspot API response exceeded the size limit.")
     except CLIError:
         raise
     except Exception as exc:
@@ -285,7 +300,7 @@ def _fetch_api_data(
     invalid_json = False
     try:
         payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         invalid_json = True
     if invalid_json:
         raise CLIError("The VR Hotspot API returned invalid JSON.")
@@ -300,7 +315,11 @@ def _fetch_api_data(
         raise CLIError(
             f"The VR Hotspot API response did not contain {payload_description}."
         )
-    if _contains_secret(report, token):
+    try:
+        contains_token = _contains_secret(report, token)
+    except RecursionError:
+        raise CLIError("The VR Hotspot API returned an excessively nested response.") from None
+    if contains_token:
         raise CLIError(
             "The VR Hotspot API returned a report containing the authentication token; "
             "refusing to print or export it."
@@ -331,8 +350,8 @@ def _positive_timeout(value: str) -> float:
         timeout = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("timeout must be a number") from exc
-    if timeout <= 0:
-        raise argparse.ArgumentTypeError("timeout must be greater than zero")
+    if not math.isfinite(timeout) or timeout <= 0 or timeout > 120:
+        raise argparse.ArgumentTypeError("timeout must be finite and greater than zero, up to 120 seconds")
     return timeout
 
 
@@ -391,7 +410,7 @@ def _validated_ipv4_argument(value: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vr-hotspot",
-        description="Read-only client for the VR Hotspot daemon API.",
+        description="VR Hotspot status and passive streaming diagnostics. Never changes radio settings.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     preflight_parser = commands.add_parser(
@@ -399,6 +418,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print or export the daemon's canonical preflight diagnostics report.",
     )
     _add_client_arguments(preflight_parser)
+
+    status_parser = commands.add_parser("status", help="Show the hotspot status without changing it.")
+    _add_client_arguments(status_parser)
+
+    diagnostics_parser = commands.add_parser("diagnostics", help="Passive VR streaming diagnostics.")
+    diagnostic_commands = diagnostics_parser.add_subparsers(dest="diagnostics_command", required=True)
+    streaming_parser = diagnostic_commands.add_parser(
+        "streaming", help="Capture passive evidence without scans, traffic, or hotspot changes."
+    )
+    streaming_commands = streaming_parser.add_subparsers(dest="streaming_command", required=True)
+    capture_parser = streaming_commands.add_parser("capture", help="Capture and export a streaming session.")
+    _add_client_arguments(capture_parser)
+    capture_parser.add_argument("--duration", type=_streaming_duration, default=120, metavar="SECONDS",
+                                help="Capture duration: integer 10..600 seconds (default: 120).")
+    capture_parser.add_argument("--detach", action="store_true",
+                                help="Start the capture and return its ID immediately; export later with report.")
+    streaming_status = streaming_commands.add_parser("status", help="Show the current or most recent capture.")
+    _add_client_arguments(streaming_status)
+    for name, help_text in (
+        ("mark", "Mark a freeze in a running capture; no free-text or private notes are stored."),
+        ("stop", "Stop a specific capture, retaining its report for export."),
+        ("report", "Export a specific capture, including partial results while it is running."),
+    ):
+        command_parser = streaming_commands.add_parser(name, help=help_text)
+        _add_client_arguments(command_parser)
+        command_parser.add_argument("--capture-id", required=True, type=_capture_id_argument,
+                                    metavar="UUID", help="The exact capture ID returned by capture or status.")
 
     devbridge_parser = commands.add_parser(
         "devbridge",
@@ -482,6 +528,27 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _streaming_duration(value: str) -> int:
+    try:
+        duration = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("duration must be an integer from 10 to 600 seconds") from exc
+    if not 10 <= duration <= 600:
+        raise argparse.ArgumentTypeError("duration must be an integer from 10 to 600 seconds")
+    return duration
+
+
+def _capture_id_argument(value: str) -> str:
+    if not isinstance(value, str):
+        raise argparse.ArgumentTypeError("capture ID must be a canonical UUID")
+    try:
+        if str(uuid.UUID(value)) == value:
+            return value
+    except (ValueError, AttributeError):
+        pass
+    raise argparse.ArgumentTypeError("capture ID must be a canonical UUID")
+
+
 def _read_token_from_stdin() -> str:
     read_failed = False
     try:
@@ -524,7 +591,7 @@ def _write_new_private_file(path: Path, rendered: str, *, token: str) -> None:
         else:
             safe_error = _redacted_error_text(exc, token)
             write_error = CLIError(
-                f"Unable to write preflight report to {safe_path}: {safe_error}"
+                f"Unable to write report to {safe_path}: {safe_error}"
             )
     finally:
         if descriptor is not None:
@@ -626,6 +693,76 @@ def _run_devbridge(args: argparse.Namespace) -> int:
     return _emit_json_result(args, report, token=token, description=description)
 
 
+def _streaming_request(api_url: str, token: str, timeout: float, *,
+                       operation: str = "status", capture_id: Optional[str] = None,
+                       duration: int = 120) -> Dict[str, Any]:
+    path = STREAMING_PATH
+    method = "GET"
+    data = None
+    if operation == "capture":
+        method, data = "POST", {"duration_s": duration}
+    elif operation in {"mark", "stop"}:
+        path += "/" + operation
+        method, data = "POST", {"capture_id": capture_id}
+    elif operation == "report":
+        path += "/report?" + urlencode({"capture_id": capture_id})
+    return _fetch_api_data(
+        api_url, path, token=token, timeout=timeout, correlation_prefix="cli-streaming",
+        payload_description="a streaming capture", method=method, request_data=data,
+        max_response_bytes=STREAMING_RESPONSE_LIMIT,
+    )
+
+
+def _run_streaming(args: argparse.Namespace) -> int:
+    api_url, token = _resolve_client_settings(args)
+    operation = args.streaming_command
+    capture_id = getattr(args, "capture_id", None)
+    if args.output != "-" and os.path.lexists(args.output):
+        raise CLIError("Output path already exists or is a symlink; refusing to overwrite it: "
+                       + _redacted_error_text(args.output, token))
+
+    def request(op: str) -> Dict[str, Any]:
+        return _streaming_request(api_url, token, args.timeout, operation=op,
+                                  capture_id=capture_id, duration=getattr(args, "duration", 120))
+
+    result = request(operation)
+    if operation in {"mark", "stop", "report"} and result.get("capture_id") != capture_id:
+        raise CLIError("The API returned a different capture ID; refusing to export another session.")
+    if operation != "capture":
+        return _emit_json_result(args, result, token=token, description="streaming capture")
+    try:
+        capture_id = _capture_id_argument(result.get("capture_id"))
+    except argparse.ArgumentTypeError:
+        raise CLIError("The API returned an invalid streaming capture ID.") from None
+    if args.detach:
+        return _emit_json_result(args, result, token=token, description="streaming capture")
+    sys.stderr.write(f"Passive capture {capture_id} started. Ctrl-C stops and exports partial evidence.\n")
+    cancelled = False
+    try:
+        deadline = time.monotonic() + args.duration + 60
+        while result.get("state") == "running":
+            if time.monotonic() >= deadline:
+                raise CLIError("Capture did not finish within the expected time; use streaming stop/report "
+                               f"with --capture-id {capture_id} to recover it.")
+            time.sleep(1.0)
+            result = request("status")
+            if result.get("capture_id") != capture_id:
+                raise CLIError("The active capture changed; refusing to operate on another session. "
+                               f"Try streaming report --capture-id {capture_id}.")
+    except KeyboardInterrupt:
+        cancelled = True
+        try:
+            request("stop")
+        except CLIError:
+            raise CLIError("Unable to stop the capture after Ctrl-C. It is duration-bounded; "
+                           f"recover it with streaming report --capture-id {capture_id}.") from None
+    result = request("report")
+    if result.get("capture_id") != capture_id:
+        raise CLIError("The API returned a different capture ID; refusing to export another session.")
+    _emit_json_result(args, result, token=token, description="partial streaming capture" if cancelled else "streaming capture")
+    return 130 if cancelled else 0
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -634,6 +771,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _run_preflight(args)
         if args.command == "devbridge":
             return _run_devbridge(args)
+        if args.command == "status":
+            api_url, token = _resolve_client_settings(args)
+            report = _fetch_api_data(api_url, "/v1/status", token=token, timeout=args.timeout,
+                                     max_response_bytes=STREAMING_RESPONSE_LIMIT)
+            return _emit_json_result(args, report, token=token, description="hotspot status")
+        if args.command == "diagnostics" and args.diagnostics_command == "streaming":
+            return _run_streaming(args)
     except CLIError as exc:
         parser.exit(1, f"vr-hotspot: error: {exc}\n")
     parser.error(f"unknown command: {args.command}")

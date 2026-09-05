@@ -198,6 +198,31 @@ def test_udp_route_rejects_non_numeric_port_without_running_test(monkeypatch):
     assert "invalid_diagnostic_params" in payload["warnings"]
 
 
+@pytest.mark.parametrize("field", ["duration_s", "interval_ms", "target_port", "packet_size", "count", "packets"])
+@pytest.mark.parametrize("value", [True, 1.5, float("nan"), float("inf"), [], {}])
+def test_udp_route_rejects_non_integral_inputs_before_running(monkeypatch, field, value):
+    monkeypatch.setattr(
+        api, "run_udp_latency_test",
+        lambda **_kwargs: pytest.fail("malformed input reached UDP helper"),
+    )
+    handler, payload = _post(
+        monkeypatch, "/v1/diagnostics/udp_latency",
+        {"target_ip": "192.168.1.2", field: value},
+    )
+    assert handler._last_code == 400
+    assert payload["result_code"] == "invalid_request"
+
+
+def test_udp_route_clamps_tiny_payload_to_verified_echo_header(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(api, "run_udp_latency_test", lambda **kwargs: captured.update(kwargs) or {})
+    handler, payload = _post(monkeypatch, "/v1/diagnostics/udp_latency",
+        {"target_ip": "192.168.1.2", "packet_size": 16})
+    assert handler._last_code == 200
+    assert captured["packet_size"] == limits.UDP_MIN_PACKET_SIZE == 32
+    assert "packet_size_clamped" in payload["warnings"]
+
+
 class _FakeUdpSocket:
     def __init__(self):
         self.sent = 0
@@ -205,16 +230,30 @@ class _FakeUdpSocket:
         self.last_target = None
         self.timeouts = []
         self.closed = False
+        self.pending = False
+        self.now_ns = 0
 
-    def settimeout(self, timeout):
-        self.timeouts.append(timeout)
+    def setblocking(self, _blocking):
+        pass
+
+    def setsockopt(self, *_args):
+        pass
+
+    def select(self, readers, _writers, _errors, timeout):
+        if self.pending:
+            return readers, [], []
+        self.now_ns += round(timeout * 1_000_000_000)
+        return [], [], []
 
     def sendto(self, payload, target):
         self.sent += 1
         self.last_payload = payload
         self.last_target = target
+        self.pending = True
+        return len(payload)
 
     def recvfrom(self, _size):
+        self.pending = False
         return self.last_payload, self.last_target
 
     def close(self):
@@ -224,8 +263,8 @@ class _FakeUdpSocket:
 def test_udp_helper_bounds_count_duration_size_interval_and_port(monkeypatch):
     fake_socket = _FakeUdpSocket()
     monkeypatch.setattr(udp_latency.socket, "socket", lambda *_args, **_kwargs: fake_socket)
-    monkeypatch.setattr(udp_latency.time, "time", lambda: 0.0)
-    monkeypatch.setattr(udp_latency.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(udp_latency.time, "monotonic_ns", lambda: fake_socket.now_ns)
+    monkeypatch.setattr(udp_latency.select, "select", fake_socket.select)
 
     result = udp_latency.run_udp_latency_test(
         "192.168.1.2",

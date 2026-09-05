@@ -31,7 +31,6 @@ from vr_hotspotd.engine.hostapd_nat_cmd import build_cmd_nat
 from vr_hotspotd.engine.hostapd_bridge_cmd import build_cmd_bridge
 from vr_hotspotd.engine.supervisor import start_engine, stop_engine, is_running, get_tails
 from vr_hotspotd.engine.channel_scan import select_best_channel
-from vr_hotspotd.engine.tx_power import auto_adjust_tx_power, set_tx_power, get_tx_power
 from vr_hotspotd.host_facts import HostFactsSnapshot
 from vr_hotspotd.host_facts_builder import build_host_facts_snapshot
 from vr_hotspotd import (
@@ -81,11 +80,11 @@ _OP_LOCK = threading.Lock()
 _WATCHDOG_THREAD: Optional[threading.Thread] = None
 _WATCHDOG_STOP = threading.Event()
 _WATCHDOG_BACKOFF_MAX_S = 30.0
-_WATCHDOG_CHANNEL_CONFIG_KEY_BY_BAND = {
-    "2.4ghz": "fallback_channel_2g",
-    "5ghz": "channel_5g",
-    "6ghz": "channel_6g",
-}
+_CONNECTION_QUALITY_UNAVAILABLE = "connection_quality_unavailable"
+_WATCHDOG_RECOVERY_REASONS = frozenset({
+    "engine_not_running", "hostapd_exited", "dnsmasq_exited",
+    "hostapd_missing", "dnsmasq_missing",
+})
 _AUTOGEN_PASSPHRASE_CACHE: Optional[str] = None
 _AUTOGEN_PASSPHRASE_TS: float = 0.0
 
@@ -1477,6 +1476,19 @@ def _select_ap_from_iw(
     candidates.sort(key=lambda ap: ap.ifname)
     return candidates[0]
 
+def _startup_channel(cfg, ap_ifname, band, current_channel, width, warnings):
+    """An optional pre-session choice never becomes a saved manual preference."""
+    if not cfg.get('channel_auto_select') or current_channel not in (None, 0):
+        return current_channel
+    try:
+        selected = select_best_channel(ap_ifname, band, None, width_mhz=width)
+    except Exception:
+        selected = None
+    if selected is None:
+        warnings.append('channel_auto_selection_unavailable')
+    return selected
+
+
 def _select_ap_by_ifname(iw_text: str, ifname: str) -> Optional[APReadyInfo]:
     aps = _parse_iw_dev_ap_info(iw_text)
     for ap in aps:
@@ -1956,6 +1968,11 @@ def _start_hotspot_5ghz_strict(
             except Exception:
                 preferred_primary_channel = None
 
+    # This path intentionally qualifies 80 MHz candidates. Scan only before an
+    # AP exists, and pass the preference into the existing legal-candidate probe.
+    preferred_primary_channel = _startup_channel(
+        cfg, ap_ifname, '5ghz', preferred_primary_channel, 80, start_warnings,
+    )
     probe = wifi_probe.probe(
         ap_ifname,
         inventory=inv,
@@ -3262,11 +3279,7 @@ def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[
             return "hostapd_exited"
         if expect_dns and not dnsmasq_ok:
             return "dnsmasq_exited"
-        # Check connection quality if monitoring is enabled
-        if bool(cfg.get("connection_quality_monitoring", True)):
-            quality_reason = _check_connection_quality(state, cfg)
-            if quality_reason:
-                return quality_reason
+        # RF quality is advisory. Restarting a healthy AP drops the VR stream.
         return None
 
     if engine_pid and _pid_running(engine_pid):
@@ -3277,11 +3290,6 @@ def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[
             return "hostapd_missing"
         if expect_dns and not has_dnsmasq:
             return "dnsmasq_missing"
-        # Check connection quality
-        if bool(cfg.get("connection_quality_monitoring", True)):
-            quality_reason = _check_connection_quality(state, cfg)
-            if quality_reason:
-                return quality_reason
         return None
 
     if not _find_hostapd_pids(adapter_ifname):
@@ -3292,14 +3300,14 @@ def _watchdog_reason(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[
 
 
 def _check_connection_quality(state: Dict[str, Any], cfg: Dict[str, object]) -> Optional[str]:
-    """Check connection quality and return reason if quality is degraded."""
+    """Return a quality advisory, unavailable marker, or None for healthy data."""
     try:
         from vr_hotspotd import telemetry
         
         adapter_ifname = state.get("adapter")
         telemetry_enabled = bool(cfg.get("telemetry_enable", True))
         if not telemetry_enabled:
-            return None
+            return _CONNECTION_QUALITY_UNAVAILABLE
         
         interval = float(cfg.get("telemetry_interval_s", 2.0))
         telemetry_data = telemetry.get_snapshot(
@@ -3310,12 +3318,14 @@ def _check_connection_quality(state: Dict[str, Any], cfg: Dict[str, object]) -> 
         )
         
         if not telemetry_data.get("enabled"):
-            return None
+            return _CONNECTION_QUALITY_UNAVAILABLE
         
         summary = telemetry_data.get("summary", {})
         quality_score = summary.get("quality_score_avg")
+        if quality_score is None:
+            return _CONNECTION_QUALITY_UNAVAILABLE
         
-        # If quality score is below threshold, trigger restart
+        # This heuristic is diagnostic only, not evidence of a dead AP.
         if quality_score is not None and quality_score < 50.0:  # Threshold: 50/100
             loss_pct = summary.get("loss_pct_avg")
             rssi_min = summary.get("rssi_min_dbm")
@@ -3326,12 +3336,15 @@ def _check_connection_quality(state: Dict[str, Any], cfg: Dict[str, object]) -> 
                 return f"connection_quality_degraded:rssi={rssi_min}dBm"
             return f"connection_quality_degraded:score={quality_score:.1f}"
     except Exception:
-        pass  # Best-effort, don't fail watchdog on telemetry errors
+        return _CONNECTION_QUALITY_UNAVAILABLE
     
     return None
 
 
 def _restart_from_watchdog(reason: str) -> None:
+    # Also reject stale quality callbacks from older callers/configurations.
+    if reason not in _WATCHDOG_RECOVERY_REASONS:
+        return
     # Guard against stale watchdog ticks: only restart when state is still running.
     st_guard = load_state()
     if not isinstance(st_guard, dict) or not st_guard.get("running") or st_guard.get("phase") != "running":
@@ -3339,7 +3352,6 @@ def _restart_from_watchdog(reason: str) -> None:
 
     cid = f"watchdog-{int(time.time())}"
     
-    # Check if auto channel switch is enabled and reason is quality-related
     cfg = load_config()
     network_validation_errors = validate_network_config(cfg)
     if network_validation_errors:
@@ -3354,25 +3366,6 @@ def _restart_from_watchdog(reason: str) -> None:
             warnings=warnings,
         )
         return
-    auto_switch = bool(cfg.get("auto_channel_switch", False))
-    
-    if auto_switch and "connection_quality" in reason:
-        # Try to switch to a better channel
-        st = load_state()
-        adapter_ifname = st.get("adapter")
-        band = st.get("band", "5ghz")
-        
-        if adapter_ifname:
-            try:
-                best_channel = select_best_channel(adapter_ifname, band)
-                if best_channel:
-                    config_key = _WATCHDOG_CHANNEL_CONFIG_KEY_BY_BAND.get(band)
-                    if config_key:
-                        cfg[config_key] = best_channel
-                        write_config_file({config_key: best_channel})
-            except Exception:
-                pass  # Best-effort
-    
     try:
         with _OP_LOCK:
             _stop_hotspot_impl(correlation_id=cid + ":stop")
@@ -3399,6 +3392,7 @@ def _restart_from_watchdog(reason: str) -> None:
 def _watchdog_loop() -> None:
     backoff_s = 2.0
     next_restart = 0.0
+    quality_degraded = False
     while not _WATCHDOG_STOP.is_set():
         cfg = load_config()
         interval = _watchdog_interval(cfg)
@@ -3407,11 +3401,13 @@ def _watchdog_loop() -> None:
 
         if not _watchdog_enabled(cfg):
             backoff_s = max(2.0, interval)
+            quality_degraded = False
             continue
 
         st = load_state()
         if not st.get("running") or st.get("phase") != "running":
             backoff_s = max(2.0, interval)
+            quality_degraded = False
             continue
 
         if not is_running():
@@ -3423,33 +3419,23 @@ def _watchdog_loop() -> None:
             backoff_s = max(2.0, interval)
             next_restart = 0.0
             
-            # Auto-adjust TX power based on telemetry (if enabled and tx_power is None/auto)
-            tx_power_cfg = cfg.get("tx_power")
-            if tx_power_cfg is None:  # Auto mode
-                try:
-                    from vr_hotspotd import telemetry
-                    adapter_ifname = st.get("adapter")
-                    if adapter_ifname:
-                        telemetry_data = telemetry.get_snapshot(
-                            adapter_ifname=adapter_ifname,
-                            ap_interface_hint=st.get("ap_interface"),
-                            enabled=True,
-                            interval_s=interval,
-                        )
-                        summary = telemetry_data.get("summary", {})
-                        rssi_avg = summary.get("rssi_avg_dbm")
-                        if rssi_avg is not None:
-                            current_power = get_tx_power(adapter_ifname)
-                            new_power = auto_adjust_tx_power(adapter_ifname, rssi_avg, current_power)
-                            if new_power is not None:
-                                ok, msg = set_tx_power(adapter_ifname, new_power)
-                                if ok:
-                                    # Update config
-                                    from vr_hotspotd.config import write_config_file
-                                    write_config_file({"tx_power": new_power})
-                except Exception:
-                    pass  # Best-effort
-            
+            # Sample without scanning, restarting, changing power, or writing config.
+            # AP-side RSSI measures the headset uplink, not downlink headroom.
+            quality_reason = (
+                _check_connection_quality(st, cfg)
+                if bool(cfg.get("connection_quality_monitoring", True))
+                else _CONNECTION_QUALITY_UNAVAILABLE
+            )
+            if quality_reason == _CONNECTION_QUALITY_UNAVAILABLE:
+                continue  # Missing data is not evidence that the link recovered.
+            if quality_reason and not quality_degraded:
+                log.warning("connection_quality_degraded", extra={
+                    "reason": quality_reason, "action": "advisory_only",
+                    "ap_interface": st.get("ap_interface"),
+                })
+            elif quality_degraded and not quality_reason:
+                log.info("connection_quality_recovered")
+            quality_degraded = bool(quality_reason)
             continue
 
         now = time.time()
@@ -4056,7 +4042,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         if bp == "5ghz" and a.get("bus") == "usb" and a.get("supports_5ghz"):
              log.info(f"enforcing_80mhz_optimization_on_usb_adapter: {ap_ifname}")
              enforced_channel_width = "80"
-             enforced_channel_5g = 36
+             # USB transport does not justify a forced RF channel. Preserve a
+             # saved manual primary, or allow the guarded startup scan to choose.
 
         if bp == "6ghz" and not a.get("supports_6ghz"):
             raise RuntimeError("selected_adapter_not_6ghz_capable")
@@ -4260,6 +4247,8 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 bridge_channel = 6
 
         channel_width = str(cfg.get("channel_width", "auto")).lower()
+        bridge_channel = _startup_channel(cfg, ap_ifname, bp, bridge_channel,
+                                          channel_width, start_warnings)
         beacon_interval = int(cfg.get("beacon_interval", 50))
         dtim_period = int(cfg.get("dtim_period", 1))
         short_guard_interval = bool(cfg.get("short_guard_interval", True))
@@ -4291,18 +4280,9 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         )
     elif bp == "6ghz":
         channel_6g = cfg.get("channel_6g", None)
-        
-        # Auto-select channel if enabled
-        channel_auto_select = bool(cfg.get("channel_auto_select", False))
-        if channel_auto_select and (channel_6g is None or channel_6g == 0):
-            try:
-                best_channel = select_best_channel(ap_ifname, "6ghz", channel_6g)
-                if best_channel:
-                    channel_6g = best_channel
-                    # Update config with selected channel
-                    write_config_file({"channel_6g": best_channel})
-            except Exception:
-                pass  # Best-effort, continue with default
+        channel_width = str(cfg.get("channel_width", "auto")).lower()
+        channel_6g = _startup_channel(cfg, ap_ifname, '6ghz', channel_6g,
+                                     channel_width, start_warnings)
         
         if channel_6g is not None:
             try:
@@ -4354,23 +4334,11 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                     except Exception:
                         pass
 
-        channel_auto_select = bool(cfg.get("channel_auto_select", False))
-        # If auto-select is ON and no manual channel is set (or set to 0), scan for best.
-        if channel_auto_select and (selected_channel is None or selected_channel == 0):
-            try:
-                best_channel = select_best_channel(ap_ifname, bp, None)
-                if best_channel:
-                    selected_channel = best_channel
-                    # If we auto-picked 5GHz, should we persist it?
-                    # 6GHz logic persists it. Let's persist it for consistency if it was a 5GHz pick.
-                    if bp == "5ghz":
-                        write_config_file({"channel_5g": best_channel})
-            except Exception:
-                pass  # Best-effort
-
         channel_width = str(cfg.get("channel_width", "auto")).lower()
         if enforced_channel_width:
              channel_width = enforced_channel_width
+        selected_channel = _startup_channel(cfg, ap_ifname, bp, selected_channel,
+                                             channel_width, start_warnings)
         beacon_interval = int(cfg.get("beacon_interval", 50))
         dtim_period = int(cfg.get("dtim_period", 1))
         short_guard_interval = bool(cfg.get("short_guard_interval", True))

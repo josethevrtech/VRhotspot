@@ -2,7 +2,9 @@
 
 Status: implementation-backed design for unreleased VR Hotspot v1.1.0 work.
 The current branch includes a limited authenticated web endpoint and Pro UI
-download action. Full system collectors and a CLI helper remain future work.
+download action, with the latest passive streaming timeline included when one
+is retained. Full system collectors and CLI ZIP export remain future work;
+the [streaming CLI](cli.md) already exports the same timeline as JSON.
 This document does not mark v1.1.0 as released.
 
 ## Goals
@@ -19,7 +21,7 @@ This document does not mark v1.1.0 as released.
 
 ## Non-Goals
 
-- Do not add or change CLI commands yet.
+- Do not duplicate collectors or archive generation in a separate CLI system.
 - Do not change installer behavior or version metadata as part of support
   bundle planning.
 - Do not collect packet captures, browser storage, raw credentials, private
@@ -44,8 +46,14 @@ The implemented web support bundle is intentionally limited but useful:
 - API tokens, passphrases, private keys, PSKs, emails, usernames, public IPs,
   and MAC addresses are redacted before files enter the archive.
 - The Pro web UI includes a "Download support bundle" action.
+- When a streaming capture is retained, the same archive also includes
+  `vr-hotspot/streaming-session.json`, containing a sanitized snapshot and its
+  evidence summary. Exporting the ZIP does not start a recording, run a scan,
+  send test traffic, or wait for an active capture to finish. If no recording
+  exists, the member is omitted. Capture expiry/replacement during export is
+  recorded as an optional-collector warning rather than failing the archive.
 
-Not yet implemented: CLI export, full systemd/journal/firewall/wireless command
+Not yet implemented: CLI ZIP export, full systemd/journal/firewall/wireless command
 collectors, tar.gz output, query parameters, and user opt-ins for expanded
 client identifiers.
 

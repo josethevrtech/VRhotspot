@@ -457,6 +457,11 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
         if not stdout.strip():
             return [], ""
 
+    return parse_iw_station_dump(stdout), ""
+
+
+def parse_iw_station_dump(stdout: str) -> List[Client]:
+    """Shared pure station parser for live telemetry and passive session capture."""
     clients: List[Client] = []
     # Blocks start with: Station <MAC> (on <ifname>)
     cur: Dict[str, Any] = {}
@@ -571,7 +576,7 @@ def _iw_station_dump(ap_if: str) -> Tuple[Optional[List[Client]], str]:
                 cur["rx_bytes"] = int(m.group(1))
 
     flush()
-    return clients, ""
+    return clients
 
 
 def _append_debug_warnings(

@@ -11,6 +11,10 @@ from typing import List, Optional, Tuple
 
 from vr_hotspotd import host_probes
 from vr_hotspotd.config import ConfigValidationError, validate_network_config
+from vr_hotspotd.engine.channel_geometry import (
+    center_channel, hostapd_oper_width, ht40_capability, normalize_width,
+    six_ghz_operating_class,
+)
 from vr_hotspotd.engine.secret_io import (
     add_passphrase_arguments,
     read_passphrase,
@@ -198,47 +202,11 @@ def _write_hostapd_conf(
 
     cc = (country or "").strip().upper()
     
-    # Channel width mapping: 0=20MHz, 1=40MHz, 2=80MHz, 3=160MHz
-    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
-    chwidth = chwidth_map.get(channel_width.lower(), 2)  # Default to 80MHz for VR
+    width = normalize_width(band, channel_width)
+    seg0 = center_channel(band, int(channel), width)
+    if seg0 is None:
+        raise ValueError("invalid_channel_block")
 
-    def _vht_center_seg0_idx_5ghz(primary_channel: int, width: int) -> Optional[int]:
-        if width < 2:
-            return None
-        if width == 2:
-            blocks = (
-                (36, 48, 42),
-                (52, 64, 58),
-                (100, 112, 106),
-                (116, 128, 122),
-                (132, 144, 138),
-                (149, 161, 155),
-            )
-        else:
-            blocks = (
-                (36, 64, 50),
-                (100, 128, 114),
-                (149, 177, 163),
-            )
-        for start, end, center in blocks:
-            if start <= primary_channel <= end:
-                return center
-        return None
-
-    def _he_center_seg0_idx_6ghz(primary_channel: int, width: int) -> Optional[int]:
-        if width < 2:
-            return None
-        if (primary_channel - 1) % 4 != 0:
-            return None
-        if width == 2:
-            block = 16
-            offset = 6
-        else:
-            block = 32
-            offset = 14
-        start = primary_channel - ((primary_channel - 1) % block)
-        return start + offset
-    
     lines = [
         f"interface={ifname}",
         "driver=nl80211",
@@ -254,62 +222,51 @@ def _write_hostapd_conf(
     if cc and len(cc) == 2:
         lines += [f"country_code={cc}", "ieee80211d=1"]
 
-    if band == "2.4ghz":
-        lines += ["hw_mode=g", f"channel={int(channel)}", "ieee80211n=1"]
-        if short_guard_interval:
-            lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
-    elif band == "5ghz":
-        lines += ["hw_mode=a", f"channel={int(channel)}", "ieee80211n=1", "ieee80211ac=1"]
-        if short_guard_interval:
-            lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
-            if chwidth >= 2:
-                vht_caps = ["SHORT-GI-80"]
-                if chwidth >= 3:
-                    vht_caps.append("SHORT-GI-160")
-                lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
-        # VHT channel width
-        if chwidth >= 2:
-            seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
-            if seg0 is not None:
-                lines.append(f"vht_oper_chwidth={chwidth - 1}")  # 1=80MHz, 2=160MHz
+    if band in ("2.4ghz", "5ghz"):
+        lines += [
+            "hw_mode=g" if band == "2.4ghz" else "hw_mode=a",
+            f"channel={int(channel)}", "ieee80211n=1",
+        ]
+        ht_caps = ["SHORT-GI-20", "SHORT-GI-40"] if short_guard_interval else []
+        ht40 = ht40_capability(band, int(channel), width)
+        if ht40:
+            ht_caps.append(ht40)
+        if ht_caps:
+            lines.append(f"ht_capab=[{']['.join(ht_caps)}]")
+        if band == "5ghz":
+            lines.append("ieee80211ac=1")
+            lines.append(f"vht_oper_chwidth={hostapd_oper_width(width)}")
+            if width >= 80:
                 lines.append(f"vht_oper_centr_freq_seg0_idx={seg0}")
+                vht_caps = ["VHT160"] if width == 160 else []
+                if short_guard_interval:
+                    vht_caps.append("SHORT-GI-80")
+                    if width == 160:
+                        vht_caps.append("SHORT-GI-160")
+                if vht_caps:
+                    lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
     elif band == "6ghz":
-        seg0_6g = _he_center_seg0_idx_6ghz(int(channel), chwidth)
         lines += [
-            "hw_mode=a",
-            f"channel={int(channel)}",
-            "op_class=131",
-            "ieee80211ax=1",
-            f"he_oper_chwidth={chwidth}",
+            "hw_mode=a", f"channel={int(channel)}",
+            f"op_class={six_ghz_operating_class(width)}", "ieee80211ax=1",
+            f"he_oper_chwidth={hostapd_oper_width(width)}",
+            f"he_oper_centr_freq_seg0_idx={seg0}",
         ]
-        if seg0_6g is not None:
-            lines.append(f"he_oper_centr_freq_seg0_idx={seg0_6g}")
-        # MIMO/Beamforming for WiFi 6
-        lines += [
-            "he_su_beamformee=1",
-            "he_su_beamformer=1",
-            "he_mu_beamformer=1",
-        ]
+    else:
+        raise RuntimeError("invalid_band")
 
     if wifi6 and band in ("2.4ghz", "5ghz"):
         lines.append("ieee80211ax=1")
-        # MIMO/Beamforming for WiFi 6
-        lines += [
-            "he_su_beamformee=1",
-            "he_su_beamformer=1",
-            "he_mu_beamformer=1",
-        ]
         if band == "5ghz":
-            lines.append(f"he_oper_chwidth={chwidth}")
-            seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
-            if seg0 is not None:
+            lines.append(f"he_oper_chwidth={hostapd_oper_width(width)}")
+            if width >= 80:
                 lines.append(f"he_oper_centr_freq_seg0_idx={seg0}")
-        
-        # Frame aggregation for improved throughput
+    if band == "6ghz" or wifi6:
         lines += [
-            "amsdu_frames=1",  # Enable A-MSDU aggregation
-            "ampdu_density=0",  # Aggressive A-MPDU density for low latency
+            "he_su_beamformee=1", "he_su_beamformer=1", "he_mu_beamformer=1",
         ]
+    # A-MSDU/A-MPDU negotiation is handled by the driver. amsdu_frames and
+    # ampdu_density are not hostapd configuration keys.
 
     if ap_security == "wpa3_sae" or band == "6ghz":
         lines += [
@@ -317,7 +274,7 @@ def _write_hostapd_conf(
             "wpa_key_mgmt=SAE",
             "rsn_pairwise=CCMP",
             "ieee80211w=2",
-            "sae_pwe=2",
+            "sae_pwe=1" if band == "6ghz" else "sae_pwe=2",
             f"sae_password={passphrase}",
         ]
     else:
@@ -328,8 +285,8 @@ def _write_hostapd_conf(
             f"wpa_passphrase={passphrase}",
         ]
     
-    if tx_power is not None:
-        lines.append(f"tx_power={tx_power}")
+    # hostapd has no tx_power directive. The shared runtime startup path applies
+    # this setting through iw after the AP interface and channel are ready.
 
     write_protected_text(path, "\n".join(lines) + "\n")
 

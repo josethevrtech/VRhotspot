@@ -4,6 +4,7 @@ import re
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
+from vr_hotspotd.engine.channel_geometry import channel_block, center_channel
 from vr_hotspotd import host_probes, os_release
 from vr_hotspotd.adapters.inventory import get_adapters
 from vr_hotspotd.policy import ERROR_AP_ADAPTER_IS_ACTIVE_UPLINK
@@ -145,16 +146,6 @@ def _effective_country(config_country: Optional[str], reg_country: Optional[str]
     return None
 
 
-_BLOCKS_80 = (
-    (36, 48, 42),
-    (52, 64, 58),
-    (100, 112, 106),
-    (116, 128, 122),
-    (132, 144, 138),
-    (149, 161, 155),
-)
-
-
 def _build_80mhz_candidates(
     channels: List[Dict[str, Any]],
     *,
@@ -168,8 +159,13 @@ def _build_80mhz_candidates(
         if not c.get("disabled") and not c.get("no_ir")
     }
     candidates: List[Dict[str, Any]] = []
-    for start, end, center in _BLOCKS_80:
-        block_channels = [c for c in range(start, end + 1, 4)]
+    blocks = {
+        channel_block("5ghz", primary, 80) for primary in available
+    }
+    for block in sorted(block for block in blocks if block):
+        block_channels = list(block)
+        start, end = block[0], block[-1]
+        center = center_channel("5ghz", start, 80)
         if any(ch not in available for ch in block_channels):
             continue
         dfs = any(available[ch].get("dfs") for ch in block_channels)
@@ -223,17 +219,22 @@ def _build_40mhz_candidates(
     }
     candidates: List[Dict[str, Any]] = []
     for primary in sorted(available.keys()):
-        secondary = primary + 4
-        if secondary not in available:
+        block = channel_block("5ghz", primary, 40)
+        # Consider each aligned pair once, including a preferred upper primary.
+        if not block or primary != block[0] or any(ch not in available for ch in block):
             continue
+        secondary = block[1]
         dfs = bool(available[primary].get("dfs") or available[secondary].get("dfs"))
         flags = ["dfs"] if dfs else ["non_dfs"]
-        center = primary + 2
+        center = center_channel("5ghz", primary, 40)
+        selected_primary = (
+            int(preferred_primary_channel) if preferred_primary_channel in block else primary
+        )
         candidates.append(
             {
                 "band": 5,
                 "width": 40,
-                "primary_channel": primary,
+                "primary_channel": selected_primary,
                 "center_channel": center,
                 "country": country,
                 "flags": flags,

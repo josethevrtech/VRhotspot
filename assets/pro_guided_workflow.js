@@ -941,7 +941,7 @@
     fallback_channel_2g: 'Choose the fallback 2.4 GHz channel used when fallback operation is needed.',
     channel_auto_select: 'Scan available channels at startup and choose the best one automatically.',
     channel_width: 'Choose how wide the wireless channel is. Wider channels can improve throughput but may be less reliable in crowded environments.',
-    tx_power: 'Set transmit power for the hotspot radio. Auto lets the system choose.',
+    tx_power: 'Startup setting for a dedicated hotspot radio. Auto uses driver-managed power; shared or unverified radios are left unchanged. Check status for the applied value.',
     beacon_interval: 'Set how often the hotspot broadcasts beacon frames. Lower values announce the network more frequently.',
     dtim_period: 'Set how often buffered broadcast and multicast traffic is announced to connected devices.',
     short_guard_interval: 'Enable a shorter guard interval to improve throughput when the wireless environment supports it.',

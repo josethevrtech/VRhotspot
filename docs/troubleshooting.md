@@ -3,6 +3,10 @@
 This guide collects diagnostic commands, common issues, and validation
 checklists for VR Hotspot.
 
+- For Quest freezes or latency spikes, see the [streaming stability milestone](streaming-stability.md).
+- For an installer that finishes without a usable tray app, see [Flatpak companion recovery](flatpak-companion.md#repairing-a-missing-desktop-app).
+  The recovery and streaming fixes documented there require the unreleased candidate build.
+
 ## Check service status
 
 ```bash

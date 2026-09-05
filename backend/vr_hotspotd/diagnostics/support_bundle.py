@@ -394,6 +394,24 @@ def redact_support_bundle_data(value: Any) -> Any:
     return _RedactionRun().redact_data(value)
 
 
+def redact_known_secrets(value: Any, secrets: Iterable[str]) -> Any:
+    """Scrub known credentials recursively without editing serialized JSON syntax."""
+    secret_values = tuple(secret for secret in secrets if isinstance(secret, str) and secret)
+
+    def scrub(item):
+        if isinstance(item, str):
+            for secret in secret_values:
+                item = item.replace(secret, "<redacted-secret>")
+            return item
+        if isinstance(item, Mapping):
+            return {scrub(key): scrub(child) for key, child in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [scrub(child) for child in item]
+        return item
+
+    return scrub(value)
+
+
 def command_collection_result(
     command: Union[str, Sequence[str]],
     *,

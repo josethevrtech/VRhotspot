@@ -15,6 +15,9 @@ from typing import Optional, List, Tuple
 
 from vr_hotspotd import host_probes, os_release
 from vr_hotspotd.config import ConfigValidationError, validate_network_config
+from vr_hotspotd.engine.channel_geometry import (
+    center_channel, hostapd_oper_width, ht40_capability, normalize_width,
+)
 from vr_hotspotd.engine.secret_io import (
     add_passphrase_arguments,
     read_passphrase,
@@ -565,49 +568,12 @@ def _write_hostapd_conf(
 
     cc = (country or "").strip().upper()
 
-    chwidth_map = {"20": 0, "40": 1, "80": 2, "160": 3, "auto": 2}
-    chwidth = chwidth_map.get(channel_width.lower(), 2)
+    width = normalize_width(band, channel_width)
     mode = (mode or "full").strip().lower()
     if mode not in ("full", "reduced", "legacy"):
         mode = "full"
     compat = mode == "legacy"
     reduced = mode == "reduced"
-
-    def _vht_center_seg0_idx_5ghz(primary_channel: int, width: int) -> Optional[int]:
-        if width < 2:
-            return None
-        if width == 2:
-            blocks = (
-                (36, 48, 42),
-                (52, 64, 58),
-                (100, 112, 106),
-                (116, 128, 122),
-                (132, 144, 138),
-                (149, 161, 155),
-            )
-        else:
-            blocks = (
-                (36, 64, 50),
-                (100, 128, 114),
-                (149, 177, 163),
-            )
-        for start, end, center in blocks:
-            if start <= primary_channel <= end:
-                return center
-        return None
-
-    def _ht40_capab_5ghz(primary_channel: int) -> Optional[str]:
-        plus = {
-            36, 44, 52, 60, 100, 108, 116, 124, 132, 140, 149, 157
-        }
-        minus = {
-            40, 48, 56, 64, 104, 112, 120, 128, 136, 144, 153, 161
-        }
-        if primary_channel in plus:
-            return "HT40+"
-        if primary_channel in minus:
-            return "HT40-"
-        return None
 
     if compat:
         beacon_interval = 100
@@ -627,42 +593,46 @@ def _write_hostapd_conf(
     if cc and len(cc) == 2:
         lines += [f"country_code={cc}", "ieee80211d=1"]
 
-    if band == "2.4ghz":
-        lines += ["hw_mode=g", f"channel={int(channel)}"]
-        if not compat:
-            lines.append("ieee80211n=1")
-            if short_guard_interval:
-                lines.append("ht_capab=[SHORT-GI-20][SHORT-GI-40]")
-    elif band == "5ghz":
-        lines += ["hw_mode=a", f"channel={int(channel)}"]
-        if not compat:
-            lines.append("ieee80211n=1")
-            if not reduced:
-                lines.append("ieee80211ac=1")
-            if short_guard_interval:
-                ht_caps = ["SHORT-GI-20", "SHORT-GI-40"]
-                if (not reduced) and chwidth >= 2:
-                    ht40 = _ht40_capab_5ghz(int(channel))
-                    if ht40:
-                        ht_caps.append(ht40)
-                    lines.append("require_ht=1")
-                lines.append(f"ht_capab=[{']['.join(ht_caps)}]")
-                if (not reduced) and chwidth >= 2:
-                    vht_caps = ["SHORT-GI-80"]
-                    if chwidth >= 3:
-                        vht_caps.append("SHORT-GI-160")
-                    lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
-                    lines.append("require_vht=1")
-            if (not reduced) and chwidth >= 2:
-                seg0 = _vht_center_seg0_idx_5ghz(int(channel), chwidth)
-                if seg0 is not None:
-                    lines.append(f"vht_oper_chwidth={chwidth - 1}")
-                    lines.append(f"vht_oper_centr_freq_seg0_idx={seg0}")
-    else:
+    if band not in ("2.4ghz", "5ghz"):
         raise RuntimeError("invalid_band")
+    # Reduced/legacy recovery deliberately uses narrower, simpler operation.
+    effective_width = 20 if compat or reduced else width
+    seg0 = center_channel(band, int(channel), effective_width)
+    if seg0 is None:
+        raise ValueError("invalid_channel_block")
+    lines += [
+        "hw_mode=g" if band == "2.4ghz" else "hw_mode=a", f"channel={int(channel)}",
+    ]
+    if not compat:
+        lines.append("ieee80211n=1")
+        ht_caps = ["SHORT-GI-20", "SHORT-GI-40"] if short_guard_interval else []
+        ht40 = ht40_capability(band, int(channel), effective_width)
+        if ht40:
+            ht_caps.append(ht40)
+        if ht_caps:
+            lines.append(f"ht_capab=[{']['.join(ht_caps)}]")
+        if band == "5ghz" and not reduced:
+            lines.append("ieee80211ac=1")
+            lines.append(f"vht_oper_chwidth={hostapd_oper_width(width)}")
+            if width >= 80:
+                lines += [
+                    "require_ht=1", "require_vht=1",
+                    f"vht_oper_centr_freq_seg0_idx={seg0}",
+                ]
+                vht_caps = ["VHT160"] if width == 160 else []
+                if short_guard_interval:
+                    vht_caps.append("SHORT-GI-80")
+                    if width == 160:
+                        vht_caps.append("SHORT-GI-160")
+                if vht_caps:
+                    lines.append(f"vht_capab=[{']['.join(vht_caps)}]")
 
     if wifi6 and not compat and not reduced:
         lines.append("ieee80211ax=1")
+        if band == "5ghz":
+            lines.append(f"he_oper_chwidth={hostapd_oper_width(width)}")
+            if width >= 80:
+                lines.append(f"he_oper_centr_freq_seg0_idx={seg0}")
         lines += [
             "he_su_beamformee=1",
             "he_su_beamformer=1",
@@ -686,8 +656,8 @@ def _write_hostapd_conf(
             f"wpa_passphrase={passphrase}",
         ]
 
-    if tx_power is not None:
-        lines.append(f"tx_power={tx_power}")
+    # hostapd has no tx_power directive. The shared runtime startup path applies
+    # this setting through iw after the AP interface and channel are ready.
 
     write_protected_text(path, "\n".join(lines) + "\n")
 
