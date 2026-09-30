@@ -78,6 +78,7 @@ streaming_capture = StreamingCaptureManager(collect_streaming_snapshot)
 
 # Keep this tight: what the UI is allowed to change on-disk via /v1/config.
 _CONFIG_MUTABLE_KEYS = {
+    "radio_auto",
     "ssid",
     "wpa2_passphrase",
     "band_preference",
@@ -139,6 +140,7 @@ _CONFIG_MUTABLE_KEYS = {
 
 # One-shot start overrides (not persisted).
 _START_OVERRIDE_KEYS = {
+    "radio_auto",
     "ssid",
     "wpa2_passphrase",
     "band_preference",
@@ -201,6 +203,7 @@ _REDACTED_PASSPHRASE_VALUES = {
 
 # Type coercion (robustness vs. clients sending "true"/"false"/"1"/"0")
 _BOOL_KEYS = {
+    "radio_auto",
     "optimized_no_virt",
     "enable_internet",
     "wifi_power_save_disable",

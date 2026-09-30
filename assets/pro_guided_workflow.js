@@ -371,16 +371,19 @@
     root.dataset.proAutosaveWired = '1';
     root.addEventListener('change', (event) => {
       if (!(event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) return;
-      if (!event.isTrusted || event.target.closest('#connectionPurposeFields')) return;
-      scheduleSave(true);
+      if (event.target.closest('#connectionPurposeFields')) return;
+      if (event.isTrusted) scheduleSave(true);
       updateDependencies();
       syncPerformanceSelection();
       syncAdapterBandNotice();
     });
     root.addEventListener('input', (event) => {
       if (!(event.target instanceof HTMLInputElement)) return;
-      if (!event.isTrusted || event.target.closest('#connectionPurposeFields')) return;
-      scheduleSave(true);
+      if (event.target.closest('#connectionPurposeFields')) return;
+      if (event.isTrusted) scheduleSave(true);
+      updateDependencies();
+      syncPerformanceSelection();
+      syncAdapterBandNotice();
     });
     root.addEventListener('click', (event) => {
       const button = event.target instanceof Element
@@ -399,8 +402,9 @@
     const autoChannel = el('channel_auto_select');
     const channel5 = el('channel_5g');
     const channel6 = el('channel_6g');
-    if (channel5) channel5.disabled = !!autoChannel?.checked;
-    if (channel6) channel6.disabled = !!autoChannel?.checked;
+    const automatic = !!el('radio_auto')?.checked;
+    if (channel5) channel5.disabled = automatic || !!autoChannel?.checked;
+    if (channel6) channel6.disabled = automatic || !!autoChannel?.checked;
     const bridge = el('bridge_mode');
     for (const id of ['bridge_name', 'bridge_uplink']) {
       const input = el(id);
@@ -740,10 +744,8 @@
     const description = el('proPerformanceDescription');
     if (!qos || !description) return;
     const selected = String(qos.value || 'off');
-    // No generic filler line: the step help already explains the choice, so
-    // the description shows only an active profile's copy and otherwise
-    // collapses without leaving a spacer.
-    let selectedCopy = '';
+    // Basic's Standard choice remains visible when switching to Pro.
+    let selectedCopy = selected === 'off' ? 'Standard is selected. Traffic prioritization is off.' : '';
     for (const [id, profile] of Object.entries(PROFILE_COPY)) {
       const button = el(id);
       if (!button) continue;
@@ -1358,6 +1360,10 @@
   }
 
   document.addEventListener('vrhotspot-connection-changed', () => scheduleReconcile());
+  document.addEventListener('vrhotspot-config-changed', () => {
+    if (!isAdvancedMode()) return;
+    updateDependencies(); syncPerformanceSelection(); syncAdapterBandNotice(); syncPrimaryAction();
+  });
 
   function scheduleReconcile() {
     if (reconcileQueued) return;

@@ -1768,3 +1768,5 @@ body:not([data-ui-mode="advanced"]) #headsetPairing {
 
 /* Capability and connection rules apply in every layout. */
 [data-field][data-inapplicable] { display: none !important; }
+
+#automaticRadioControl[hidden] { display: none !important; }

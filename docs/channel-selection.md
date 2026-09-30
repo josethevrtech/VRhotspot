@@ -30,7 +30,8 @@ channels while a VR session is running.
   confirms its complete channel block is permitted. Otherwise return no choice
   and let normal startup validate its configured fallback.
 
-Defaults are 80 MHz for 5/6 GHz and 20 MHz for 2.4 GHz. Explicit 20/40/80/160 MHz
+In manual mode, unresolved widths default to 80 MHz for 5/6 GHz and 20 MHz for
+2.4 GHz. Automatic VR settings below resolve an explicit 80/160 MHz width. Explicit 20/40/80/160 MHz
 profiles use the same geometry as hostapd generation; falling back to 2.4 GHz
 does not carry an 80/160 MHz request into that band. Explicit 2.4 GHz 40 MHz is
 supported, but remains subject to hostapd coexistence checks. Automatic 6 GHz
@@ -107,3 +108,36 @@ define no-IR and bandwidth restrictions. Hostapd's
 documents width enums and 6 GHz operating-class behavior; its
 [configuration parser](https://android.googlesource.com/platform/external/wpa_supplicant_8/+/refs/heads/master/hostapd/config_file.c)
 is the source of accepted option names.
+
+
+## Automatic VR settings
+
+`radio_auto` defaults to true in Basic and Pro. The adapter inventory publishes
+`automatic_radio`, derived from the same captured driver/regulatory facts as its
+capability display. It chooses the widest verified non-DFS AP channel block
+(160 MHz before 80 MHz), preferring 6 GHz over 5 GHz at equal width. Automatic
+VR settings never choose 2.4 GHz or 20/40 MHz. With no qualified block, startup
+stops before changing the network and the interface explains the 80 MHz minimum.
+
+Every constituent 20 MHz channel must be enabled and permit AP initiation at
+that width. HE capabilities must belong to AP mode in the same band; a client's
+6 GHz / 160 MHz capability does not establish permission to host a 6 GHz AP.
+Channel selection scans before startup when the radio is idle. If a scan is
+unavailable, the verified channel from the capability snapshot is used. This is
+a capability-based default, not a measured guarantee that 160 MHz will outperform
+80 MHz in every RF environment. DFS and 320 MHz are not selected by this policy.
+
+The daemon resolves the settings again at startup, including WPA3-SAE for
+6 GHz, Wi-Fi power saving off, USB autosuspend off for USB adapters, and driver
+controlled transmit power. Automatic starts disable the optional 40 MHz
+fallback and stop on failure rather than falling through to 2.4 GHz. An actual
+width below 80 MHz, or one that cannot be verified, is not reported as ready.
+Manual Pro settings remain available by turning off automatic selection.
+
+The UI displays the resolved band and width immediately when the adapter or
+mode changes. Active connection measurements remain distinct from the chosen
+settings; changing settings does not silently restart a live connection. Pro's
+save/restart indication still applies. Saves are serialized, and a response to
+an older save cannot overwrite newer unsaved edits. Headset-hosted connections
+continue to target their existing 6 GHz / 160 MHz network, independent of the
+laptop's AP capabilities.

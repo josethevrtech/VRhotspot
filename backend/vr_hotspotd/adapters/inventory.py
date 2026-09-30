@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pathlib import Path
 from vr_hotspotd.adapters.identity import usb_identity
+from vr_hotspotd.adapters.radio import non_dfs_ap_options, recommend
 from vr_hotspotd import host_probes
 from vr_hotspotd.host_facts import HostFactsSnapshot
 
@@ -140,6 +141,13 @@ def _phy_band_support(phy: str) -> Dict[str, bool]:
             "supports_6ghz": False,
         }
     return host_probes.parse_band_support(out)
+
+
+def _phy_automatic_radio(phy: str):
+    try:
+        return recommend(non_dfs_ap_options(_run_iw(["phy", phy, "info"])))
+    except Exception:
+        return None
 
 
 def _phy_supports_6ghz_ap(phy: str) -> Optional[bool]:
@@ -374,7 +382,8 @@ def inventory_from_host_facts_snapshot(
             "score_breakdown": breakdown,
             "warnings": warnings,
         }
-        item.update(usb_id=facts.usb_id, display_name=facts.display_name)
+        item.update(usb_id=facts.usb_id, display_name=facts.display_name,
+                    automatic_radio=recommend(phys_by_name[phy].non_dfs_ap_options) if phy_facts_available else None)
         enriched.append(item)
 
         if supports_ap is True:
@@ -469,6 +478,7 @@ def get_adapters(
             "supports_5ghz": bool(band_caps.get("supports_5ghz")),
             "supports_6ghz": bool(band_caps.get("supports_6ghz")),
             "supports_6ghz_ap": _phy_supports_6ghz_ap(phy) if phy else None,
+            "automatic_radio": _phy_automatic_radio(phy) if phy else None,
             "supports_80mhz": supports_80mhz,
             "regdom": {
                 "country": reg_country,

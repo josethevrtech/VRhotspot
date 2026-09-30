@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Seque
 
 from vr_hotspotd import host_probes, os_release
 from vr_hotspotd.adapters.identity import usb_identity, read_attribute
+from vr_hotspotd.adapters.radio import non_dfs_ap_options
 from vr_hotspotd.host_facts import (
     AdapterFacts,
     DefaultRouteFact,
@@ -452,6 +453,7 @@ class _SnapshotCollector:
             supports_80mhz=supports_80mhz if structurally_complete else None,
             supports_wifi6=supports_wifi6 if structurally_complete else None,
             supports_ap_managed_concurrency=concurrency,
+            non_dfs_ap_options=non_dfs_ap_options(capture.output) if structurally_complete else (),
             supports_6ghz_ap=host_probes.supports_6ghz_ap(capture.output) if structurally_complete else None,
             frequencies=frequencies,
             source_probe_id=probe_id,

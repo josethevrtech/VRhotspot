@@ -304,6 +304,13 @@ function updateBandOptions() {
 
   cacheBandOptions(sel);
 
+  const automaticPlan = getSelectedAdapter()?.automatic_radio;
+  if (document.getElementById('radio_auto')?.checked && automaticPlan) {
+    setBandOptions(sel, [{value: automaticPlan.band, label: `${formatBandLabel(automaticPlan.band)} (Automatic)`}], automaticPlan.band);
+    sel.disabled = true;
+    return;
+  }
+
   // === BASIC MODE: Enforce VR Minimums ===
   // Basic Mode requires 5GHz + 80MHz for VR streaming.
   // Only offer 5GHz to prevent users from selecting unsuitable bands.
@@ -367,6 +374,8 @@ function updateBandOptions() {
 
 // --- Sticky edit guard
 let cfgDirty = false;
+let cfgEditVersion = 0;
+let configSaveQueue = Promise.resolve();
 let cfgJustSaved = false;
 let passphraseDirty = false;
 let lastCfg = null;
@@ -376,7 +385,7 @@ let lastPreflightReport = null;
 let preflightRequestInFlight = false;
 
 const CFG_IDS = [
-  "ssid", "wpa2_passphrase", "band_preference", "ap_security", "channel_6g", "country", "country_sel",
+  "radio_auto", "ssid", "wpa2_passphrase", "band_preference", "ap_security", "channel_6g", "country", "country_sel",
   "optimized_no_virt", "ap_adapter", "ap_ready_timeout_s", "fallback_channel_2g",
   "channel_width", "beacon_interval", "dtim_period", "short_guard_interval", "tx_power", "channel_auto_select",
   "lan_gateway_ip", "dhcp_start_ip", "dhcp_end_ip", "dhcp_dns", "enable_internet",
@@ -391,6 +400,7 @@ const CFG_IDS = [
 
 function setDirty(v) {
   cfgDirty = !!v;
+  if (v) cfgEditVersion += 1;
   const text = cfgDirty ? 'Unsaved changes' : '';
   const dirtyEls = [document.getElementById('dirty'), document.getElementById('dirtyBasic')];
   for (const el of dirtyEls) {
@@ -400,6 +410,7 @@ function setDirty(v) {
 
 function markDirty(ev) {
   if (ev && ev.isTrusted === false) return;
+  cfgEditVersion += 1;
   if (!cfgDirty) setDirty(true);
 }
 
@@ -767,6 +778,8 @@ function applyUiMode(mode, opts = {}) {
     setRefreshIntervalValue(BASIC_REFRESH_INTERVAL_MS);
     applyAutoRefresh();
   }
+  syncAutomaticRadio();
+  notifyConfigView();
 }
 
 function filterConfigForMode(out) {
@@ -790,8 +803,9 @@ function pickBasicFields(cfg) {
   if (cfg.wpa2_passphrase !== undefined) {
     out.wpa2_passphrase = cfg.wpa2_passphrase;
   }
-  out.ap_security = BASIC_DEFAULT_SECURITY;
-  out.country = BASIC_DEFAULT_COUNTRY;
+  if (!cfg.radio_auto) out.ap_security = BASIC_DEFAULT_SECURITY;
+  // Country is user-provided; switching layouts must never relocate the device.
+  if (!out.country && !cfg.radio_auto) out.country = BASIC_DEFAULT_COUNTRY;
   return out;
 }
 
@@ -2705,10 +2719,20 @@ async function waitForRunningStatus(timeoutMs = 12000, intervalMs = 1000) {
 async function startHotspot(overrides, label) {
   if (!isAuthenticated) return;
   if (window.headsetConnection?.handles()) { await window.headsetConnection.handle("start"); return; }
+  if (document.getElementById('radio_auto')?.checked && !getSelectedAdapter()?.automatic_radio) {
+    setMsg('Could not confirm VR-ready Wi-Fi settings (5 or 6 GHz, at least 80 MHz). Rescan or select a compatible adapter.', 'dangerText');
+    return;
+  }
   await withActionLock(async () => {
     const prefix = label ? `Starting (${label})...` : 'Starting...';
     setMsg(prefix);
     setOptimisticHotspotPhase('starting');
+    if (cfgDirty) {
+      const saved = await window.saveHotspotConfiguration();
+      if (!saved?.ok || cfgDirty) { await refresh(); return; }
+      setMsg(prefix);
+      setOptimisticHotspotPhase('starting');
+    }
     const payload = {};
     if (overrides) payload.overrides = overrides;
 
@@ -3098,7 +3122,7 @@ function enforceBandRules() {
     }
     renderHintTip(secHint, "Locked: 6 GHz requires WPA3 (SAE).");
   } else {
-    secEl.disabled = false;
+    secEl.disabled = !!document.getElementById('radio_auto')?.checked;
     if (g6Box) g6Box.style.display = 'none';
     if (bandHint) {
       if (band === '5ghz') bandHint.innerHTML = '';
@@ -3297,10 +3321,14 @@ function applyVrProfile(profileName = 'balanced') {
   maybeAutoPickAdapterForBand();
   setDirty(true);
   updateStabilityChecklist(lastStatus || {});
+  syncAutomaticRadio();
+  notifyConfigView();
 }
 
 function getForm() {
   const out = {};
+  const radioAuto = getCheckedIf('radio_auto');
+  if (radioAuto !== undefined) out.radio_auto = radioAuto;
 
   const ssid = getValueIf('ssid');
   if (ssid !== undefined) out.ssid = ssid;
@@ -3497,8 +3525,9 @@ function applyConfig(cfg) {
   updateBasicQosBanner({ markDirty: false });
 
   // Do not overwrite unsaved edits from polling.
-  if (cfgDirty && !cfgJustSaved) return;
+  if (cfgDirty) return;
 
+  document.getElementById('radio_auto').checked = cfg.radio_auto === true;
   document.getElementById('ssid').value = cfg.ssid || '';
   document.getElementById('band_preference').value = cfg.band_preference || '5ghz';
 
@@ -3593,6 +3622,8 @@ function applyConfig(cfg) {
   updateBasicInfoBanner();
   updateBasicChannelBanner();
   updateBasicQosBanner();
+  syncAutomaticRadio();
+  notifyConfigView();
 }
 
 function adapterDisplayKind(adapter) {
@@ -3707,6 +3738,7 @@ async function loadAdapters() {
   if (!didSet && lastCfg && lastCfg.ap_adapter) didSet = trySet(lastCfg.ap_adapter);
   if (!didSet && rec) trySet(rec);
 
+  syncAutomaticRadio();
   // After loading adapters, enforce band rules that may auto-pick.
   updateBandOptions();
   enforceBandRules();
@@ -3761,6 +3793,7 @@ async function refresh() {
   if (window.headsetConnection) s = await window.headsetConnection.refreshState(s);
   if (!isAuthenticated || requestSeq !== refreshRequestSeq) return;
   lastStatus = s;
+  syncAutomaticRadio();
   setPill(s);
   updateBasicStatusMeta(s);
   const suppressTransientError = shouldSuppressTransientStartError(s);
@@ -4123,21 +4156,29 @@ function bootstrapAuthenticatedUi() {
     await repairHotspot();
   });
 
-  async function saveConfigOnly() {
+  function saveConfigOnly() {
     const cfg = getForm();
-    setMsg('Saving config...');
-    const r = await api('/v1/config', { method: 'POST', body: JSON.stringify(cfg) });
-    setMsg(r.json ? ('Config: ' + r.json.result_code) : ('Config save failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
-
-    if (r.ok) {
-      setDirty(false);
-      cfgJustSaved = true;
-      clearPassphraseInputs();
-      passphraseDirty = false;
-    }
-    await refresh();
-    return r;
+    const version = cfgEditVersion;
+    const save = async () => {
+      setMsg('Saving config...');
+      let r;
+      try { r = await api('/v1/config', {method: 'POST', body: JSON.stringify(cfg)}); }
+      catch { setMsg('Could not save settings. Your edits are still here.', 'dangerText'); return {ok:false}; }
+      setMsg(r.json ? ('Config: ' + r.json.result_code) : ('Config save failed: HTTP ' + r.status), r.ok ? '' : 'dangerText');
+      if (r.ok && version === cfgEditVersion) {
+        setDirty(false);
+        cfgJustSaved = true;
+        clearPassphraseInputs();
+        passphraseDirty = false;
+      }
+      await refresh();
+      notifyConfigView();
+      return r;
+    };
+    configSaveQueue = configSaveQueue.then(save, save);
+    return configSaveQueue;
   }
+  window.saveHotspotConfiguration = saveConfigOnly;
 
   let basicQosSaveInFlight = false;
   let basicQosSaveQueued = false;
@@ -4279,22 +4320,19 @@ function bootstrapAuthenticatedUi() {
   });
 
   document.getElementById('btnSaveRestart').addEventListener('click', async () => {
-    const cfg = getForm();
-    setMsg('Saving & restarting...');
-    const r1 = await api('/v1/config', { method: 'POST', body: JSON.stringify(cfg) });
-    if (!r1.ok) {
-      setMsg(r1.json ? ('Config: ' + r1.json.result_code) : ('Config save failed: HTTP ' + r1.status), 'dangerText');
-      return;
-    }
-
-    setDirty(false);
-    cfgJustSaved = true;
-    clearPassphraseInputs();
-    passphraseDirty = false;
-
-    const r2 = await api('/v1/restart', { method: 'POST' });
-    setMsg(r2.json ? ('Save & Restart: ' + r2.json.result_code) : ('Restart failed: HTTP ' + r2.status), r2.ok ? '' : 'dangerText');
-    await refresh();
+    await withActionLock(async () => {
+      const saved = await saveConfigOnly();
+      if (!saved?.ok) return;
+      if (cfgDirty) {
+        setMsg('Newer edits are still unsaved. Save them before restarting.');
+        return;
+      }
+      setMsg('Restarting with saved settings...');
+      setOptimisticHotspotPhase('restarting');
+      const result = await api('/v1/restart', {method:'POST'});
+      setMsg(result.json ? ('Save & Restart: ' + result.json.result_code) : ('Restart failed: HTTP ' + result.status), result.ok ? '' : 'dangerText');
+      await refresh();
+    });
   });
   const btnSaveRestartBasic = document.getElementById('btnSaveRestartBasic');
   if (btnSaveRestartBasic) btnSaveRestartBasic.addEventListener('click', () => {
@@ -4495,4 +4533,52 @@ if (document.readyState === 'loading') {
 document.addEventListener('vrhotspot-connection-changed', () => applyFieldVisibility(getUiMode()));
 document.addEventListener('change', event => {
   if (event.target.matches?.('input, select')) applyFieldVisibility(getUiMode());
+});
+
+
+function notifyConfigView() {
+  document.dispatchEvent(new Event('vrhotspot-config-changed'));
+}
+
+function syncAutomaticRadio() {
+  const control = document.getElementById('radio_auto');
+  const summary = document.getElementById('automaticRadioSummary');
+  if (!control || !summary) return;
+  const direct = document.body.dataset.connectionKind === 'headset';
+  document.getElementById('automaticRadioControl').hidden = direct;
+  const adapter = getSelectedAdapter();
+  const plan = adapter?.automatic_radio;
+  const automatic = control.checked && !direct;
+  if (automatic && plan) {
+    updateBandOptions();
+    updateWidthOptions(plan.band);
+    for (const [id,value] of Object.entries({band_preference:plan.band,channel_width:String(plan.width_mhz),ap_security:plan.security,channel_5g:'',channel_6g:'',tx_power:''})) {
+      const node = document.getElementById(id); if (node) node.value = value;
+    }
+    for (const [id,value] of Object.entries({channel_auto_select:true,wifi_power_save_disable:true,usb_autosuspend_disable:adapter?.bus==='usb'})) {
+      const node = document.getElementById(id); if (node) node.checked = value;
+    }
+  }
+  for (const id of ['band_preference','channel_width','ap_security','channel_5g','channel_6g','channel_auto_select','wifi_power_save_disable','usb_autosuspend_disable','tx_power']) {
+    const node = document.getElementById(id);
+    if (node) node.disabled = automatic || (id==='ap_security' && document.getElementById('band_preference').value==='6ghz');
+  }
+  const active = lastStatus?.running && lastStatus.adapter === adapter?.ifname;
+  let text = direct ? 'Automatic · 6 GHz / 160 MHz target. The headset manages its network.'
+    : automatic ? (plan ? `Automatic · ${formatBandLabel(plan.band)} / ${plan.width_mhz} MHz. Channel chosen at connection time.` : 'No verified VR-ready settings: 5 or 6 GHz with at least 80 MHz is required.')
+    : 'Manual Wi-Fi settings.';
+  if (active && lastStatus.channel_width_mhz) text += ` Active: ${formatBandLabel(lastStatus.band)} / ${lastStatus.channel_width_mhz} MHz.`;
+  if (summary.textContent !== text) summary.textContent = text;
+  applyFieldVisibility(getUiMode());
+}
+
+document.addEventListener('vrhotspot-connection-changed', syncAutomaticRadio);
+document.addEventListener('input', event => {
+  if (event.target.matches?.('input, select')) { applyFieldVisibility(getUiMode()); notifyConfigView(); }
+});
+document.addEventListener('change', event => {
+  if (!event.target.matches?.('input, select')) return;
+  if (event.target.id==='radio_auto' && !event.target.checked) { updateBandOptions(); enforceBandRules(); }
+  syncAutomaticRadio();
+  notifyConfigView();
 });

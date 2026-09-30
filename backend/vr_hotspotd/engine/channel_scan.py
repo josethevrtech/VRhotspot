@@ -15,7 +15,7 @@ from vr_hotspotd.engine.channel_geometry import (
 )
 
 _IFNAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,14}$")
-_FREQUENCY = re.compile(r"^(\s*)\*\s*(\d+)\s+MHz\s+\[(\d+)\](.*)$")
+_FREQUENCY = re.compile(r"^(\s*)\*\s*(\d+(?:\.\d+)?)\s+MHz\s+\[(\d+)\](.*)$")
 _MAX_PHY_INTERFACES = 8
 
 
@@ -75,7 +75,7 @@ def _parse_frequencies(output: str, band: str) -> Dict[int, Dict[str, Any]]:
     for raw in output.splitlines():
         match = _FREQUENCY.match(raw)
         if match:
-            frequency, channel = int(match[2]), int(match[3])
+            frequency, channel = int(float(match[2])), int(match[3])
             current = None
             if channel_frequency(band, channel) == frequency:
                 current = {"frequency_mhz": frequency, "flags": match[4].lower()}

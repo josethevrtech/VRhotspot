@@ -40,6 +40,13 @@ does not expose it. Exact channel/width legality is still checked at startup;
 unknown capabilities still require runtime validation. Saved hotspot
 preferences remain separate from headset pairing.
 
+Automatic VR settings require a verified **80 MHz minimum** on 5 or 6 GHz;
+adapters limited to 20/40 MHz do not qualify. Both Basic and Pro choose the widest
+permitted 80/160 MHz AP block by default, with the actual connection width shown
+separately. See [automatic radio policy](channel-selection.md#automatic-vr-settings)
+for regulatory checks, manual overrides, and the distinction between maximum
+supported width and measured streaming performance.
+
 ## Existing project compatibility reports
 
 These models were previously listed as tested and working. Retain them as

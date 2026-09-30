@@ -212,6 +212,7 @@ def test_snapshot_inventory_matches_known_good_legacy_output(monkeypatch):
     monkeypatch.setattr(inventory, "_phy_supports_wifi6", lambda _phy: True)
     monkeypatch.setattr(inventory, "_phy_supports_80mhz", lambda _phy: True)
     monkeypatch.setattr(inventory, "_phy_supports_6ghz_ap", lambda _phy: None)
+    monkeypatch.setattr(inventory, "_phy_automatic_radio", lambda _phy: None)
     monkeypatch.setattr(
         inventory,
         "_phy_band_support",

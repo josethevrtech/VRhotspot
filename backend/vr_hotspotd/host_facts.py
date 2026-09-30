@@ -123,6 +123,7 @@ class IwPhyFacts:
     source_probe_id: str
 
     supports_6ghz_ap: Optional[bool] = None
+    non_dfs_ap_options: Tuple[Tuple[str, int, int], ...] = ()
 
 
 @dataclass(frozen=True)

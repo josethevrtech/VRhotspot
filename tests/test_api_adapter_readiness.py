@@ -218,6 +218,7 @@ def test_adapter_endpoints_preserve_existing_response_shapes(monkeypatch):
         "supports_5ghz",
         "supports_6ghz",
         "supports_6ghz_ap",
+        "automatic_radio",
         "supports_80mhz",
         "regdom",
         "score",

@@ -14,6 +14,7 @@ _LAN_IPV4_PREFIX_LENGTH = 24
 _LINUX_IFNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 DEFAULT_CONFIG: Dict[str, Any] = {
+    "radio_auto": True,  # Resolve the strongest currently permitted radio settings at start.
     "version": CONFIG_SCHEMA_VERSION,
 
     # Wi-Fi identity
