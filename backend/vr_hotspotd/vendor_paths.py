@@ -47,6 +47,15 @@ def vendor_profiles(info: Optional[Dict[str, str]] = None) -> List[str]:
 
 
 def _vendor_root() -> Path:
+    # Administrator configuration, never request input. Keep a native build
+    # separate from the checked-in x86 bundle and its shared libraries.
+    override = os.environ.get("VR_HOTSPOT_VENDOR_ROOT", "").strip()
+    if override:
+        root = Path(override)
+        if not root.is_absolute() or not (root / "bin").is_dir():
+            raise ValueError("VR_HOTSPOT_VENDOR_ROOT must be an absolute bundle directory with bin/")
+        return root
+
     install_dir = os.environ.get("VR_HOTSPOT_INSTALL_DIR")
     if install_dir:
         cand = Path(install_dir) / "backend" / "vendor"
