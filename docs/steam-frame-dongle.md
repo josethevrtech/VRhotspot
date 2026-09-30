@@ -135,8 +135,12 @@ DNS/routes. Laptop and headset retain their existing independent internet uplink
 **Internet relay over this direct link is not implemented**; use the ordinary
 hotspot with internet sharing for that workflow.
 
-The daemon accepts only a sysfs-verified USB 28de:2432 interface, refuses default
-uplinks and unrelated active connections, and serializes role changes with the AP
+The daemon accepts sysfs-verified USB wireless interfaces whose current driver
+reports enabled 6 GHz frequencies and HE160 in that band’s managed-mode block.
+The Valve-only ID restriction has been removed; its exact ID is still used for
+the friendly name **Steam Frame USB**. Capability detection is not physical
+qualification of another model. The daemon refuses default uplinks and unrelated
+active connections, and serializes role changes with the AP
 lifecycle. It waits for NetworkManager readiness after AP shutdown, then verifies
 association, DHCP, 6 GHz and 160 MHz. Connection failure restores a previously
 running hotspot. **Disconnect** releases the direct link; selecting ordinary
@@ -222,3 +226,33 @@ Basic pairing simplification: all 36 Node UI tests pass, including paired and
 unpaired Basic states and Basic/Pro transitions. This change only affects UI
 assets; it does not change saved pairing or radio configuration. The deployed
 three-file backup is `/var/lib/vr-hotspot/basic-pairing-ui-before/assets/`.
+
+Capability-based USB support (2026-09-30): the same WPA3/PMF, power-save-off,
+no-default-route and rollback behavior is available to other eligible USB adapters.
+NO-IR frequencies are never treated as PC AP permission. NetworkManager and the
+kernel enforce station association rules. The backend still requires an observed
+6 GHz / 160 MHz link; it does not silently accept a slower connection. See the
+[updated hardware recommendations](wifi-adapters.md) for evidence levels. No
+additional dongle has been physically qualified by this change.
+
+Local deployment for the capability-based update backed up every replaced file
+under `/var/lib/vr-hotspot/capability-ui-before-20260930/`, including a manifest of
+new files. To restore those application files (without changing pairing):
+
+```sh
+sudo python3 /var/lib/vr-hotspot/capability-ui-before-20260930/restore.py
+sudo systemctl restart vr-hotspotd
+systemctl --user restart mainframeos-vrhotspot-desktop.service
+```
+
+These are installation-specific rollback paths, not files shipped to other users.
+The twelve deployed application files were compared byte-for-byte with the source.
+Read-only API checks identify `wlu2` as **Steam Frame USB** and eligible for the
+headset connection. Basic and Pro were inspected in Chromium at 1440×1000. No new
+radio connection or performance measurement was performed for this UI/capability
+update; the physical measurements above belong to the earlier bring-up.
+
+Validation for this update: 1,888 pytest tests passed, 2 skipped, 4 subtests;
+38 Node UI tests passed; Ruff passed. Tests cover non-Valve eligibility, disabled
+frequencies, wrong-band/mode HE160 rejection, exact USB identity, snapshot-only
+projection, capability filtering and Basic/Pro adapter switching.

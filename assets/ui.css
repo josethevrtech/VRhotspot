@@ -1765,3 +1765,6 @@ body[data-connection-kind="headset"] #proConnectionQuality {
 body:not([data-ui-mode="advanced"]) #headsetPairing {
   display: none !important;
 }
+
+/* Capability and connection rules apply in every layout. */
+[data-field][data-inapplicable] { display: none !important; }

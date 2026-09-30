@@ -17,7 +17,9 @@
     const compatible = current?.adapters?.includes(adapter?.value);
     const fields = el('connectionPurposeFields');
     if (!fields) return;
-    fields.hidden = !current || (!compatible && !current.active && !headset());
+    // A choice remembered for a different radio must not expose unusable controls.
+    if (current && adapter?.value && !current.active && !compatible && headset()) selected = 'hotspot';
+    fields.hidden = !current || (!compatible && !current.active);
     const selector = el('connectionPurpose');
     selector.value = selected;
     selector.disabled = !!current?.active || apRunning || (typeof actionInFlight !== 'undefined' && actionInFlight);

@@ -65,7 +65,7 @@ def test_pairing_rejects_invalid_data_without_writes(env, field, value):
 
 def test_non_dongle_and_default_uplink_cannot_be_taken_over(env, monkeypatch):
     pair()
-    with pytest.raises(direct.DirectError, match='valve_adapter'):
+    with pytest.raises(direct.DirectError, match='capable_usb_adapter'):
         direct.connect('laptopwifi', stop_ap=lambda: pytest.fail('stopped'), start_ap=None, ap_running=True)
     monkeypatch.setattr(direct, 'run', lambda *a, **k: '[{"dev":"usbframe"}]')
     with pytest.raises(direct.DirectError, match='uplink'):
@@ -168,18 +168,53 @@ def test_journal_storage_failure_after_stop_restores_ap(env, monkeypatch):
     assert restored == [True]
 
 
-def test_adapter_detection_follows_usb_ancestry_and_exact_ids(tmp_path, monkeypatch):
+CLIENT_CAPS = """
+Supported interface modes:
+ * managed
+Band 3:
+ HE Iftypes: managed
+  HE PHY Capabilities:
+   HE160/5GHz
+ HE Iftypes: AP
+  HE40/HE80/5GHz
+ Frequencies:
+  * 6135.0 MHz [37] (23.0 dBm) (no IR)
+"""
+
+
+@pytest.mark.parametrize('vendor,product', [('28de', '2432'), ('0bda', 'c832'), ('0e8d', '7961')])
+def test_adapter_detection_uses_capabilities_not_a_vendor_allowlist(tmp_path, monkeypatch, vendor, product):
     sys = tmp_path / 'net'; sys.mkdir()
     usb = tmp_path / 'usb'; usb.mkdir()
-    (usb / 'idVendor').write_text('28de\n')
-    (usb / 'idProduct').write_text('2432\n')
-    net = usb / 'interface/net/dongle'; net.mkdir(parents=True)
-    (sys / 'dongle').symlink_to(net)
+    (usb / 'idVendor').write_text(vendor)
+    (usb / 'idProduct').write_text(product)
+    device = usb / 'interface'; device.mkdir()
+    net = sys / 'dongle'; net.mkdir()
+    (net / 'device').symlink_to(device)
+    phy = tmp_path / 'phy7'; phy.mkdir()
+    (net / 'phy80211').symlink_to(phy)
     (sys / 'unrelated').mkdir()
     monkeypatch.setattr(direct, 'SYS', sys)
+    monkeypatch.setattr(direct, 'run', lambda *a, **k: CLIENT_CAPS)
     assert direct.adapters() == ['dongle']
-    (usb / 'idProduct').write_text('1304\n')
-    assert direct.adapters() == []
+    monkeypatch.setattr(direct, 'run', lambda *a, **k: CLIENT_CAPS.replace('HE160/5GHz', 'HE40/HE80/5GHz'))
+    assert direct.adapters() == []  # Even the Valve ID cannot bypass capabilities.
+
+
+@pytest.mark.parametrize('caps', [
+    '', CLIENT_CAPS.replace('(no IR)', '(disabled)'),
+    CLIENT_CAPS.replace('6135.0', '5180.0'),
+    CLIENT_CAPS.replace('HE Iftypes: managed', 'HE Iftypes: AP'),
+    CLIENT_CAPS.replace('HE160/5GHz', '20MHz in 160/80+80MHz HE PPDU'),
+    'Band 2:\n HE Iftypes: managed\n  HE160/5GHz\n * 5180 MHz [36] (23 dBm)\n'
+        + CLIENT_CAPS.replace('HE160/5GHz', 'HE40/HE80/5GHz'),
+])
+def test_direct_client_rejects_disabled_or_wrong_band_and_mode(caps):
+    assert not direct.supports_direct_client(caps)
+
+
+def test_direct_client_allows_no_ir_association_without_claiming_ap_permission():
+    assert direct.supports_direct_client(CLIENT_CAPS)
 
 
 def test_networkmanager_readiness_is_awaited(env, monkeypatch):
@@ -204,3 +239,12 @@ def test_native_ui_bridge_accepts_exact_direct_routes_with_bounded_transition_ti
         request = transport.requests[-1]
         assert request.timeout == (120 if path.endswith(('connect', 'disconnect')) else 10)
         assert 'private-token' not in repr(request)
+
+
+def test_station_no_ir_permission_does_not_expose_ap_controls():
+    from vr_hotspotd import host_probes
+    assert direct.supports_direct_client(CLIENT_CAPS)
+    assert not host_probes.supports_6ghz_ap(CLIENT_CAPS)
+    assert host_probes.supports_6ghz_ap(CLIENT_CAPS.replace('(no IR)', ''))
+    assert not host_probes.supports_6ghz_ap(CLIENT_CAPS.replace('(no IR)', '(disabled)'))
+    assert not host_probes.supports_6ghz_ap(CLIENT_CAPS.replace('HE Iftypes: AP', 'HE Iftypes: managed').replace('(no IR)', ''))

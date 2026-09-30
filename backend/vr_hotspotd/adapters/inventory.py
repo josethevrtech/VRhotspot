@@ -5,6 +5,8 @@ import re
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
+from pathlib import Path
+from vr_hotspotd.adapters.identity import usb_identity
 from vr_hotspotd import host_probes
 from vr_hotspotd.host_facts import HostFactsSnapshot
 
@@ -138,6 +140,13 @@ def _phy_band_support(phy: str) -> Dict[str, bool]:
             "supports_6ghz": False,
         }
     return host_probes.parse_band_support(out)
+
+
+def _phy_supports_6ghz_ap(phy: str) -> Optional[bool]:
+    try:
+        return host_probes.supports_6ghz_ap(_run_iw(["phy", phy, "info"]))
+    except Exception:
+        return None
 
 
 def probe_ap_managed_concurrency(phy: str) -> Optional[bool]:
@@ -352,6 +361,7 @@ def inventory_from_host_facts_snapshot(
             "supports_2ghz": supports_2ghz,
             "supports_5ghz": supports_5ghz,
             "supports_6ghz": supports_6ghz,
+            "supports_6ghz_ap": phys_by_name[phy].supports_6ghz_ap if phy_facts_available else None,
             "supports_80mhz": supports_80mhz,
             "regdom": {
                 "country": reg_country,
@@ -364,6 +374,7 @@ def inventory_from_host_facts_snapshot(
             "score_breakdown": breakdown,
             "warnings": warnings,
         }
+        item.update(usb_id=facts.usb_id, display_name=facts.display_name)
         enriched.append(item)
 
         if supports_ap is True:
@@ -457,6 +468,7 @@ def get_adapters(
             "supports_2ghz": bool(band_caps.get("supports_2ghz")),
             "supports_5ghz": bool(band_caps.get("supports_5ghz")),
             "supports_6ghz": bool(band_caps.get("supports_6ghz")),
+            "supports_6ghz_ap": _phy_supports_6ghz_ap(phy) if phy else None,
             "supports_80mhz": supports_80mhz,
             "regdom": {
                 "country": reg_country,
@@ -469,6 +481,8 @@ def get_adapters(
             "score_breakdown": breakdown,
             "warnings": warnings,
         }
+        if bus_type == "usb" and ifname:
+            item.update(usb_identity(Path(f"/sys/class/net/{ifname}/device").resolve()))
         enriched.append(item)
 
         if supports_ap:

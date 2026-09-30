@@ -70,6 +70,7 @@ function apiPayload(path, method, stub) {
   if (path === '/v1/stop') return { result_code: 'stopped', data: {} };
   if (path === '/v1/restart') return { result_code: 'restarted', data: {} };
   if (path === '/v1/repair') return { result_code: 'repaired', data: {} };
+  if (path === '/v1/adapters' && stub.inventory) return {data: stub.inventory};
   if (path === '/v1/adapters') {
     return {
       data: {
@@ -311,6 +312,54 @@ test('unpaired Basic shows a setup state without opening technical fields or con
   await window.startHotspot();
   assert.equal(document.getElementById('headsetPairing').open, false);
   assert.ok(!stub.requests.some(r => r.method === 'POST' && r.path.startsWith('/v1/frame-direct/')));
+  for (const observer of window.reviewObservers) observer.disconnect();
+  dom.window.close();
+});
+
+
+test('recognized names and relevant settings follow hardware and connection in both layouts', async () => {
+  const usb = {ifname: 'wlan1', bus: 'usb', display_name: 'Steam Frame USB', supports_ap: true,
+    supports_2ghz: true, supports_5ghz: true, supports_6ghz: true, score: 100};
+  const internal = {ifname: 'wlan0', bus: 'pci', supports_ap: true,
+    supports_2ghz: true, supports_5ghz: true, supports_6ghz: false, score: 30};
+  const stub = {status: {running: false, phase: 'stopped'}, gates: new Map(),
+    inventory: {adapters: [usb, internal], recommended: 'wlan1'}};
+  const {dom, window, document} = await bootPortal(stub);
+  window.stopActivePolling();
+  const select = document.getElementById('ap_adapter');
+  assert.equal(select.selectedOptions[0].textContent, 'Steam Frame USB (Recommended)');
+  const toggle = document.getElementById('uiModeToggle');
+  toggle.checked = true; toggle.dispatchEvent(new window.Event('change', {bubbles: true}));
+  await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', 'Pro setup');
+  await tick(window, 100);
+  assert.equal(select.selectedOptions[0].textContent, 'Steam Frame USB (Recommended)');
+  const field = key => document.querySelector(`[data-field="${key}"]`);
+  const change = (id, value) => { const n=document.getElementById(id); if(typeof value==='boolean') n.checked=value; else n.value=value; n.dispatchEvent(new window.Event('change',{bubbles:true})); };
+  change('band_preference', '2.4ghz');
+  assert.equal([...document.getElementById('channel_width').options].some(o=>Number(o.value)>40), false);
+  change('band_preference', '6ghz');
+  assert.equal([...document.getElementById('channel_width').options].some(o=>o.value==='160'), true);
+  assert.equal(field('short_guard_interval').hasAttribute('data-inapplicable'), true);
+  assert.equal(field('channel_6g').hasAttribute('data-inapplicable'), false);
+  change('bridge_mode', false);
+  assert.equal(field('bridge_name').hasAttribute('data-inapplicable'), true);
+  change('bridge_mode', true);
+  assert.equal(field('bridge_name').hasAttribute('data-inapplicable'), false);
+  // A different USB product uses its descriptor; duplicate names stay distinguishable.
+  usb.display_name = 'Example Wi-Fi 6E USB';
+  usb.supports_6ghz_ap = false;
+  await window.loadAdapters(); await tick(window);
+  assert.equal(select.selectedOptions[0].textContent, 'Example Wi-Fi 6E USB (Recommended)');
+  assert.equal([...document.getElementById('band_preference').options].some(o=>o.value==='6ghz'), false);
+  change('connectionPurpose', 'headset'); await tick(window,100);
+  assert.equal(field('ssid').hasAttribute('data-inapplicable'), true);
+  change('ap_adapter', 'wlan0'); await tick(window,100);
+  assert.equal(document.body.dataset.connectionKind, 'hotspot');
+  assert.equal(document.getElementById('connectionPurposeFields').hidden, true);
+  assert.equal(field('usb_autosuspend_disable').hasAttribute('data-inapplicable'), true);
+  assert.equal([...document.getElementById('band_preference').options].some(o=>o.value==='6ghz'), false);
+  assert.equal(field('ssid').hasAttribute('data-inapplicable'), false);
+  assert.ok(!stub.requests.some(r=>r.method==='POST' && /connect|start/.test(r.path)));
   for (const observer of window.reviewObservers) observer.disconnect();
   dom.window.close();
 });

@@ -640,8 +640,8 @@
               <div class="form-group" data-field="bridge_mode">
                 <label class="tog"><input type="checkbox" id="bridge_mode" /> Bridge Mode</label>
                 <div class="form-row two-col mt-8">
-                  <input id="bridge_name" placeholder="vrbr0" />
-                  <input id="bridge_uplink" placeholder="eth0" />
+                  <input data-field="bridge_name" id="bridge_name" placeholder="vrbr0" />
+                  <input data-field="bridge_uplink" id="bridge_uplink" placeholder="eth0" />
                 </div>
               </div>
 
@@ -649,9 +649,9 @@
                 <label>Firewall Integration</label>
                 <div class="tog-group">
                   <label class="tog"><input type="checkbox" id="firewalld_enabled" /> Enabled</label>
-                  <label class="tog"><input type="checkbox" id="firewalld_enable_masquerade" /> Masq</label>
-                  <label class="tog"><input type="checkbox" id="firewalld_enable_forward" /> Fwd</label>
-                  <label class="tog"><input type="checkbox" id="firewalld_cleanup_on_stop" /> Cleanup</label>
+                  <label class="tog" data-field="firewalld_enable_masquerade"><input type="checkbox" id="firewalld_enable_masquerade" /> Masq</label>
+                  <label class="tog" data-field="firewalld_enable_forward"><input type="checkbox" id="firewalld_enable_forward" /> Fwd</label>
+                  <label class="tog" data-field="firewalld_cleanup_on_stop"><input type="checkbox" id="firewalld_cleanup_on_stop" /> Cleanup</label>
                 </div>
               </div>
 
@@ -682,7 +682,7 @@
                 <div class="tog-group vertical">
                   <label class="tog"><input type="checkbox" id="wifi_power_save_disable" /> Disable Wi-Fi Power
                     Save</label>
-                  <label class="tog"><input type="checkbox" id="usb_autosuspend_disable" /> Disable USB
+                  <label class="tog" data-field="usb_autosuspend_disable"><input type="checkbox" id="usb_autosuspend_disable" /> Disable USB
                     autosuspend</label>
                   <label class="tog"><input type="checkbox" id="cpu_governor_performance" /> CPU Performance
                     Mode</label>

@@ -122,6 +122,8 @@ class IwPhyFacts:
     frequencies: Tuple[FrequencyFacts, ...]
     source_probe_id: str
 
+    supports_6ghz_ap: Optional[bool] = None
+
 
 @dataclass(frozen=True)
 class RegulatoryDomainFacts:
@@ -193,6 +195,8 @@ class AdapterFacts:
     regulatory_country: Optional[str]
     regulatory_source: Optional[str]
     source_probe_ids: Tuple[str, ...]
+    usb_id: Optional[str] = None
+    display_name: Optional[str] = None
 
 
 @dataclass(frozen=True)

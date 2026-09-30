@@ -183,7 +183,7 @@ function getSelectedAdapter() {
 function getRecommendedBand(adapter) {
   if (adapter) {
     if (adapter.supports_5ghz) return '5ghz';
-    if (adapter.supports_6ghz) return '6ghz';
+    if (adapter.supports_6ghz && adapter.supports_6ghz_ap !== false) return '6ghz';
     if (adapter.supports_2ghz) return '2.4ghz';
   }
   return '5ghz';
@@ -353,8 +353,16 @@ function updateBandOptions() {
     }
   }
 
+  // A missing probe is unknown, not evidence of missing hardware support.
+  options = options.filter(opt => {
+    const field = {'2.4ghz': 'supports_2ghz', '5ghz': 'supports_5ghz', '6ghz': 'supports_6ghz'}[opt.value];
+    if (opt.value === '6ghz' && adapter?.supports_6ghz_ap === false) return false;
+    return !field || adapter?.[field] !== false;
+  });
   const current = sel.value === 'recommended' ? getRecommendedBand(adapter) : sel.value;
-  setBandOptions(sel, options, current || '5ghz');
+  const value = options.some(opt => opt.value === current) ? current
+    : options.find(opt => opt.value === '5ghz')?.value || options[0]?.value;
+  setBandOptions(sel, options, value);
 }
 
 // --- Sticky edit guard
@@ -792,6 +800,22 @@ function getFieldMode(key) {
   return (mode === 'basic' || mode === 'advanced') ? mode : 'advanced';
 }
 
+function fieldApplies(key) {
+  const adapter = getSelectedAdapter();
+  const band = resolveBandPref(document.getElementById('band_preference')?.value);
+  const on = id => !!document.getElementById(id)?.checked;
+  const direct = document.body.dataset.connectionKind === 'headset';
+  if (direct) return key === 'ap_adapter';
+  if (key === 'usb_autosuspend_disable' && adapter && adapterDisplayKind(adapter) === 'internal') return false;
+  if (key === 'channel_6g') return band === '6ghz';
+  if (key === 'short_guard_interval') return band !== '6ghz';
+  if (key === 'fallback_channel_2g' && adapter?.supports_2ghz === false) return false;
+  if (['bridge_name', 'bridge_uplink'].includes(key)) return on('bridge_mode');
+  if (key.startsWith('firewalld_') && key !== 'firewalld_enabled') return on('firewalld_enabled');
+  if (key === 'nat_accel') return on('enable_internet') && !on('bridge_mode');
+  return true;
+}
+
 function applyFieldVisibility(mode) {
   const fields = document.querySelectorAll('[data-field]');
   for (const el of fields) {
@@ -802,7 +826,9 @@ function applyFieldVisibility(mode) {
     const hideSecurityInBasic = (mode === 'basic' && key === 'ap_security');
     const hideCountryInBasic = (mode === 'basic' && key === 'country');
     const bandVisible = el.dataset.bandVisible;
-    const finalShow = (bandVisible === '0')
+    const applicable = fieldApplies(key);
+    el.toggleAttribute('data-inapplicable', !applicable);
+    const finalShow = (!applicable || bandVisible === '0')
       ? false
       : (show && !hideBandPreferenceInBasic && !hideSecurityInBasic && !hideCountryInBasic);
     el.style.display = finalShow ? '' : 'none';
@@ -3027,6 +3053,20 @@ function syncCountrySelectFromInput() {
   if (!found) sel.value = '__custom';
 }
 
+let widthOptionsCache = null;
+function updateWidthOptions(band) {
+  const select = document.getElementById('channel_width');
+  if (!select) return;
+  if (!widthOptionsCache) widthOptionsCache = [...select.options].map(o => ({value:o.value, label:o.textContent}));
+  const adapter = getSelectedAdapter();
+  const options = widthOptionsCache.filter(o => o.value === 'auto' ||
+    !((band === '2.4ghz' || adapter?.supports_80mhz === false) && Number(o.value) > 40));
+  const value = options.some(o => o.value === select.value) ? select.value : 'auto';
+  if ([...select.options].map(o=>o.value).join(',') !== options.map(o=>o.value).join(',')) {
+    setBandOptions(select, options, value);
+  }
+}
+
 function enforceBandRules() {
   const sel = document.getElementById('band_preference');
   const g6Box = document.getElementById('sixgBox');
@@ -3039,6 +3079,7 @@ function enforceBandRules() {
   const band = resolveBandPref(sel.value);
   const is6 = (band === '6ghz');
   const is5 = (band === '5ghz');
+  updateWidthOptions(band);
 
   if (bandPreferenceTip) {
     renderHintTip(bandPreferenceTip, '5 GHz: best default for VR streaming on most adapters.');
@@ -3561,6 +3602,14 @@ function adapterDisplayKind(adapter) {
   return 'other';
 }
 
+function adapterProductName(adapter) {
+  // Names come from verified USB IDs or the device's own product descriptor.
+  const name = typeof adapter?.display_name === 'string' ? adapter.display_name.trim() : '';
+  if (!name) return '';
+  const twins = (lastAdapters?.adapters || []).filter(a => a.display_name === adapter.display_name);
+  return twins.length > 1 ? `${name} (${adapter.ifname})` : name;
+}
+
 function buildAdapterOptionDefinitions(adapters, mode, recommended) {
   const definitions = [];
   let basicUsbCount = 0;
@@ -3573,13 +3622,13 @@ function buildAdapterOptionDefinitions(adapters, mode, recommended) {
     if (mode === 'basic') {
       basicUsbCount++;
       const recStr = (a.ifname === recommended) ? ' (Recommended)' : '';
-      label = `USB Wi-Fi ${basicUsbCount}${recStr}`;
+      label = `${adapterProductName(a) || `USB Wi-Fi ${basicUsbCount}`}${recStr}`;
     } else {
       const ap = a.supports_ap ? 'AP' : 'no-AP';
       const caps = capsLabel(a);
       const reg = a.regdom && a.regdom.country ? a.regdom.country : '--';
       const star = (a.ifname === recommended) ? '* ' : '';
-      label = `${star}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
+      label = `${star}${adapterProductName(a) ? adapterProductName(a) + ' · ' : ''}${a.ifname} (${a.phy || 'phy?'}, ${caps}, reg=${reg}, score=${a.score}, ${ap})`;
     }
     definitions.push({ value: a.ifname, label, disabled: false, kind: adapterDisplayKind(a) });
   }
@@ -4441,3 +4490,9 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
+// These listeners only affect presentation; hidden preferences are preserved.
+document.addEventListener('vrhotspot-connection-changed', () => applyFieldVisibility(getUiMode()));
+document.addEventListener('change', event => {
+  if (event.target.matches?.('input, select')) applyFieldVisibility(getUiMode());
+});

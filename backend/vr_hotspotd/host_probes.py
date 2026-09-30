@@ -843,3 +843,17 @@ def probe_firewall_backends(
         "selected_backend": selected,
         "rationale": rationale,
     }
+
+
+def supports_6ghz_ap(text: str) -> bool:
+    """Current 6 GHz AP evidence, separate from station association capability.
+
+    This is an offer-time filter, not final channel/width authorization. The
+    kernel and hostapd still validate the exact channel geometry at startup.
+    """
+    for band in re.split(r"(?m)^\s*Band \d+:", text)[1:]:
+        usable = any(f['band'] == '6ghz' and not f['disabled'] and not f['no_ir']
+                     for f in parse_iw_frequencies(band))
+        if usable and he_iftypes_has_ap(band) is True:
+            return True
+    return False

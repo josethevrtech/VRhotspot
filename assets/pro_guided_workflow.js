@@ -589,6 +589,7 @@
         counters.other += 1;
         label = `Wi-Fi Adapter ${counters.other}`;
       }
+      label = typeof adapterProductName === 'function' ? (adapterProductName(adapter) || label) : label;
       if (option.value === recommended) label += ' (Recommended)';
 
       const technical = adapterTechnicalSummary(adapter, option.value, rawLabel);

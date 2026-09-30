@@ -339,6 +339,7 @@
         counters.other += 1;
         label = `Wi-Fi Adapter ${counters.other}`;
       }
+      label = typeof adapterProductName === 'function' ? (adapterProductName(adapter) || label) : label;
       if (option.value === recommended) label += ' (Recommended)';
       // Idempotent writes: this runs from a childList observer, so an
       // unconditional rewrite would observe itself and loop forever.

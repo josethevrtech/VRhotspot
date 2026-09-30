@@ -1,4 +1,4 @@
-"""Explicit, experimental Frame-hosted 6 GHz link. No SSH or Steam dependency.
+"""Explicit, experimental headset-hosted 6 GHz link for capable USB radios. No SSH or Steam dependency.
 
 Mutations run under lifecycle._OP_LOCK. NetworkManager owns association/DHCP;
 only our fixed UUID may be activated or deactivated. Secrets never enter argv,
@@ -13,6 +13,9 @@ import re
 import subprocess
 import tempfile
 import time
+
+from vr_hotspotd import host_probes
+from vr_hotspotd.adapters.identity import usb_identity
 
 PROFILE = Path('/etc/NetworkManager/system-connections/vr-hotspot-frame-direct.nmconnection')
 JOURNAL = Path('/var/lib/vr-hotspot/frame-direct-session.json')
@@ -51,17 +54,44 @@ def atomic_private(path, text):
         Path(name).unlink(missing_ok=True)
 
 
+def supports_direct_client(iw_text):
+    """Require enabled 6 GHz plus HE160 in that band's managed-mode block.
+
+    NO-IR is not an AP permission: a station may associate under the kernel's
+    rules. This never modifies regdom, channel flags, firmware or transmit power.
+    """
+    for band in re.split(r"(?m)^\s*Band \d+:", iw_text)[1:]:
+        frequencies = host_probes.parse_iw_frequencies(band)
+        if not any(5925 <= f['frequency_mhz'] <= 7125 and not f['disabled'] for f in frequencies):
+            continue
+        blocks = re.split(r"(?m)^\s*HE Iftypes:\s*", band)[1:]
+        for block in blocks:
+            modes, _, caps = block.partition('\n')
+            if ('managed' in [m.strip() for m in modes.split(',')]
+                    and re.search(r"(?m)^\s*HE160/5GHz\s*$", caps)):
+                return True
+    return False
+
+
 def adapters():
     found = []
+    phy_caps = {}
     for net in sorted(SYS.glob('*')):
-        for parent in (net.resolve(), *net.resolve().parents):
-            try:
-                if ((parent / 'idVendor').read_text().strip() == '28de'
-                        and (parent / 'idProduct').read_text().strip() == '2432'):
-                    found.append(net.name)
-                    break
-            except OSError:
-                pass
+        if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,15}', net.name):
+            continue
+        device = net / 'device'
+        phy_path = net / 'phy80211'
+        if not device.exists() or not phy_path.exists():
+            continue
+        if not usb_identity(device.resolve())['usb_id']:
+            continue
+        phy = phy_path.resolve().name
+        if not re.fullmatch(r'phy\d+', phy):
+            continue
+        if phy not in phy_caps:
+            phy_caps[phy] = supports_direct_client(run('iw', 'phy', phy, 'info', optional=True))
+        if phy_caps[phy]:
+            found.append(net.name)
     return found
 
 
@@ -136,7 +166,7 @@ def pair(body):
 
 def _check_adapter(iface):
     if iface not in adapters():
-        raise DirectError('direct_valve_adapter_required')
+        raise DirectError('direct_capable_usb_adapter_required')
     for family in ('-4', '-6'):
         try:
             routes = json.loads(run('ip', '-j', family, 'route', 'show', 'default'))
