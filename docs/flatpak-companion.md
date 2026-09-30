@@ -213,3 +213,9 @@ reinstall regenerates. Remove it from your keyring manager if desired.
 
 - `FLATPAK_ARCHITECTURE_PLAN.md` — companion architecture plan
 - `first-run-wizard.md` — first-run experience design
+
+## Optional headset input control
+
+The tray can toggle the separately installed MainFrameOS desktop input service.
+See [Frame Control integration](frame-control.md) for pairing, process boundaries,
+offline use, ARM64 limitations and validation status.

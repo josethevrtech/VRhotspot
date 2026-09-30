@@ -10,7 +10,8 @@
     "--socket=wayland",
     "--socket=fallback-x11",
     "--talk-name=org.kde.StatusNotifierWatcher",
-    "--talk-name=org.freedesktop.secrets"
+    "--talk-name=org.freedesktop.secrets",
+    "--talk-name=org.mainframeos.FrameControl"
   ],
   "modules": [
     {
@@ -18,7 +19,7 @@
       "buildsystem": "simple",
       "build-commands": [
         "install -d /app/lib/vrhotspot/flatpak_app /app/lib/vrhotspot/flatpak_client",
-        "install -m 0644 flatpak_app/__init__.py flatpak_app/__main__.py flatpak_app/app.py flatpak_app/tray.py /app/lib/vrhotspot/flatpak_app/",
+        "install -m 0644 flatpak_app/__init__.py flatpak_app/__main__.py flatpak_app/app.py flatpak_app/tray.py flatpak_app/frame_control.py /app/lib/vrhotspot/flatpak_app/",
         "install -m 0644 flatpak_client/__init__.py flatpak_client/client.py flatpak_client/control.py flatpak_client/pairing.py flatpak_client/ui.py flatpak_client/wallet.py /app/lib/vrhotspot/flatpak_client/",
         "install -Dm755 vrhotspot-flatpak /app/bin/vrhotspot-flatpak",
         "install -Dm644 io.github.josethevrtech.VRhotspot.desktop /app/share/applications/io.github.josethevrtech.VRhotspot.desktop",
@@ -111,6 +112,11 @@
         {
           "type": "file",
           "path": "io.github.josethevrtech.VRhotspot-error.svg"
+        },
+        {
+          "type": "file",
+          "path": "../../flatpak_app/frame_control.py",
+          "dest": "flatpak_app"
         }
       ]
     }
