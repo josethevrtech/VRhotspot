@@ -33,3 +33,10 @@ Run locally:
 ```bash
 tools/ci/install_matrix_check.sh
 ```
+
+## ARM64 development
+
+A separate [native ARM64 networking build](arm64-network-bundle.md) is available
+for development. Its explicit vendor-root override avoids mixing native binaries
+with the checked-in x86 libraries. Live hotspot/Frame DHCP qualification is still
+pending; this is not an ARM64 platform-support declaration.
