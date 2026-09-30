@@ -47,6 +47,33 @@
       </div>
     </header>
 
+            <details class="card" id="frameDirectCard" style="flex-shrink:0;max-height:50vh;overflow:auto;margin:8px 24px">
+              <summary><strong>Frame Direct</strong> · Experimental 6 GHz connection</summary>
+              <p>The Frame hosts the 6 GHz / 160 MHz network; the Valve USB adapter connects to it.
+                Each device keeps its existing internet connection. This mode does not share laptop internet.</p>
+              <p id="frameDirectStatus" role="status" aria-live="polite">Checking direct-link status…</p>
+              <label>Valve adapter <select id="frameDirectAdapter"></select></label>
+              <div class="hero-actions">
+                <button class="btn primary" id="frameDirectConnect">Connect Frame Direct</button>
+                <button class="btn secondary" id="frameDirectDisconnect">Disconnect</button>
+                <button class="btn secondary" id="frameDirectHotspot">Return to Hotspot</button>
+              </div>
+              <details>
+                <summary>Pair with the Frame's Wi-Fi network</summary>
+                <p>Use the Frame's direct-network credentials, not its login password or your home Wi-Fi password.
+                  Pairing is stored locally by NetworkManager. Nothing is sent to a cloud service.</p>
+                <form id="frameDirectPair" autocomplete="off">
+                  <label>Frame network name <input id="frameDirectSsid" required maxlength="32" /></label>
+                  <label>Frame access-point BSSID <input id="frameDirectBssid" required placeholder="00:11:22:33:44:55" /></label>
+                  <label>Frame network password <input id="frameDirectPassword" type="password" required minlength="8" maxlength="63" autocomplete="new-password" /></label>
+                  <button class="btn secondary" type="submit">Save pairing</button>
+                </form>
+              </details>
+              <p id="frameDirectMessage" role="status" aria-live="polite"></p>
+            </details>
+
+
+
     <!-- QR Modal -->
     <div id="qrModal" class="modal-overlay" style="display:none">
       <div class="modal-content">
@@ -855,6 +882,7 @@
 
   <script defer src="/assets/field_visibility.js"></script>
   <script defer src="/assets/ui.js"></script>
+  <script defer src="/assets/frame_direct.js"></script>
   <!-- Navigation state is owned by ui.js applyNavSelection/wireTabs: one
        delegated listener over live nav items, exactly one active at a time. -->
 </body>

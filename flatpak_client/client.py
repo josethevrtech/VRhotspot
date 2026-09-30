@@ -45,6 +45,10 @@ _REDACTED = "[redacted]"
 _AUTH_HEADER_NAMES = frozenset({"authorization", "x-api-token"})
 _PORTAL_REQUEST_METHODS = {
     "/v1/adapters": frozenset({"GET"}),
+    "/v1/frame-direct": frozenset({"GET"}),
+    "/v1/frame-direct/pair": frozenset({"POST"}),
+    "/v1/frame-direct/connect": frozenset({"POST"}),
+    "/v1/frame-direct/disconnect": frozenset({"POST"}),
     "/v1/adapters/readiness": frozenset({"GET"}),
     "/v1/config": frozenset({"GET", "POST"}),
     "/v1/config/reveal_passphrase": frozenset({"POST"}),
@@ -564,6 +568,7 @@ class LocalApiClient:
             method=normalized_method,
             authenticated=True,
             body=body,
+            timeout=120.0 if path in ('/v1/frame-direct/connect', '/v1/frame-direct/disconnect') else None,
         )
         if 300 <= response.status < 400:
             raise RedirectRejectedError(response.status)
@@ -618,6 +623,7 @@ class LocalApiClient:
         method: str,
         authenticated: bool,
         body: Mapping[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> HttpResponse:
         headers = {
             "Accept": "application/json",
@@ -643,7 +649,7 @@ class LocalApiClient:
             url=self._base_url + path,
             method=method,
             headers=headers,
-            timeout=self._timeout,
+            timeout=self._timeout if timeout is None else _validated_timeout(timeout),
             body=request_body,
         )
 

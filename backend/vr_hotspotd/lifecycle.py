@@ -3622,6 +3622,9 @@ def _repair_impl(
     inventory: Optional[Dict[str, Any]] = None,
     platform_is_pop: Optional[bool] = None,
 ):
+    from vr_hotspotd import frame_direct
+    if frame_direct.active():
+        return LifecycleResult('direct_disconnect_required', load_state())
     cfg = load_config()
     fw_cfg = _build_firewalld_cfg(cfg)
 
@@ -3700,6 +3703,9 @@ def start_hotspot(correlation_id: str = "start", overrides: Optional[dict] = Non
 
 
 def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict] = None, basic_mode: bool = False):
+    from vr_hotspotd import frame_direct
+    if frame_direct.active():
+        return LifecycleResult('direct_disconnect_required', load_state())
     ensure_config_file()
     state = load_state()
     if state.get("phase") in ("starting", "running") and is_running():
@@ -5031,6 +5037,9 @@ def stop_hotspot(correlation_id: str = "stop"):
 
 
 def _stop_hotspot_impl(correlation_id: str = "stop"):
+    from vr_hotspotd import frame_direct
+    if frame_direct.active():
+        return LifecycleResult('direct_disconnect_required', load_state())
     state = load_state()
     tuning_warnings = _safe_revert_tuning(state.get("tuning") if isinstance(state, dict) else None)
     net_warnings = _safe_revert_network_tuning(
@@ -5192,3 +5201,27 @@ def collect_capture_logs(
             pass
     
     return lines
+
+
+def frame_direct_action(action, body, correlation_id='frame-direct'):
+    """Serialize role changes with AP start/stop/repair and watchdog operations."""
+    from vr_hotspotd import frame_direct
+    with _OP_LOCK:
+        if action == 'pair':
+            return frame_direct.pair(body)
+        if action == 'connect' and set(body) == {'adapter'} and isinstance(body['adapter'], str):
+            return frame_direct.connect(
+                body['adapter'],
+                stop_ap=lambda: _stop_hotspot_impl(correlation_id),
+                start_ap=lambda: _start_hotspot_impl(correlation_id),
+                ap_running=bool(load_state().get('running') or is_running()),
+            )
+        if action == 'disconnect' and set(body) <= {'restore_hotspot'}:
+            restore = body.get('restore_hotspot', False)
+            if not isinstance(restore, bool):
+                raise frame_direct.DirectError('direct_invalid_request')
+            return frame_direct.disconnect(
+                start_ap=lambda: _start_hotspot_impl(correlation_id),
+                restore_hotspot=restore,
+            )
+        raise frame_direct.DirectError('direct_invalid_request')

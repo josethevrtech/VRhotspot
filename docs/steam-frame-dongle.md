@@ -108,3 +108,71 @@ reduced idle mean ping from 51.353 ms to 3.026 ms (100 probes, no loss):
 original default with profile value 0 and the prior live state with power_save on.
 Do not apply these settings to unrelated connections or promise the same gains on
 other hardware. Internet and Frame Control through the 5 GHz hotspot were verified.
+
+## Experimental Frame Direct mode
+
+The preceding sections record the earlier driver bring-up. VRhotspot now includes
+an explicit **Frame Direct** section below the app header, in both Basic and Pro
+views. This is a distinct operating mode: the Frame is the WPA3 AP, and the Valve
+USB adapter is a 6 GHz client. It does not create a 6 GHz PC AP or require Steam on
+that PC. The existing Frame AP service is still required on the headset.
+
+Pair using the Frame direct-network SSID, BSSID and password (not the account or
+home-Wi-Fi password). Select the Valve interface and choose **Connect Frame Direct**.
+The saved NetworkManager profile uses SAE, required PMF, hidden-SSID discovery,
+power saving disabled, no automatic connection, no default route and no imported
+DNS/routes. Laptop and headset retain their existing independent internet uplinks.
+**Internet relay over this direct link is not implemented**; use the ordinary
+hotspot with internet sharing for that workflow.
+
+The daemon accepts only a sysfs-verified USB 28de:2432 interface, refuses default
+uplinks and unrelated active connections, and serializes role changes with the AP
+lifecycle. It waits for NetworkManager readiness after AP shutdown, then verifies
+association, DHCP, 6 GHz and 160 MHz. Connection failure restores a previously
+running hotspot. **Disconnect** releases the direct link; **Return to Hotspot**
+starts the saved ordinary hotspot configuration. These transitions leave the
+laptop's uplink intact.
+
+The root-only pairing file is
+`/etc/NetworkManager/system-connections/vr-hotspot-frame-direct.nmconnection`
+(UUID `c463edeb-f2ee-48f3-bf4c-99fc7600341f`). Pairing values are never passed in
+command arguments, returned by status, or added to generic hotspot config exports.
+The non-secret root-only session journal is
+`/var/lib/vr-hotspot/frame-direct-session.json`. While this journal exists, ordinary
+AP start/stop/repair is blocked, including daemon-startup repair. The direct link
+can survive daemon restart; explicit Disconnect recovers an interrupted session.
+Autoconnect is deliberately disabled, so a reboot/replug may require Disconnect
+then Connect. Automatic suspend/replug recovery is not qualified.
+
+Authenticated loopback API:
+
+- `GET /v1/frame-direct`: sanitized pairing, adapter and link status.
+- `POST /v1/frame-direct/pair`: `ssid`, `bssid`, `passphrase`.
+- `POST /v1/frame-direct/connect`: `adapter`.
+- `POST /v1/frame-direct/disconnect`: optional boolean `restore_hotspot`.
+
+Do not put pairing secrets in shell arguments. Use the native form or an authenticated
+client that keeps them in memory. There is no root-daemon SSH key access or automatic
+credential extraction. A paired headset may need pairing again if its AP credentials
+change. Frame Control discovery/route preference remains independent of this feature.
+
+### Reference and product tests
+
+SteamMini reference: SteamOS 3.9.2, x86_64 Valve kernel 7.2.7, NetworkManager with
+IWD. Dongle was a managed client at 6135 MHz/160 MHz, with Ethernet default route
+preserved. Firmware SHA-256 matched the laptop's firmware. No reference machine
+settings were changed. At roughly -56 to -58 dBm, eight-second single-stream TCP
+samples measured **427.75 Mb/s toward Frame / 643.35 Mb/s reverse**; idle ICMP
+mean **3.131 ms**, maximum 5.601 ms, no loss in 100 probes.
+
+Installed ARM64 product mode: WPA3/PMF, DHCP and 6135 MHz/160 MHz verified; daemon
+restart preserved the link; Return to Hotspot restored channel 36/80 MHz; an
+unavailable-network test restored that hotspot automatically. The handoff test also
+exposed a NetworkManager readiness race, now addressed by a bounded readiness wait.
+At a weaker approximately -68 dBm placement, product-mode TCP measured **393.91 /
+349.85 Mb/s**, idle mean **2.777 ms**, maximum 5.578 ms, no loss in 50 probes.
+Loaded ping means were 8.455/15.350 ms, maxima 41.749/44.247 ms, no loss in 90 probes
+each. These are short TCP samples, not VR streaming certification, and unequal
+placements prevent an overall Valve parity claim. PHY rate is not application
+throughput. Sustained streaming, movement/obstruction, power cycles, sleep recovery,
+other distributions and complete offline internet relay remain unqualified.
