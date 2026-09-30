@@ -176,3 +176,12 @@ each. These are short TCP samples, not VR streaming certification, and unequal
 placements prevent an overall Valve parity claim. PHY rate is not application
 throughput. Sustained streaming, movement/obstruction, power cycles, sleep recovery,
 other distributions and complete offline internet relay remain unqualified.
+
+Sleep/wake observation: the direct AP and home-Wi-Fi SSH disappeared together;
+the owner confirmed the Frame had gone to sleep. After wake, explicit Disconnect
+then Connect succeeded at 6135 MHz/160 MHz with the saved pairing and the Frame's
+home-Wi-Fi internet route intact. Automatic wake reconnection is not implemented.
+An unavailable link keeps the session reserved until explicit Disconnect. This is
+one manual wake/reconnect test, not sustained unattended-link validation. Visible
+desktop-UI confirmation remains pending. Local suite: 1,872 passed, 5 skipped,
+4 subtests passed; GitHub CI passed for the implementation commit.
