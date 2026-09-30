@@ -20,7 +20,7 @@ nftables.
 
 - **Low-latency optimized** for VR streaming
 - **QoS profiles**: Ultra Low Latency, High Throughput, Balanced, Stability (VR default)
-- **Band preference**: 6 GHz → 5 GHz → 2.4 GHz with automatic fallback
+- **Automatic VR radio**: widest permitted 80/160 MHz AP block on 5/6 GHz; no automatic fallback below 80 MHz. See [channel selection](channel-selection.md).
 - **Wi-Fi 6/6E support** with auto-detection
 - **System tuning options**: CPU governor, power management, interrupt coalescing
 

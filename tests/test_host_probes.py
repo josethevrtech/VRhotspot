@@ -150,8 +150,8 @@ def test_preflight_hostapd_timeout_uses_version_fallback(monkeypatch):
     monkeypatch.setattr(host_probes.subprocess, "run", runner)
 
     assert preflight._hostapd_caps() == {
-        "sae": False,
-        "he": False,
+        "sae": None,
+        "he": None,
         "raw": "hostapd v2.9",
     }
     assert [argv[-1] for argv, _kwargs in calls] == ["-vv", "-v"]

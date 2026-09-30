@@ -1,3 +1,4 @@
+from vr_hotspotd.adapters.radio import apply_automatic, verify_automatic_link
 import logging
 import os
 import re
@@ -141,6 +142,7 @@ def _get_or_create_bootstrap_passphrase(*, cache_ttl_s: float = 300.0) -> str:
 
 
 _START_OVERRIDE_KEYS = {
+    "radio_auto",
     "ssid",
     "wpa2_passphrase",
     "band_preference",
@@ -1478,6 +1480,8 @@ def _select_ap_from_iw(
 
 def _startup_channel(cfg, ap_ifname, band, current_channel, width, warnings):
     """An optional pre-session choice never becomes a saved manual preference."""
+    if cfg.get('radio_auto') and band == cfg.get('band_preference'):
+        current_channel = None
     if not cfg.get('channel_auto_select') or current_channel not in (None, 0):
         return current_channel
     try:
@@ -1486,6 +1490,8 @@ def _startup_channel(cfg, ap_ifname, band, current_channel, width, warnings):
         selected = None
     if selected is None:
         warnings.append('channel_auto_selection_unavailable')
+        if band == cfg.get('band_preference'):
+            selected = cfg.get('_automatic_channel_fallback')
     return selected
 
 
@@ -3622,6 +3628,9 @@ def _repair_impl(
     inventory: Optional[Dict[str, Any]] = None,
     platform_is_pop: Optional[bool] = None,
 ):
+    from vr_hotspotd import frame_direct
+    if frame_direct.active():
+        return LifecycleResult('direct_disconnect_required', load_state())
     cfg = load_config()
     fw_cfg = _build_firewalld_cfg(cfg)
 
@@ -3700,6 +3709,9 @@ def start_hotspot(correlation_id: str = "start", overrides: Optional[dict] = Non
 
 
 def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict] = None, basic_mode: bool = False):
+    from vr_hotspotd import frame_direct
+    if frame_direct.active():
+        return LifecycleResult('direct_disconnect_required', load_state())
     ensure_config_file()
     state = load_state()
     if state.get("phase") in ("starting", "running") and is_running():
@@ -3753,7 +3765,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         engine={"ap_logs_tail": []},
     )
 
-    allow_fallback_40mhz = bool(cfg.get("allow_fallback_40mhz", False))
+    allow_fallback_40mhz = bool(cfg.get("allow_fallback_40mhz", False)) and not cfg.get("radio_auto", False)
     allow_dfs_channels = bool(cfg.get("allow_dfs_channels", False))
     firewall_backend = _snapshot_firewall_backend(host_facts_snapshot)
     platform_info = _snapshot_os_release(host_facts_snapshot)
@@ -3892,6 +3904,11 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
         if not a or not a.get("supports_ap"):
             raise RuntimeError("no_ap_capable_adapter_found")
 
+        cfg = apply_automatic(cfg, a)
+        if cfg.get('radio_auto'):
+            bp = cfg['band_preference']
+        if cfg.get('radio_auto') and bp == '5ghz' and cfg['channel_width'] != '80':
+            use_hostapd_nat = True
         active_uplink_interface = host_facts_snapshot.default_uplink.selected_interface
         _assert_snapshot_ap_adapter_is_safe(host_facts_snapshot, ap_ifname)
 
@@ -3947,7 +3964,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 platform_warnings.append("platform_pop_force_hostapd_nat_usb")
 
         # --- Basic Mode Enforcement ---
-        if basic_mode:
+        if basic_mode and not cfg.get("radio_auto", False):
             log.info("basic_mode_enforcement_active", extra={"adapter": ap_ifname, "band": bp})
             # (1) Basic Mode requires specified band (policy.BASIC_MODE_REQUIRED_BAND)
             if bp != BASIC_MODE_REQUIRED_BAND:
@@ -4017,6 +4034,11 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             if reselect_warnings:
                 prestart_warnings.extend(reselect_warnings)
             if ap_ifname != old_ifname:
+                cfg = apply_automatic(cfg, a)
+                if cfg.get('radio_auto'):
+                    bp = cfg['band_preference']
+                    if bp == '5ghz' and cfg['channel_width'] != '80':
+                        use_hostapd_nat = True
                 prep_retry = _prepare_ap_interface(
                     ap_ifname,
                     force_nm_disconnect=platform_is_pop,
@@ -4034,12 +4056,12 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 if not _ensure_iface_up(ap_ifname):
                     log.warning("ap_iface_not_up_post_reselect", extra={"ap_interface": ap_ifname})
 
-        if bp == "5ghz":
+        if bp == "5ghz" and not cfg.get("radio_auto", False):
             if not a.get("supports_80mhz"):
                 raise RuntimeError(f"adapter_lacks_80mhz_support_required_for_vr: {ap_ifname}")
 
         # Enforce 80MHz optimization for USB adapters on 5GHz (whether auto-selected or manual)
-        if bp == "5ghz" and a.get("bus") == "usb" and a.get("supports_5ghz"):
+        if bp == "5ghz" and not cfg.get("radio_auto", False) and a.get("bus") == "usb" and a.get("supports_5ghz"):
              log.info(f"enforcing_80mhz_optimization_on_usb_adapter: {ap_ifname}")
              enforced_channel_width = "80"
              # USB transport does not justify a forced RF channel. Preserve a
@@ -4193,7 +4215,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
     if tuning_warnings:
         start_warnings.extend(tuning_warnings)
 
-    if bp == "5ghz":
+    if bp == "5ghz" and not (cfg.get("radio_auto") and cfg.get("channel_width") != "80"):
         return _start_hotspot_5ghz_strict(
             cfg=cfg,
             inv=inv,
@@ -4435,6 +4457,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
             if latest_stdout or latest_stderr:
                 update_state(engine={"stdout_tail": latest_stdout, "stderr_tail": latest_stderr})
 
+    ap_info = verify_automatic_link(cfg, ap_info, start_warnings)
     if ap_info:
         detected_band = _band_from_freq_mhz(ap_info.freq_mhz) or bp
         affinity_pids = _collect_affinity_pids(
@@ -4589,6 +4612,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 expected_ap_ifname=retry_expected_ifname,
             )
 
+        ap_info_retry = verify_automatic_link(cfg, ap_info_retry, warnings)
         if ap_info_retry:
             detected_band = _band_from_freq_mhz(ap_info_retry.freq_mhz) or bp
             affinity_pids = _collect_affinity_pids(
@@ -4733,6 +4757,7 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
                 expected_ap_ifname=retry_expected_ifname,
             )
 
+        ap_info_retry = verify_automatic_link(cfg, ap_info_retry, warnings)
         if ap_info_retry:
             detected_band = _band_from_freq_mhz(ap_info_retry.freq_mhz) or bp
             affinity_pids = _collect_affinity_pids(
@@ -4808,10 +4833,10 @@ def _start_hotspot_impl(correlation_id: str = "start", overrides: Optional[dict]
 
     fallback_chain: List[Tuple[str, Optional[int], bool, str]] = []
 
-    if bridge_mode:
+    if bridge_mode or cfg.get("radio_auto"):
         revert_warnings = _safe_revert_tuning(tuning_state)
         warnings.extend(revert_warnings)
-        last_error = "ap_ready_timeout_bridge_mode"
+        last_error = "automatic_vr_start_failed" if cfg.get("radio_auto") else "ap_ready_timeout_bridge_mode"
         if start_failure_reason and start_failure_reason != "ap_ready_timeout":
             last_error = start_failure_reason
         state = update_state(
@@ -5031,6 +5056,9 @@ def stop_hotspot(correlation_id: str = "stop"):
 
 
 def _stop_hotspot_impl(correlation_id: str = "stop"):
+    from vr_hotspotd import frame_direct
+    if frame_direct.active():
+        return LifecycleResult('direct_disconnect_required', load_state())
     state = load_state()
     tuning_warnings = _safe_revert_tuning(state.get("tuning") if isinstance(state, dict) else None)
     net_warnings = _safe_revert_network_tuning(
@@ -5192,3 +5220,27 @@ def collect_capture_logs(
             pass
     
     return lines
+
+
+def frame_direct_action(action, body, correlation_id='frame-direct'):
+    """Serialize role changes with AP start/stop/repair and watchdog operations."""
+    from vr_hotspotd import frame_direct
+    with _OP_LOCK:
+        if action == 'pair':
+            return frame_direct.pair(body)
+        if action == 'connect' and set(body) == {'adapter'} and isinstance(body['adapter'], str):
+            return frame_direct.connect(
+                body['adapter'],
+                stop_ap=lambda: _stop_hotspot_impl(correlation_id),
+                start_ap=lambda: _start_hotspot_impl(correlation_id),
+                ap_running=bool(load_state().get('running') or is_running()),
+            )
+        if action == 'disconnect' and set(body) <= {'restore_hotspot'}:
+            restore = body.get('restore_hotspot', False)
+            if not isinstance(restore, bool):
+                raise frame_direct.DirectError('direct_invalid_request')
+            return frame_direct.disconnect(
+                start_ap=lambda: _start_hotspot_impl(correlation_id),
+                restore_hotspot=restore,
+            )
+        raise frame_direct.DirectError('direct_invalid_request')

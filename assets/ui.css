@@ -1738,3 +1738,35 @@ body[data-ui-mode="basic"] #btnShowQrBasic[aria-pressed="true"] {
     width: 100%;
   }
 }
+
+/* A headset connection uses the same setup; AP credentials/tuning are irrelevant. */
+body[data-connection-kind="headset"] [data-field="ssid"],
+body[data-connection-kind="headset"] [data-field="wpa2_passphrase"],
+body[data-connection-kind="headset"] [data-field="band_preference"],
+body[data-connection-kind="headset"] [data-field="ap_security"],
+body[data-connection-kind="headset"] [data-field="enable_internet"],
+body[data-connection-kind="headset"] [data-field="qos_preset"],
+body[data-connection-kind="headset"] .basic-connect-inline,
+body[data-connection-kind="headset"] .adapter-readiness-card,
+body[data-connection-kind="headset"] #basicInfoBanner,
+body[data-connection-kind="headset"] #basicChannelBanner,
+body[data-connection-kind="headset"] #adapterHint {
+  display: none !important;
+}
+body[data-connection-kind="headset"] .basic-guided-step[hidden] {
+  display: none !important;
+}
+body[data-connection-kind="headset"] .pro-guided-step[hidden],
+body[data-connection-kind="headset"] #proConnectionQuality {
+  display: none !important;
+}
+
+/* Manual network credentials are an advanced setup tool, never a Basic task. */
+body:not([data-ui-mode="advanced"]) #headsetPairing {
+  display: none !important;
+}
+
+/* Capability and connection rules apply in every layout. */
+[data-field][data-inapplicable] { display: none !important; }
+
+#automaticRadioControl[hidden] { display: none !important; }

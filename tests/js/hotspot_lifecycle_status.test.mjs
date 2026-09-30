@@ -22,6 +22,7 @@ function apiPayload(path, method, stub) {
         band: '5ghz',
         platform: { os: { id: 'cachyos', version_id: 'rolling' } },
         telemetry: { clients: [] },
+        ...stub.status,
       },
     };
   }
@@ -54,6 +55,7 @@ function apiPayload(path, method, stub) {
         debug: false,
         wifi_power_save_disable: false,
         optimized_no_virt: false,
+        ...stub.config,
       },
     };
   }
@@ -77,6 +79,7 @@ function apiPayload(path, method, stub) {
           supports_6ghz: false,
           regdom: { country: 'US' },
           reasons: ['USB adapter', '5 GHz AP capable'],
+          ...stub.adapter,
         }],
         recommended: 'wlan1',
       },
@@ -93,8 +96,13 @@ function installBrowserStubs(window, stub) {
   window.fetch = async (url, init) => {
     const method = (init && init.method) || 'GET';
     const path = new URL(String(url), 'http://127.0.0.1:8732').pathname;
+    if (method === 'POST' && path === '/v1/config') {
+      stub.saves ||= [];
+      stub.saves.push(JSON.parse(init.body));
+    }
     const gate = stub.gates.get(`${method} ${path}`);
     if (gate) await gate;
+    if (method === 'POST' && path === '/v1/config') stub.config = {...stub.config, ...JSON.parse(init.body)};
     const payload = apiPayload(path, method, stub);
     const body = JSON.stringify(payload);
     return {
@@ -411,4 +419,94 @@ test('lifecycle actions render optimistic states that authoritative refresh repl
 
   assert.deepEqual(errors, []);
   dom.window.close();
+});
+
+
+test('automatic radio stays resolved in Basic and Pro and follows capability updates immediately', async () => {
+  const stub = {
+    status: {running:false,phase:'stopped'}, gates:new Map(),
+    config:{radio_auto:true,country:'CA'},
+    adapter:{supports_80mhz:true,supports_6ghz:true,supports_6ghz_ap:true,
+      automatic_radio:{band:'6ghz',width_mhz:160,channel:5,security:'wpa3_sae'}},
+  };
+  const {dom,window,document} = await bootPortal(stub);
+  try {
+    window.stopActivePolling();
+    await window.loadAdapters();
+    const field = id => document.getElementById(id);
+    for (const mode of ['basic','advanced']) {
+      window.writeUiMode(mode);
+      window.applyUiMode(mode,{skipAdapters:true});
+      assert.equal(field('channel_width').value,'160');
+      assert.equal(field('band_preference').value,'6ghz');
+      assert.equal(field('ap_security').value,'wpa3_sae');
+      assert.equal(field('ap_security').disabled,true);
+      assert.equal(field('country').value,'CA');
+      assert.match(field('automaticRadioSummary').textContent,/160 MHz/);
+    }
+    window.applyVrProfile('balanced');
+    assert.equal(field('channel_width').value,'160');
+    assert.equal(field('ap_security').value,'wpa3_sae');
+    stub.adapter.automatic_radio = {band:'5ghz',width_mhz:80,channel:36,security:'wpa2'};
+    await window.loadAdapters();
+    assert.equal(field('channel_width').value,'80');
+    assert.equal(field('band_preference').value,'5ghz');
+    assert.equal(field('ap_security').value,'wpa2');
+    assert.equal(field('ap_security').disabled,true);
+    stub.adapter.automatic_radio = null;
+    await window.loadAdapters();
+    assert.match(field('automaticRadioSummary').textContent,/at least 80 MHz/);
+    field('radio_auto').checked=false;
+    field('radio_auto').dispatchEvent(new window.Event('change',{bubbles:true}));
+    assert.equal(field('channel_width').disabled,false);
+    assert.match(field('automaticRadioSummary').textContent,/Manual/);
+  } finally {dom.window.close();}
+});
+
+test('saving cannot overwrite a newer edit and queued saves keep their order', async () => {
+  const stub = {status:{running:false,phase:'stopped'},gates:new Map()};
+  const {dom,window,document} = await bootPortal(stub);
+  try {
+    window.stopActivePolling();
+    window.writeUiMode('advanced'); window.applyUiMode('advanced',{skipAdapters:true});
+    const ssid = document.getElementById('ssid');
+    ssid.value='First edit'; window.setDirty(true);
+    const release = gateRequest(stub,'POST /v1/config');
+    const first = window.saveHotspotConfiguration();
+    await tick(window,10);
+    ssid.value='Newer edit'; window.setDirty(true);
+    release(); await first;
+    assert.equal(ssid.value,'Newer edit');
+    assert.equal(document.getElementById('dirty').textContent,'Unsaved changes');
+    const releaseSecond = gateRequest(stub,'POST /v1/config');
+    const second = window.saveHotspotConfiguration();
+    await tick(window,10);
+    ssid.value='Final edit'; window.setDirty(true);
+    const third = window.saveHotspotConfiguration();
+    await tick(window,10);
+    assert.equal(stub.saves.length,2,'third POST must wait for second');
+    releaseSecond(); await second; await third;
+    assert.deepEqual(stub.saves.map(c=>c.ssid),['First edit','Newer edit','Final edit']);
+    assert.equal(ssid.value,'Final edit');
+    assert.equal(document.getElementById('dirty').textContent,'');
+  } finally {dom.window.close();}
+});
+
+
+test('Pro reflects a profile loaded from configuration immediately', async () => {
+  const stub={status:{running:false,phase:'stopped'},gates:new Map()};
+  const {dom,window,document}=await bootPortal(stub);
+  try {
+    window.stopActivePolling();
+    window.eval(await readAsset('assets/pro_guided_workflow.js'));
+    const toggle=document.getElementById('uiModeToggle');
+    toggle.checked=true; toggle.dispatchEvent(new window.Event('change',{bubbles:true}));
+    await waitFor(window,()=>document.getElementById('proPerformanceDescription'),'profile description');
+    window.setDirty(false);
+    window.applyConfig({...stub.config,qos_preset:'off',ap_adapter:'wlan1'});
+    assert.match(document.getElementById('proPerformanceDescription').textContent,/Standard is selected/);
+    window.setDirty(false);
+    window.applyConfig({...stub.config,qos_preset:'high_throughput',ap_adapter:'wlan1'});
+    assert.equal(document.getElementById('btnApplyVrProfileHigh').getAttribute('aria-pressed'),'true');
+  } finally {dom.window.close();}
 });

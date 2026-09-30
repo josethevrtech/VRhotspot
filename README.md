@@ -146,7 +146,7 @@ sudo bash /tmp/vrhotspot-uninstall.sh
 More detail: [Platform compatibility guide](docs/PLATFORM_COMPATIBILITY.md).
 
 You'll also need a Wi-Fi adapter that supports AP mode — see
-[Supported Wi-Fi adapters](docs/wifi-adapters.md) for tested recommendations.
+[Supported Wi-Fi adapters](docs/wifi-adapters.md) for tested connections, compatible candidates and remaining validation.
 
 ---
 

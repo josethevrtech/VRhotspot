@@ -49,7 +49,7 @@ def test_guided_interface_reuses_existing_live_control_ids() -> None:
 def test_guided_setup_uses_five_plain_language_steps() -> None:
     source = GUIDED_JS.read_text(encoding="utf-8")
 
-    assert "'Set Up Hotspot'" in source
+    assert "'Set Up Connection'" in source
     assert "'Choose Wi-Fi adapter'" in source
     assert "'Choose performance mode'" in source
     assert "'Hotspot name'" in source

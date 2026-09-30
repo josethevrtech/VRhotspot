@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from vr_hotspotd import host_probes, os_release
+from vr_hotspotd.adapters.identity import usb_identity, read_attribute
+from vr_hotspotd.adapters.radio import non_dfs_ap_options
 from vr_hotspotd.host_facts import (
     AdapterFacts,
     DefaultRouteFact,
@@ -77,6 +79,8 @@ class SystemSnapshotClock:
 def _default_sysfs_reader(path: str) -> Optional[str]:
     if not os.path.lexists(path):
         return None
+    if os.path.basename(path) in {"idVendor", "idProduct", "product"}:
+        return read_attribute(path)
     return os.path.realpath(path)
 
 
@@ -449,6 +453,8 @@ class _SnapshotCollector:
             supports_80mhz=supports_80mhz if structurally_complete else None,
             supports_wifi6=supports_wifi6 if structurally_complete else None,
             supports_ap_managed_concurrency=concurrency,
+            non_dfs_ap_options=non_dfs_ap_options(capture.output) if structurally_complete else (),
+            supports_6ghz_ap=host_probes.supports_6ghz_ap(capture.output) if structurally_complete else None,
             frequencies=frequencies,
             source_probe_id=probe_id,
         )
@@ -806,7 +812,7 @@ class _SnapshotCollector:
         for interface in iw_dev.interfaces:
             phy = phy_by_name.get(interface.phy or "")
             reg = regulatory_by_phy.get(interface.phy or "")
-            bus, sysfs_probe = self._capture_adapter_bus(interface.ifname)
+            bus, sysfs_probe, identity = self._capture_adapter_bus(interface.ifname)
             source_ids = [iw_dev.source_probe_id]
             if phy is not None:
                 source_ids.append(phy.source_probe_id)
@@ -833,11 +839,12 @@ class _SnapshotCollector:
                         reg.source if reg else ("global" if regulatory.global_country else None)
                     ),
                     source_probe_ids=tuple(source_ids),
+                    **identity,
                 )
             )
         return tuple(adapters)
 
-    def _capture_adapter_bus(self, ifname: str) -> Tuple[str, Optional[str]]:
+    def _capture_adapter_bus(self, ifname: str) -> Tuple[str, Optional[str], dict]:
         probe_id = f"sysfs.adapter.{_bounded_text(ifname, 64)}.device"
         if not _VALID_IFNAME_RE.match(ifname):
             self._add_error(
@@ -845,7 +852,7 @@ class _SnapshotCollector:
                 "parse",
                 "interface name is unsafe for a sysfs lookup",
             )
-            return "unknown", None
+            return "unknown", None, {}
 
         path = f"/sys/class/net/{ifname}/device"
         started = self._clock.monotonic()
@@ -876,6 +883,8 @@ class _SnapshotCollector:
             self._add_error(probe_id, "missing", exc)
         except Exception as exc:
             self._add_error(probe_id, "io", exc)
+        bus = _bus_from_sysfs_target(target)
+        identity = usb_identity(target, self._sysfs_reader) if bus == "usb" and target else {}
         completed = self._clock.monotonic()
         self._records.append(
             self._probe_record(
@@ -891,7 +900,7 @@ class _SnapshotCollector:
                 output_truncated=truncated,
             )
         )
-        return _bus_from_sysfs_target(target), probe_id
+        return bus, probe_id, identity
 
     def _capture_service(
         self,

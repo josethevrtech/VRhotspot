@@ -162,6 +162,8 @@ def _build_snapshot(*, response_overrides=None, tool_paths=None):
     runner = FakeRunner(responses)
     paths = TOOL_PATHS if tool_paths is None else tool_paths
     sysfs_targets = {
+        "/devices/pci0000:00/0000:00:14.0/usb1/1-2/idVendor": "28de",
+        "/devices/pci0000:00/0000:00:14.0/usb1/1-2/idProduct": "2432",
         "/sys/class/net/wlan0/device": "/devices/pci0000:00/0000:00:14.3",
         "/sys/class/net/wlan1/device": (
             "/devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.0"
@@ -563,3 +565,13 @@ def test_malformed_phy_output_produces_unknown_capabilities_not_false_facts():
     assert ("iw.phy.phy1", "parse") in {
         (item.probe_id, item.kind) for item in snapshot.probe_errors
     }
+
+
+def test_usb_identity_is_captured_in_snapshot_without_projection_reprobe():
+    from vr_hotspotd.adapters.inventory import get_adapters
+    snapshot, _ = _build_snapshot()
+    adapter = next(a for a in snapshot.adapters if a.ifname == "wlan1")
+    assert adapter.usb_id == "28de:2432"
+    assert adapter.display_name == "Steam Frame USB"
+    result = get_adapters(host_facts_snapshot=snapshot)
+    assert next(a for a in result["adapters"] if a["ifname"] == "wlan1")["display_name"] == "Steam Frame USB"

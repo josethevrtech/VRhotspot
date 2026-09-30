@@ -5,6 +5,7 @@ window.UI_FIELD_VISIBILITY = {
   ap_security: 'basic',
   country: 'basic',
   ap_adapter: 'basic',
+  radio_auto: 'basic',
   enable_internet: 'basic',
   qos_preset: 'basic',
   channel_6g: 'advanced',
@@ -511,6 +512,7 @@ window.UI_FIELD_VISIBILITY = {
       primary.classList.add('primary');
       primary.dataset.proServiceAction = 'start';
     }
+    window.headsetConnection?.pro(state.name);
   }
 
   function buildServiceCard(statusCard) {

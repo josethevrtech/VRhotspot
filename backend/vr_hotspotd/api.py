@@ -29,6 +29,7 @@ from vr_hotspotd.config import (
     write_config_file,
 )
 from vr_hotspotd.lifecycle import (
+    frame_direct_action,
     repair,
     start_hotspot,
     stop_hotspot,
@@ -68,6 +69,7 @@ from vr_hotspotd.diagnostics.vendor_provenance import (
 )
 from vr_hotspotd import __version__
 from vr_hotspotd import telemetry
+from vr_hotspotd import frame_direct
 from vr_hotspotd.host_facts_builder import build_host_facts_snapshot
 from vr_hotspotd.state import load_state
 
@@ -76,6 +78,7 @@ streaming_capture = StreamingCaptureManager(collect_streaming_snapshot)
 
 # Keep this tight: what the UI is allowed to change on-disk via /v1/config.
 _CONFIG_MUTABLE_KEYS = {
+    "radio_auto",
     "ssid",
     "wpa2_passphrase",
     "band_preference",
@@ -137,6 +140,7 @@ _CONFIG_MUTABLE_KEYS = {
 
 # One-shot start overrides (not persisted).
 _START_OVERRIDE_KEYS = {
+    "radio_auto",
     "ssid",
     "wpa2_passphrase",
     "band_preference",
@@ -199,6 +203,7 @@ _REDACTED_PASSPHRASE_VALUES = {
 
 # Type coercion (robustness vs. clients sending "true"/"false"/"1"/"0")
 _BOOL_KEYS = {
+    "radio_auto",
     "optimized_no_virt",
     "enable_internet",
     "wifi_power_save_disable",
@@ -350,7 +355,7 @@ def _apply_asset_version(html: str) -> str:
     version = quote(SERVER_VERSION, safe="")
     if not version:
         return html
-    for asset in ("ui.css", "ui.js"):
+    for asset in ("ui.css", "ui.js", "frame_direct.js"):
         html = html.replace(f'/assets/{asset}"', f'/assets/{asset}?v={version}"')
         html = html.replace(f"/assets/{asset}'", f"/assets/{asset}?v={version}'")
     return html
@@ -383,6 +388,7 @@ _ASSET_CONTENT_TYPES = {
     "ui.css": "text/css; charset=utf-8",
     "field_visibility.js": "application/javascript; charset=utf-8",
     "ui.js": "application/javascript; charset=utf-8",
+    "frame_direct.js": "application/javascript; charset=utf-8",
     "qrcode.js": "application/javascript; charset=utf-8",
     "chart.js": "application/javascript; charset=utf-8",
     "index.html": "text/html; charset=utf-8",
@@ -1372,6 +1378,10 @@ class APIHandler(BaseHTTPRequestHandler):
             self._respond(200, self._envelope(correlation_id=cid, data=st))
             return
 
+        if path == '/v1/frame-direct':
+            self._respond(200, self._envelope(correlation_id=cid, data=frame_direct.status()))
+            return
+
         if path == "/v1/adapters":
             snapshot = build_host_facts_snapshot(operation_kind="adapter_inventory")
             inventory = get_adapters(host_facts_snapshot=snapshot)
@@ -1610,6 +1620,19 @@ class APIHandler(BaseHTTPRequestHandler):
 
         body, body_warnings = self._read_json_body()
 
+        if path.startswith('/v1/frame-direct/'):
+            try:
+                if body_warnings or _qs:
+                    raise frame_direct.DirectError('direct_invalid_request')
+                data = frame_direct_action(path.rsplit('/', 1)[-1], body, cid)
+                self._respond(200, self._envelope(correlation_id=cid, data=data))
+            except frame_direct.DirectError as exc:
+                self._respond(409, self._envelope(correlation_id=cid, result_code=str(exc)))
+            except OSError:
+                self._respond(500, self._envelope(correlation_id=cid,
+                                                result_code='direct_storage_failed'))
+            return
+
         if path in ("/v1/diagnostics/streaming", "/v1/diagnostics/streaming/mark", "/v1/diagnostics/streaming/stop"):
             try:
                 if body_warnings or _qs:
@@ -1693,12 +1716,12 @@ class APIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/v1/repair":
-            repair(correlation_id=cid)
+            res = repair(correlation_id=cid)
             self._respond(
                 200,
                 self._envelope(
                     correlation_id=cid,
-                    result_code="repaired",
+                    result_code=getattr(res, 'code', 'repaired'),
                     data=self._status_view(include_logs=False),
                     warnings=body_warnings,
                 ),

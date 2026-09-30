@@ -69,6 +69,8 @@ jobs:
             tests/js/pro_guided_mode_transition.test.mjs \
             tests/js/pro_guided_full_portal_integration.test.mjs \
             tests/js/hotspot_lifecycle_status.test.mjs \
+            tests/js/headset_connection_ui.test.mjs \
+            tests/js/adapter_options_stability.test.mjs \
             tests/js/tx_power_form.test.mjs \
             tests/js/streaming_capture_ui.test.mjs
 

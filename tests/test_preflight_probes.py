@@ -103,7 +103,7 @@ def test_hostapd_version_probe_preserves_capability_inference(monkeypatch):
     ]
 
 
-def test_hostapd_version_probe_keeps_v_fallback_and_negative_caps(monkeypatch):
+def test_hostapd_version_banner_keeps_unlisted_features_unknown(monkeypatch):
     calls = []
     monkeypatch.setattr(preflight, "_resolve_hostapd_path", lambda: "/usr/sbin/hostapd")
 
@@ -118,8 +118,8 @@ def test_hostapd_version_probe_keeps_v_fallback_and_negative_caps(monkeypatch):
     result = preflight._hostapd_caps()
 
     assert result == {
-        "sae": False,
-        "he": False,
+        "sae": None,
+        "he": None,
         "raw": "hostapd v2.9",
     }
     assert [argv[-1] for argv, _timeout in calls] == ["-vv", "-v"]

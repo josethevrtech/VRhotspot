@@ -556,6 +556,29 @@
                   <button class="btn sm" id="btnReloadAdapters">Rescan</button>
                 </div>
                 <div class="small mt-6" id="adapterHint"></div>
+                <div id="automaticRadio" class="mt-12">
+                  <label class="tog" id="automaticRadioControl"><input type="checkbox" id="radio_auto" checked /> Automatically choose Wi-Fi settings</label>
+                  <div class="hint" id="automaticRadioSummary" aria-live="polite"></div>
+                </div>
+                <div id="connectionPurposeFields" hidden>
+                  <label for="connectionPurpose" class="mt-12">Use this adapter to</label>
+                  <select id="connectionPurpose">
+                    <option value="hotspot">Share this PC's Wi-Fi / internet</option>
+                    <option value="headset">Connect to a paired headset</option>
+                  </select>
+                  <p id="connectionPurposeHint" class="small mt-6"></p>
+                  <details id="headsetPairing" class="small mt-12" hidden>
+                    <summary>Manual headset pairing · Advanced</summary>
+                    <p>Enter the headset's direct-network details once. Your saved hotspot settings stay separate.</p>
+                    <label for="headsetSsid">Headset network name</label>
+                    <input id="headsetSsid" maxlength="32" autocomplete="off" />
+                    <label for="headsetBssid">Access-point address (BSSID)</label>
+                    <input id="headsetBssid" placeholder="00:11:22:33:44:55" autocomplete="off" />
+                    <label for="headsetPassword">Network password</label>
+                    <input id="headsetPassword" type="password" minlength="8" maxlength="63" autocomplete="new-password" />
+                    <button class="btn secondary mt-12" id="saveHeadsetPairing" type="button">Save pairing</button>
+                  </details>
+                </div>
               </div>
 
             </div>
@@ -621,8 +644,8 @@
               <div class="form-group" data-field="bridge_mode">
                 <label class="tog"><input type="checkbox" id="bridge_mode" /> Bridge Mode</label>
                 <div class="form-row two-col mt-8">
-                  <input id="bridge_name" placeholder="vrbr0" />
-                  <input id="bridge_uplink" placeholder="eth0" />
+                  <input data-field="bridge_name" id="bridge_name" placeholder="vrbr0" />
+                  <input data-field="bridge_uplink" id="bridge_uplink" placeholder="eth0" />
                 </div>
               </div>
 
@@ -630,9 +653,9 @@
                 <label>Firewall Integration</label>
                 <div class="tog-group">
                   <label class="tog"><input type="checkbox" id="firewalld_enabled" /> Enabled</label>
-                  <label class="tog"><input type="checkbox" id="firewalld_enable_masquerade" /> Masq</label>
-                  <label class="tog"><input type="checkbox" id="firewalld_enable_forward" /> Fwd</label>
-                  <label class="tog"><input type="checkbox" id="firewalld_cleanup_on_stop" /> Cleanup</label>
+                  <label class="tog" data-field="firewalld_enable_masquerade"><input type="checkbox" id="firewalld_enable_masquerade" /> Masq</label>
+                  <label class="tog" data-field="firewalld_enable_forward"><input type="checkbox" id="firewalld_enable_forward" /> Fwd</label>
+                  <label class="tog" data-field="firewalld_cleanup_on_stop"><input type="checkbox" id="firewalld_cleanup_on_stop" /> Cleanup</label>
                 </div>
               </div>
 
@@ -663,7 +686,7 @@
                 <div class="tog-group vertical">
                   <label class="tog"><input type="checkbox" id="wifi_power_save_disable" /> Disable Wi-Fi Power
                     Save</label>
-                  <label class="tog"><input type="checkbox" id="usb_autosuspend_disable" /> Disable USB
+                  <label class="tog" data-field="usb_autosuspend_disable"><input type="checkbox" id="usb_autosuspend_disable" /> Disable USB
                     autosuspend</label>
                   <label class="tog"><input type="checkbox" id="cpu_governor_performance" /> CPU Performance
                     Mode</label>
@@ -855,6 +878,7 @@
 
   <script defer src="/assets/field_visibility.js"></script>
   <script defer src="/assets/ui.js"></script>
+  <script defer src="/assets/frame_direct.js"></script>
   <!-- Navigation state is owned by ui.js applyNavSelection/wireTabs: one
        delegated listener over live nav items, exactly one active at a time. -->
 </body>

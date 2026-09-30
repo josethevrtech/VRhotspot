@@ -169,6 +169,7 @@ def test_inventory_consumes_injected_snapshot_without_direct_probes(monkeypatch)
         "_phy_supports_ap",
         "_phy_supports_wifi6",
         "_phy_supports_80mhz",
+        "_phy_supports_6ghz_ap",
         "_phy_band_support",
         "_detect_bus_type",
     ):
@@ -210,6 +211,8 @@ def test_snapshot_inventory_matches_known_good_legacy_output(monkeypatch):
     monkeypatch.setattr(inventory, "_phy_supports_ap", lambda _phy: True)
     monkeypatch.setattr(inventory, "_phy_supports_wifi6", lambda _phy: True)
     monkeypatch.setattr(inventory, "_phy_supports_80mhz", lambda _phy: True)
+    monkeypatch.setattr(inventory, "_phy_supports_6ghz_ap", lambda _phy: None)
+    monkeypatch.setattr(inventory, "_phy_automatic_radio", lambda _phy: None)
     monkeypatch.setattr(
         inventory,
         "_phy_band_support",
