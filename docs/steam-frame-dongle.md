@@ -67,3 +67,14 @@ latency, sleep recovery, or 6 GHz behavior without measured comparative tests.
 Use a separate AP-capable adapter for this test rather than replacing the active
 uplink. If USB removal or startup fails, release only the selected interface and
 retain the user's uplink. Do not globally disable NetworkManager, rfkill or firewall.
+
+## Wi-Fi 6 capability detection correction
+
+A normal hostapd version banner lists neither HE nor SAE build options. Treating
+missing words as `false` silently disabled Wi-Fi 6 even on the native HE-enabled
+build. The probe now reports `unknown` for unlisted features and retains explicit
+positive markers. Existing policy still handles genuine explicit negative evidence.
+This does not assume support or bypass AP/channel checks: startup can still reject
+an unsupported configuration. After the correction, the tested dongle successfully
+started through VRhotspot with `--wifi6`, at 5 GHz/80 MHz. Client negotiation and
+throughput remain separate tests.

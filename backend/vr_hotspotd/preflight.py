@@ -152,8 +152,10 @@ def probe_hostapd_capabilities(hostapd: str) -> Dict[str, Any]:
         return caps
 
     caps["raw"] = out[:800]
-    caps["sae"] = bool(_HOSTAPD_SAE_RE.search(out)) or ("wpa3" in out.lower())
-    caps["he"] = bool(_HOSTAPD_HE_RE.search(out))
+    # Standard hostapd version banners do not enumerate build features.
+    # Absence of a label is unknown, not evidence that SAE/HE is missing.
+    caps["sae"] = True if (_HOSTAPD_SAE_RE.search(out) or "wpa3" in out.lower()) else None
+    caps["he"] = True if _HOSTAPD_HE_RE.search(out) else None
     return caps
 
 
