@@ -247,6 +247,7 @@ test('paired headset reuses setup and existing Basic/Pro controls without a sepa
   assert.equal(document.getElementById('connectionPurpose').value, 'headset');
   assert.equal(document.getElementById('connectionPurpose').disabled, true);
   assert.equal(document.getElementById('headsetPairing').open, false);
+  assert.equal(document.getElementById('headsetPairing').hidden, true);
   for (const id of ['basicGuidedProfileSlot', 'basicGuidedSsidSlot', 'basicGuidedPassSlot']) {
     assert.equal(document.getElementById(id).closest('.basic-guided-step').hidden, true);
   }
@@ -254,11 +255,15 @@ test('paired headset reuses setup and existing Basic/Pro controls without a sepa
   toggle.checked = true; toggle.dispatchEvent(new window.Event('change', {bubbles: true}));
   await waitFor(window, () => document.body.dataset.proGuidedStage === 'ready', 'Pro connection setup');
   assert.equal(document.querySelector('.pro-guided-header-copy h2').textContent, 'Set Up Connection');
+  assert.equal(document.getElementById('headsetPairing').hidden, false);
+  document.getElementById('headsetPairing').open = true;
   for (const id of ['proStepPerformance', 'proStepHotspot', 'proStepAdvanced']) {
     assert.equal(document.getElementById(id).closest('.pro-guided-step').hidden, true);
   }
   toggle.checked = false; toggle.dispatchEvent(new window.Event('change', {bubbles: true}));
   await tick(window, 80);
+  assert.equal(document.getElementById('headsetPairing').hidden, true);
+  assert.equal(document.getElementById('headsetPairing').open, false);
   // Existing single action is the real control, not a second set of buttons.
   document.getElementById('btnStartBasic').click();
   await waitFor(window, () => basicView(document).button === 'Connect', 'disconnected action');
@@ -286,6 +291,25 @@ test('disconnected user can select ordinary sharing and recover its existing set
   assert.equal(proView(document).button, 'Start Hotspot');
   assert.equal(document.getElementById('basicGuidedSsidSlot').closest('.basic-guided-step').hidden, false);
   assert.equal(document.getElementById('headsetPairing').hidden, true);
+  assert.ok(!stub.requests.some(r => r.method === 'POST' && r.path.startsWith('/v1/frame-direct/')));
+  for (const observer of window.reviewObservers) observer.disconnect();
+  dom.window.close();
+});
+
+
+test('unpaired Basic shows a setup state without opening technical fields or connecting', async () => {
+  const stub = {status: {running: false, phase: 'stopped'}, gates: new Map()};
+  const {dom, window, document} = await bootPortal(stub);
+  window.stopActivePolling();
+  stub.direct = {active: false, connected: false, paired: false, adapters: ['wlan1']};
+  const selector = document.getElementById('connectionPurpose');
+  selector.value = 'headset'; selector.dispatchEvent(new window.Event('change'));
+  await tick(window, 100);
+  assert.equal(document.getElementById('headsetPairing').hidden, true);
+  assert.equal(basicView(document).label, 'Setup needed');
+  assert.equal(basicView(document).buttonDisabled, true);
+  await window.startHotspot();
+  assert.equal(document.getElementById('headsetPairing').open, false);
   assert.ok(!stub.requests.some(r => r.method === 'POST' && r.path.startsWith('/v1/frame-direct/')));
   for (const observer of window.reviewObservers) observer.disconnect();
   dom.window.close();

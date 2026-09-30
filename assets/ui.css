@@ -1760,3 +1760,8 @@ body[data-connection-kind="headset"] .pro-guided-step[hidden],
 body[data-connection-kind="headset"] #proConnectionQuality {
   display: none !important;
 }
+
+/* Manual network credentials are an advanced setup tool, never a Basic task. */
+body:not([data-ui-mode="advanced"]) #headsetPairing {
+  display: none !important;
+}

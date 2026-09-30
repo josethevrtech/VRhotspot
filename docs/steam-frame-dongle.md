@@ -118,10 +118,13 @@ paired headset**. There is no separate Frame/Valve dashboard. The transport is
 still experimental: the Frame is the WPA3 AP and the USB adapter is a 6 GHz client. It does not create a 6 GHz PC AP or require Steam on
 that PC. The existing Frame AP service is still required on the headset.
 
-For first-time pairing, expand **Manage headset pairing** below the adapter and
-enter the direct-network SSID, BSSID and password (not the account or home-Wi-Fi
-password). Saved pairing stays collapsed. Use the ordinary **Connect/Disconnect**
-button; the same status area reports the link. Irrelevant AP name/password and
+Basic mode hides all manual pairing fields. A saved headset uses the ordinary
+**Connect/Disconnect** button; an unpaired headset shows **Setup needed** and
+explains that first-time setup is available in Pro. Automatic first-time pairing
+is not implemented yet. In Pro, expand **Manual headset pairing · Advanced** below
+the adapter and enter the direct-network SSID, BSSID and password (not the account
+or home-Wi-Fi password). Returning to Basic closes and hides this form. Use the
+ordinary **Connect/Disconnect** button; the same status area reports the link. Irrelevant AP name/password and
 hotspot-tuning steps are hidden rather than duplicated. Pro includes radio width.
 To return to normal internet sharing, disconnect, select **Share this PC's Wi-Fi /
 internet**, then use the normal hotspot start button. The underlying network roles
@@ -214,3 +217,8 @@ are not modified by the layout update.
 
 Validation for the unified UI: 1,875 pytest tests passed, 2 skipped, 4 subtests;
 35 Node UI interaction tests passed, including headset connection routing.
+
+Basic pairing simplification: all 36 Node UI tests pass, including paired and
+unpaired Basic states and Basic/Pro transitions. This change only affects UI
+assets; it does not change saved pairing or radio configuration. The deployed
+three-file backup is `/var/lib/vr-hotspot/basic-pairing-ui-before/assets/`.

@@ -33,13 +33,16 @@
       document.body.dataset.connectionKind = selected;
       document.dispatchEvent(new Event('vrhotspot-connection-changed'));
     }
-    el('headsetPairing').hidden = !headset();
+    const basic = document.body.dataset.uiMode !== 'advanced';
+    el('headsetPairing').hidden = !headset() || basic;
+    if (basic) el('headsetPairing').open = false;
+    if (basic && headset() && current && !current.paired) el('btnStartBasic').disabled = true;
     for (const id of ['headsetSsid', 'headsetBssid', 'headsetPassword', 'saveHeadsetPairing']) {
       el(id).disabled = !!current?.active;
     }
     text('connectionPurposeHint', headset()
-      ? (current?.paired ? 'Pairing saved. Each device keeps its own internet connection.'
-        : 'Pair your headset once below. Each device keeps its own internet connection.')
+      ? (current?.paired ? 'Headset saved. Internet uses each device’s usual connection.'
+        : 'Headset setup needed. First-time setup is currently available in Pro.')
       : 'Devices join your hotspot. Internet sharing uses your existing settings.');
     text('btnStop', headset() ? 'Disconnect' : 'Stop Hotspot');
   }
@@ -95,6 +98,10 @@
         } else {
           const adapter = el('ap_adapter')?.value;
           if (!state.paired) {
+            if (document.body.dataset.uiMode !== 'advanced') {
+              setMsg('Headset setup needed. First-time setup is currently available in Pro.');
+              return;
+            }
             el('headsetPairing').open = true;
             el('headsetSsid').focus();
             setMsg('Save your headset pairing below the adapter first.');
@@ -128,6 +135,14 @@
     const badge = actionStep?.querySelector('.basic-guided-step-number');
     if (badge && badge.textContent !== (direct ? '2' : '5')) badge.textContent = direct ? '2' : '5';
     if (!direct) return;
+    if (current && !current.paired) {
+      text('basicGuidedActionSlotTitle', 'Set up headset');
+      text('basicGuidedStateText', 'Setup needed');
+      text('basicGuidedStatusSummary', 'First-time setup is currently available in Pro.');
+      text('btnStartBasic', 'Setup needed');
+      el('btnStartBasic').disabled = true;
+      return;
+    }
     text('basicGuidedActionSlotTitle', 'Connect headset');
     text('basicGuidedStateText', stateName === 'running' ? 'Connected' : stateName === 'stopped' ? 'Disconnected' : 'Connecting…');
     text('basicGuidedStatusSummary', current?.connected
@@ -144,6 +159,7 @@
     text('btnStart', stateName === 'running' ? 'Disconnect' : stateName === 'stopped' ? 'Connect' : 'Please wait…');
   }
   function init() {
+    new MutationObserver(render).observe(document.body, {attributes: true, attributeFilter: ['data-ui-mode']});
     el('connectionPurpose').addEventListener('change', async event => {
       if (current?.active || apRunning) { render(); return; }
       selected = event.target.value === 'headset' ? 'headset' : 'hotspot';
