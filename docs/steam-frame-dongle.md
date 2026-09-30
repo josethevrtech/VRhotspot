@@ -78,3 +78,33 @@ This does not assume support or bypass AP/channel checks: startup can still reje
 an unsupported configuration. After the correction, the tested dongle successfully
 started through VRhotspot with `--wifi6`, at 5 GHz/80 MHz. Client negotiation and
 throughput remain separate tests.
+
+## 6 GHz direct-link driver requirement
+
+An older rtw89 USB driver may reject a US VLP headset AP during authentication with
+`failed to insert STA entry for the AP (error -22)`. This error alone is not a unique
+diagnosis. Check whether your distro backports upstream Linux
+[bf4a37f516f0382832c10a9d04414944d0d96591](https://github.com/torvalds/linux/commit/bf4a37f516f0382832c10a9d04414944d0d96591),
+which stops USB devices depending on internal Wi-Fi card ACPI capability checks.
+Do not change country or bypass cfg80211 channel/power restrictions as a workaround.
+
+A matching-kernel build with that unchanged patch physically connected the tested
+Valve dongle to the Frame's WPA3 6 GHz/160 MHz AP, including reconnection to its
+hidden SSID. Short TCP samples measured 1017.81 Mb/s to the Frame and 423.77 Mb/s
+reverse. Loaded ping averaged 17.819/19.479 ms, zero loss in 90 probes each. These
+results establish a working radio link, not Valve streaming parity or a complete
+VRhotspot direct-mode product. The experimental profile was removed and the working
+5 GHz hotspot restored. Credentials and module binaries are not shipped here.
+
+`python3 tools/diagnose_frame_dongle.py --link` now reports sanitized current role,
+frequency, channel width and PHY rates. It does not print peer MACs, SSIDs or keys,
+and never treats radio rate as measured throughput. Patch presence is reported as
+unknown: kernel version alone cannot establish it on distro backports.
+
+On the tested Frame, disabling power save only for the VR-Hotspot saved connection
+reduced idle mean ping from 51.353 ms to 3.026 ms (100 probes, no loss):
+`sudo nmcli connection modify VR-Hotspot 802-11-wireless.powersave 2`, followed by
+`sudo iw dev wlan0 set power_save off`. This can increase power use. Restore the
+original default with profile value 0 and the prior live state with power_save on.
+Do not apply these settings to unrelated connections or promise the same gains on
+other hardware. Internet and Frame Control through the 5 GHz hotspot were verified.
