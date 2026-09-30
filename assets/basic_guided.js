@@ -81,8 +81,8 @@
 
     setCardHeader(
       card,
-      'Set Up Hotspot',
-      'Follow these simple steps to create your hotspot.',
+      'Set Up Connection',
+      'Choose your adapter and connect.',
     );
 
     const body = card.querySelector(':scope > .card-body');
@@ -557,6 +557,7 @@
     setTextIfChanged(title, presentation.title);
     setTextIfChanged(summary, presentation.summary);
     syncPrimaryAction(current.name);
+    window.headsetConnection?.guided(current.name);
 
     if (current.name === 'error' && lastStateName !== 'error') {
       openHotspotErrorDialog();
@@ -621,6 +622,7 @@
         event.stopImmediatePropagation();
         return;
       }
+      if (window.headsetConnection?.headset()) return;
       if (!pendingBasicChanges()) return;
 
       event.preventDefault();

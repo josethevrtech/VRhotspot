@@ -111,7 +111,7 @@
   function enforceNavigation() {
     ensureStyles();
     const overviewNav = document.querySelector('.nav-item[data-tab="overview"]');
-    replaceNav(overviewNav, 'wifi', 'Set Up Hotspot');
+    replaceNav(overviewNav, 'wifi', window.headsetConnection?.headset() ? 'Set Up Connection' : 'Set Up Hotspot');
 
     document.querySelector('.nav-item[data-tab="telemetry"]')?.remove();
     document.querySelector('.nav-item[data-tab="logs"]')?.remove();
@@ -300,7 +300,7 @@
     if (!status) return;
     const state = serviceState();
     status.dataset.state = state.name;
-    setText(status, state.label);
+    setText(status, window.headsetConnection?.headset() && state.name === 'running' ? 'Connected' : state.label);
   }
 
   function savingState(state, text) {
@@ -351,6 +351,10 @@
   function syncPrimaryAction() {
     const primary = el('btnStart');
     if (!primary) return;
+    if (window.headsetConnection?.headset()) {
+      delete primary.dataset.proGuidedAction;
+      return;
+    }
     if (serviceIsRunning() && restartRequired) {
       primary.dataset.proGuidedAction = 'apply';
       setText(primary, 'Apply Changes & Restart');
@@ -367,7 +371,7 @@
     root.dataset.proAutosaveWired = '1';
     root.addEventListener('change', (event) => {
       if (!(event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) return;
-      if (!event.isTrusted) return;
+      if (!event.isTrusted || event.target.closest('#connectionPurposeFields')) return;
       scheduleSave(true);
       updateDependencies();
       syncPerformanceSelection();
@@ -375,7 +379,7 @@
     });
     root.addEventListener('input', (event) => {
       if (!(event.target instanceof HTMLInputElement)) return;
-      if (!event.isTrusted) return;
+      if (!event.isTrusted || event.target.closest('#connectionPurposeFields')) return;
       scheduleSave(true);
     });
     root.addEventListener('click', (event) => {
@@ -507,7 +511,7 @@
     };
     for (const [id, [title, help]] of Object.entries(copy)) {
       const section = guidedSlot(shell, id).closest('.pro-guided-step');
-      setText(section?.querySelector('.pro-guided-title'), title);
+      setText(section?.querySelector('.pro-guided-title'), id === 'proStepAction' && window.headsetConnection?.headset() ? 'Connect headset' : title);
       const staleHelp = section?.querySelector('.pro-guided-help');
       if (staleHelp) staleHelp.remove();
       applyStepBadgeHelp(section?.querySelector('.pro-guided-number'), help);
@@ -1326,6 +1330,14 @@
         return;
       }
       const guidedReady = rehydrateWorkflow(shell);
+      const headset = !!window.headsetConnection?.headset();
+      setText(shell.querySelector('.pro-guided-header-copy h2'), headset ? 'Set Up Connection' : 'Set Up Hotspot');
+      setText(shell.querySelector('.pro-guided-header-copy p'), headset ? 'Choose your adapter and connect.' : 'Configure the hotspot in order, then start it or apply changes safely.');
+      for (const slot of ['proStepPerformance', 'proStepHotspot', 'proStepAdvanced']) {
+        const step = el(slot)?.closest('.pro-guided-step');
+        if (step && step.hidden !== headset) step.hidden = headset;
+      }
+      setText(el('proStepAction')?.closest('.pro-guided-step')?.querySelector('.pro-guided-number'), headset ? '2' : '5');
       const troubleshootingReady = ensureTroubleshooting();
       const qualityReady = ensureConnectionQuality();
       ensureStatusObserver();
@@ -1343,6 +1355,8 @@
       console.error('VRhotspot Pro composer failed.', error);
     }
   }
+
+  document.addEventListener('vrhotspot-connection-changed', () => scheduleReconcile());
 
   function scheduleReconcile() {
     if (reconcileQueued) return;

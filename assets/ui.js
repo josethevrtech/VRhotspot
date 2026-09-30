@@ -2678,6 +2678,7 @@ async function waitForRunningStatus(timeoutMs = 12000, intervalMs = 1000) {
 
 async function startHotspot(overrides, label) {
   if (!isAuthenticated) return;
+  if (window.headsetConnection?.handles()) { await window.headsetConnection.handle("start"); return; }
   await withActionLock(async () => {
     const prefix = label ? `Starting (${label})...` : 'Starting...';
     setMsg(prefix);
@@ -2743,6 +2744,7 @@ async function startHotspot(overrides, label) {
 
 async function stopHotspot() {
   if (!isAuthenticated) return;
+  if (window.headsetConnection?.handles()) { await window.headsetConnection.handle("stop"); return; }
   await withActionLock(async () => {
     setMsg('Stopping...');
     setOptimisticHotspotPhase('stopping');
@@ -2754,6 +2756,7 @@ async function stopHotspot() {
 
 async function repairHotspot() {
   if (!isAuthenticated) return;
+  if (window.headsetConnection?.handles()) { await window.headsetConnection.handle("repair"); return; }
   await withActionLock(async () => {
     setMsg('Repairing...');
     setOptimisticHotspotPhase('repairing');
@@ -2765,6 +2768,7 @@ async function repairHotspot() {
 
 async function restartHotspot() {
   if (!isAuthenticated) return;
+  if (window.headsetConnection?.handles()) { await window.headsetConnection.handle("restart"); return; }
   await withActionLock(async () => {
     setMsg('Restarting...');
     setOptimisticHotspotPhase('restarting');
@@ -2890,6 +2894,7 @@ function setPill(state) {
   // The primary segment is always the canonical lifecycle label; only
   // non-lifecycle details (adapter, band, mode) may follow it.
   const statusParts = [HOTSPOT_LIFECYCLE_LABELS[lifecycle]];
+  if (state.connection_kind === 'headset' && lifecycle === 'running') statusParts[0] = 'Connected';
 
   if (adapter && adapter !== '--') {
     statusParts.push(adapter);
@@ -3703,7 +3708,9 @@ async function refresh() {
     return;
   }
 
-  const s = st.json.data || {};
+  let s = st.json.data || {};
+  if (window.headsetConnection) s = await window.headsetConnection.refreshState(s);
+  if (!isAuthenticated || requestSeq !== refreshRequestSeq) return;
   lastStatus = s;
   setPill(s);
   updateBasicStatusMeta(s);

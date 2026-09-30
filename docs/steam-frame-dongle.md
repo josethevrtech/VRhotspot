@@ -109,16 +109,23 @@ original default with profile value 0 and the prior live state with power_save o
 Do not apply these settings to unrelated connections or promise the same gains on
 other hardware. Internet and Frame Control through the 5 GHz hotspot were verified.
 
-## Experimental Frame Direct mode
+## Headset connections in the standard setup
 
 The preceding sections record the earlier driver bring-up. VRhotspot now includes
-an explicit **Frame Direct** section below the app header, in both Basic and Pro
-views. This is a distinct operating mode: the Frame is the WPA3 AP, and the Valve
-USB adapter is a 6 GHz client. It does not create a 6 GHz PC AP or require Steam on
+headset connections inside its existing **Set Up Connection** workflow, in both
+Basic and Pro views. Select the adapter, then **Use this adapter to → Connect to a
+paired headset**. There is no separate Frame/Valve dashboard. The transport is
+still experimental: the Frame is the WPA3 AP and the USB adapter is a 6 GHz client. It does not create a 6 GHz PC AP or require Steam on
 that PC. The existing Frame AP service is still required on the headset.
 
-Pair using the Frame direct-network SSID, BSSID and password (not the account or
-home-Wi-Fi password). Select the Valve interface and choose **Connect Frame Direct**.
+For first-time pairing, expand **Manage headset pairing** below the adapter and
+enter the direct-network SSID, BSSID and password (not the account or home-Wi-Fi
+password). Saved pairing stays collapsed. Use the ordinary **Connect/Disconnect**
+button; the same status area reports the link. Irrelevant AP name/password and
+hotspot-tuning steps are hidden rather than duplicated. Pro includes radio width.
+To return to normal internet sharing, disconnect, select **Share this PC's Wi-Fi /
+internet**, then use the normal hotspot start button. The underlying network roles
+remain explicit so the UI never promises internet relay on the client connection.
 The saved NetworkManager profile uses SAE, required PMF, hidden-SSID discovery,
 power saving disabled, no automatic connection, no default route and no imported
 DNS/routes. Laptop and headset retain their existing independent internet uplinks.
@@ -129,8 +136,8 @@ The daemon accepts only a sysfs-verified USB 28de:2432 interface, refuses defaul
 uplinks and unrelated active connections, and serializes role changes with the AP
 lifecycle. It waits for NetworkManager readiness after AP shutdown, then verifies
 association, DHCP, 6 GHz and 160 MHz. Connection failure restores a previously
-running hotspot. **Disconnect** releases the direct link; **Return to Hotspot**
-starts the saved ordinary hotspot configuration. These transitions leave the
+running hotspot. **Disconnect** releases the direct link; selecting ordinary
+sharing afterward reuses the saved hotspot configuration. These transitions leave the
 laptop's uplink intact.
 
 The root-only pairing file is
@@ -142,7 +149,8 @@ The non-secret root-only session journal is
 AP start/stop/repair is blocked, including daemon-startup repair. The direct link
 can survive daemon restart; explicit Disconnect recovers an interrupted session.
 Autoconnect is deliberately disabled, so a reboot/replug may require Disconnect
-then Connect. Automatic suspend/replug recovery is not qualified.
+then Connect through the API. The integrated UI's Connect button releases a stale
+session before reconnecting. Automatic suspend/replug recovery is not qualified.
 
 Authenticated loopback API:
 
@@ -183,5 +191,26 @@ then Connect succeeded at 6135 MHz/160 MHz with the saved pairing and the Frame'
 home-Wi-Fi internet route intact. Automatic wake reconnection is not implemented.
 An unavailable link keeps the session reserved until explicit Disconnect. This is
 one manual wake/reconnect test, not sustained unattended-link validation. Visible
-desktop-UI confirmation remains pending. Local suite: 1,872 passed, 5 skipped,
+desktop UI was subsequently inspected in real Chromium at 1440×1000, with two
+visible headset setup steps, collapsed pairing, and matching Basic/Pro controls. Local suite: 1,872 passed, 5 skipped,
 4 subtests passed; GitHub CI passed for the implementation commit.
+
+### UI simplification validation
+
+The integration reuses `ap_adapter`, existing lifecycle actions and canonical
+status rendering. It leaves the AP engine state unchanged on the backend; headset
+status is presented explicitly as a client connection. Existing hotspot controls
+retain their API path. Switching connection purpose is disabled while connected.
+Pairing inputs are excluded from hotspot autosave, and direct connect skips AP-only
+save-before-start logic. The purpose choice never starts a connection by itself.
+
+DOM integration tests exercise connected status, disconnect/reconnect routing,
+Basic/Pro transitions, hidden AP-only steps, and returning to ordinary setup.
+The CI UI suite now includes `headset_connection_ui.test.mjs`. Local installation
+backups for the seven changed assets are in
+`/var/lib/vr-hotspot/unified-ui-before/assets/`. Restoring those assets and reopening
+the desktop app reverses only this presentation change; pairing and radio settings
+are not modified by the layout update.
+
+Validation for the unified UI: 1,875 pytest tests passed, 2 skipped, 4 subtests;
+35 Node UI interaction tests passed, including headset connection routing.

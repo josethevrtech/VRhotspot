@@ -511,6 +511,7 @@ window.UI_FIELD_VISIBILITY = {
       primary.classList.add('primary');
       primary.dataset.proServiceAction = 'start';
     }
+    window.headsetConnection?.pro(state.name);
   }
 
   function buildServiceCard(statusCard) {

@@ -47,33 +47,6 @@
       </div>
     </header>
 
-            <details class="card" id="frameDirectCard" style="flex-shrink:0;max-height:50vh;overflow:auto;margin:8px 24px">
-              <summary><strong>Frame Direct</strong> · Experimental 6 GHz connection</summary>
-              <p>The Frame hosts the 6 GHz / 160 MHz network; the Valve USB adapter connects to it.
-                Each device keeps its existing internet connection. This mode does not share laptop internet.</p>
-              <p id="frameDirectStatus" role="status" aria-live="polite">Checking direct-link status…</p>
-              <label>Valve adapter <select id="frameDirectAdapter"></select></label>
-              <div class="hero-actions">
-                <button class="btn primary" id="frameDirectConnect">Connect Frame Direct</button>
-                <button class="btn secondary" id="frameDirectDisconnect">Disconnect</button>
-                <button class="btn secondary" id="frameDirectHotspot">Return to Hotspot</button>
-              </div>
-              <details>
-                <summary>Pair with the Frame's Wi-Fi network</summary>
-                <p>Use the Frame's direct-network credentials, not its login password or your home Wi-Fi password.
-                  Pairing is stored locally by NetworkManager. Nothing is sent to a cloud service.</p>
-                <form id="frameDirectPair" autocomplete="off">
-                  <label>Frame network name <input id="frameDirectSsid" required maxlength="32" /></label>
-                  <label>Frame access-point BSSID <input id="frameDirectBssid" required placeholder="00:11:22:33:44:55" /></label>
-                  <label>Frame network password <input id="frameDirectPassword" type="password" required minlength="8" maxlength="63" autocomplete="new-password" /></label>
-                  <button class="btn secondary" type="submit">Save pairing</button>
-                </form>
-              </details>
-              <p id="frameDirectMessage" role="status" aria-live="polite"></p>
-            </details>
-
-
-
     <!-- QR Modal -->
     <div id="qrModal" class="modal-overlay" style="display:none">
       <div class="modal-content">
@@ -583,6 +556,25 @@
                   <button class="btn sm" id="btnReloadAdapters">Rescan</button>
                 </div>
                 <div class="small mt-6" id="adapterHint"></div>
+                <div id="connectionPurposeFields" hidden>
+                  <label for="connectionPurpose" class="mt-12">Use this adapter to</label>
+                  <select id="connectionPurpose">
+                    <option value="hotspot">Share this PC's Wi-Fi / internet</option>
+                    <option value="headset">Connect to a paired headset</option>
+                  </select>
+                  <p id="connectionPurposeHint" class="small mt-6"></p>
+                  <details id="headsetPairing" class="small mt-12" hidden>
+                    <summary>Manage headset pairing</summary>
+                    <p>Enter the headset's direct-network details once. Your saved hotspot settings stay separate.</p>
+                    <label for="headsetSsid">Headset network name</label>
+                    <input id="headsetSsid" maxlength="32" autocomplete="off" />
+                    <label for="headsetBssid">Access-point address (BSSID)</label>
+                    <input id="headsetBssid" placeholder="00:11:22:33:44:55" autocomplete="off" />
+                    <label for="headsetPassword">Network password</label>
+                    <input id="headsetPassword" type="password" minlength="8" maxlength="63" autocomplete="new-password" />
+                    <button class="btn secondary mt-12" id="saveHeadsetPairing" type="button">Save pairing</button>
+                  </details>
+                </div>
               </div>
 
             </div>
