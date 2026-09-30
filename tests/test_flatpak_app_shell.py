@@ -1457,6 +1457,7 @@ def test_manifest_has_only_minimal_display_and_loopback_client_permissions():
         "--socket=fallback-x11",
         "--talk-name=org.kde.StatusNotifierWatcher",
         "--talk-name=org.freedesktop.secrets",
+        "--talk-name=org.mainframeos.FrameControl",
     }
     assert not any("filesystem=" in argument for argument in finish_args)
     assert not any("system-bus" in argument for argument in finish_args)

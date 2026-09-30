@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import threading
 from typing import Callable
 
+from .frame_control import FrameControlBridge, FrameControlState
+
 from flatpak_client import (
     ActionOutcome,
     AuthenticationController,
@@ -64,6 +66,7 @@ def build_tray_menu_model(
     state: TrayState,
     *,
     window_visible: bool,
+    frame_control: FrameControlState | None = None,
 ) -> TrayMenuModel:
     """Build a deterministic menu independent of GTK and the tray backend."""
 
@@ -150,6 +153,8 @@ def build_tray_menu_model(
         ),
         hotspot_commands,
         network,
+        *((TrayMenuItem(24, "frame_control", frame_control.label,
+                         enabled=frame_control.available),) if frame_control else ()),
         advanced,
         TrayMenuItem(20, "quit", "Quit VR Hotspot"),
     )
@@ -1005,6 +1010,7 @@ class TrayRuntime:
             if callable(on_auth_cleared)
             else lambda: None
         )
+        self._frame_control = FrameControlBridge(Gio=Gio, GLib=GLib)
         self._worker_lock = threading.Lock()
         self._auth_refresh_pending = False
         self._notification_counter = 0
@@ -1031,6 +1037,7 @@ class TrayRuntime:
         # StatusNotifierItem is registered so Plasma never caches the default
         # menu and icon as the tray's initial authoritative state.
         self._controls.refresh()
+        self._frame_control.refresh()
         self._update_menu()
         active = self._backend.start()
         self._lifecycle.set_tray_active(active)
@@ -1048,6 +1055,7 @@ class TrayRuntime:
             build_tray_menu_model(
                 self._controls.state,
                 window_visible=self._lifecycle.visible,
+                frame_control=self._frame_control.state,
             )
         )
 
@@ -1074,6 +1082,8 @@ class TrayRuntime:
             title, body = "VR Hotspot", "Hotspot started."
         elif outcome.succeeded and outcome.code == "hotspot_stopped":
             title, body = "VR Hotspot", "Hotspot stopped."
+        elif not outcome.succeeded and outcome.code == "frame_control_unavailable":
+            title, body = "Frame Control unavailable", "Start the Frame Control user service on this desktop."
         elif not outcome.succeeded and outcome.code == "daemon_unavailable":
             title, body = "VR Hotspot unavailable", "The local daemon is unavailable."
         elif not outcome.succeeded:
@@ -1151,6 +1161,7 @@ class TrayRuntime:
                     message="The requested operation failed.",
                     state=self._controls.state,
                 )
+            self._frame_control.refresh()
             self._GLib.idle_add(self._finish_worker, outcome)
 
         threading.Thread(
@@ -1225,6 +1236,16 @@ class TrayRuntime:
             )
         elif action == "refresh":
             self.refresh_async()
+        elif action == "frame_control":
+            def toggle_frame():
+                succeeded = self._frame_control.toggle()
+                return ActionOutcome(
+                    accepted=True, succeeded=succeeded,
+                    code="frame_control_requested" if succeeded else "frame_control_unavailable",
+                    message="Frame Control requested." if succeeded else "Frame Control unavailable.",
+                    state=self._controls.state,
+                )
+            self._run_worker(toggle_frame)
         elif action == "share_internet":
             self._run_worker(
                 lambda: self._controls.perform(

@@ -835,7 +835,7 @@ def test_no_installer_token_cli_argument_and_companion_flag_is_documented():
     assert "--api-token" not in result.stdout
 
 
-def test_flatpak_manifest_permissions_remain_minimal_and_unchanged():
+def test_flatpak_manifest_permissions_include_only_optional_frame_service():
     manifest = json.loads(FLATPAK_MANIFEST.read_text(encoding="utf-8"))
 
     assert manifest["finish-args"] == [
@@ -845,6 +845,7 @@ def test_flatpak_manifest_permissions_remain_minimal_and_unchanged():
         "--socket=fallback-x11",
         "--talk-name=org.kde.StatusNotifierWatcher",
         "--talk-name=org.freedesktop.secrets",
+        "--talk-name=org.mainframeos.FrameControl",
     ]
     assert not any(
         argument.startswith("--filesystem=")
@@ -859,6 +860,7 @@ def test_flatpak_manifest_permissions_remain_minimal_and_unchanged():
     } == {
         "--talk-name=org.kde.StatusNotifierWatcher",
         "--talk-name=org.freedesktop.secrets",
+        "--talk-name=org.mainframeos.FrameControl",
     }
 
 
