@@ -51,3 +51,9 @@ Publish the exact hardware and software versions, settings, session duration,
 latency distribution, loss, and observed interruptions before promoting a model
 to VR-validated status. Adapter scores alone are not a streaming benchmark; see
 [adapter intelligence](adapter-intelligence-v2.md) and [architecture](architecture.md).
+
+## Steam Frame Wireless Adapter
+
+See [Steam Frame dongle support](steam-frame-dongle.md) for USB ID `28de:2432`,
+Steam-independent Linux driver checks, tested AP startup, regulatory limits and
+remaining headset/performance qualification. Detection is not a performance claim.
